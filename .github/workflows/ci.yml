@@ -144,5 +144,5 @@ jobs:
           context: .
           push: ${{ github.event_name == 'push' }}
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/squid-proxy-lovers/ccp:latest
+            ghcr.io/squid-proxy-lovers/ccp:${{ github.sha }}
