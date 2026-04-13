@@ -1,0 +1,21 @@
+services:
+  ccp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cephalopod-coordination-protocol-server:latest
+    container_name: ccp-server
+    restart: unless-stopped
+    environment:
+      CCP_SESSION_NAME: ${CCP_SESSION_NAME:-my-session}
+      CCP_AUTH_PORT: ${CCP_AUTH_PORT:-1337}
+      CCP_MTLS_PORT: ${CCP_MTLS_PORT:-1338}
+      CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-127.0.0.1}
+    ports:
+      - "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_AUTH_PORT:-1337}:${CCP_AUTH_PORT:-1337}"
+      - "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_MTLS_PORT:-1338}:${CCP_MTLS_PORT:-1338}"
+    volumes:
+      - ccp-server-data:/var/lib/ccp/server
+
+volumes:
+  ccp-server-data:

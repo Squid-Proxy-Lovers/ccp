@@ -1,0 +1,39 @@
+# Build
+target/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# IDE
+.vscode/
+.claude/
+
+# Generated at runtime
+mcp-server-config.json
+*.log
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.pem
+*.bin
+active_session.json
+runtime-journal.jsonl
+
+# Server runtime
+/crates/server/data/
+/crates/server/sessions/
+
+# MCP bridge
+/mcp/.venv/
+/mcp/mcp-server-config.json
+
+# Test artifacts
+/tests/benchmark-results/
+
+# Misc
+/dump/

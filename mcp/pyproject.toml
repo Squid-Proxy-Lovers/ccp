@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ccp-mcp-server"
+version = "0.1.0"
+description = "FastMCP bridge for the Cephalopod Coordination Protocol"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.0.0",
+]
+
+[project.scripts]
+ccp-mcp-server = "ccp_mcp_server.server:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]

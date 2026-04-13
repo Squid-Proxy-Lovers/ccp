@@ -1,0 +1,13 @@
+.git
+.claude
+.mypy_cache
+benchmark-cpu.txt
+benchmark-profile.txt
+planning.md
+docs/bug-validation-report.md
+crates/server/target
+crates/client/target
+crates/protocol/target
+tests/target
+crates/server/sessions
+tests/benchmark-results
