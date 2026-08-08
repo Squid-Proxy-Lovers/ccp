@@ -8,12 +8,11 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 
 use crate::enrollment_structs::{
     EnrollmentMaterial, EnrollmentMetadata, SessionSummary, StoredEnrollment,
 };
+use protocol::SessionMetadata;
 
 const CLIENT_HOME_ENV: &str = "CCP_CLIENT_HOME";
 const DEFAULT_CLIENT_HOME_DIR: &str = ".ccp-client";
@@ -23,6 +22,35 @@ const DEFAULT_CERT_WARNING_WINDOW_SECONDS: u64 = 0;
 pub(crate) fn save_enrollment(material: &EnrollmentMaterial) -> anyhow::Result<StoredEnrollment> {
     let base_dir = enrollments_dir()?;
     save_enrollment_to_dir(material, &base_dir)
+}
+
+pub(crate) fn save_subscription(
+    endpoint: &str,
+    session: &SessionMetadata,
+) -> anyhow::Result<StoredEnrollment> {
+    let material = EnrollmentMaterial {
+        metadata: EnrollmentMetadata {
+            session_name: session.session_name.clone(),
+            session_id: session.session_id,
+            session_description: session.description.clone(),
+            owner: session.owner.clone(),
+            labels: session.labels.clone(),
+            visibility: session.visibility.clone(),
+            purpose: session.purpose.clone(),
+            access: "read_write".to_string(),
+            client_cn: "plaintext-client".to_string(),
+            mtls_endpoint: endpoint.to_string(),
+            client_cert_expires_at: u64::MAX,
+            enrolled_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        },
+        ca_pem: String::new(),
+        client_cert_pem: String::new(),
+        client_key_pem: String::new(),
+    };
+    save_enrollment(&material)
 }
 
 pub(crate) fn load_enrollments() -> anyhow::Result<Vec<StoredEnrollment>> {
@@ -115,22 +143,6 @@ fn save_enrollment_to_dir(
             directory.join("metadata.json").display()
         )
     })?;
-    fs::write(directory.join("ca.pem"), material.ca_pem.as_bytes())
-        .with_context(|| format!("failed to write {}", directory.join("ca.pem").display()))?;
-    fs::write(
-        directory.join("client.pem"),
-        material.client_cert_pem.as_bytes(),
-    )
-    .with_context(|| format!("failed to write {}", directory.join("client.pem").display()))?;
-    write_private_file(
-        &directory.join("client.key"),
-        material.client_key_pem.as_bytes(),
-    )?;
-
-    let mut identity_pem = material.client_cert_pem.clone();
-    identity_pem.push_str(&material.client_key_pem);
-    write_private_file(&directory.join("identity.pem"), identity_pem.as_bytes())?;
-
     Ok(StoredEnrollment {
         metadata: material.metadata.clone(),
         directory,
@@ -249,28 +261,6 @@ fn client_home_dir() -> anyhow::Result<PathBuf> {
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
-}
-
-fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .mode(0o600)
-            .open(path)
-            .with_context(|| format!("failed to open {}", path.display()))?;
-        file.write_all(contents)
-            .with_context(|| format!("failed to write {}", path.display()))?;
-        file.flush()?;
-        Ok(())
-    }
-    #[cfg(not(unix))]
-    {
-        fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
-    }
 }
 
 fn sanitize(value: &str) -> String {
@@ -568,56 +558,5 @@ mod tests {
         let selected = select_enrollment_from_enrollments(&[admin], "session-a", true)
             .expect("admin enrollment should be selectable for write");
         assert_eq!(selected.metadata.access, "admin");
-    }
-
-    #[test]
-    fn private_key_files_have_restricted_permissions() {
-        let base_dir = std::env::temp_dir().join(format!(
-            "ccp-perms-test-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_nanos()
-        ));
-        let material = EnrollmentMaterial {
-            metadata: EnrollmentMetadata {
-                session_name: "perms-test".to_string(),
-                session_id: 99,
-                session_description: "".to_string(),
-                owner: "".to_string(),
-                labels: vec![],
-                visibility: "private".to_string(),
-                purpose: "".to_string(),
-                access: "read".to_string(),
-                client_cn: "cn".to_string(),
-                mtls_endpoint: "https://localhost:1338".to_string(),
-                enrolled_at: 1,
-                client_cert_expires_at: 4_102_444_800,
-            },
-            ca_pem: "ca".to_string(),
-            client_cert_pem: "cert".to_string(),
-            client_key_pem: "key".to_string(),
-        };
-
-        let stored = save_enrollment_to_dir(&material, &base_dir).expect("save should work");
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let key_mode = fs::metadata(stored.directory.join("client.key"))
-                .expect("client.key should exist")
-                .permissions()
-                .mode()
-                & 0o777;
-            let id_mode = fs::metadata(stored.directory.join("identity.pem"))
-                .expect("identity.pem should exist")
-                .permissions()
-                .mode()
-                & 0o777;
-            assert_eq!(key_mode, 0o600, "client.key should be owner-only");
-            assert_eq!(id_mode, 0o600, "identity.pem should be owner-only");
-        }
-
-        fs::remove_dir_all(base_dir).expect("cleanup");
     }
 }

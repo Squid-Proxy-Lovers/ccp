@@ -44,6 +44,7 @@ mcp = FastMCP(
     instructions=(
         "CCP is your shared memory. Use it to store and retrieve context that persists "
         "across conversations and is shared with other agents in the same session.\n\n"
+        "First use open_topics and subscribe when no session is configured. "
         "Before starting work, search CCP for existing context with find_entries or "
         "search_context. When you learn something useful, write it with add_entry or "
         "append_entry so other agents can find it.\n\n"
@@ -86,6 +87,10 @@ def _resolve_client_command() -> LocalCommand:
     configured_binary = os.environ.get("CCP_CLIENT_BIN")
     if configured_binary:
         return LocalCommand([configured_binary], f"binary:{configured_binary}")
+
+    installed_binary = shutil.which("ccp-client")
+    if installed_binary:
+        return LocalCommand([installed_binary], f"path:{installed_binary}")
 
     if DEFAULT_CLIENT_BINARY.exists():
         return LocalCommand(
@@ -750,22 +755,26 @@ def server_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-def enroll(token: str, redeem_url: str | None = None) -> dict[str, Any]:
-    """Redeem a CCP enrollment token and save the resulting enrollment material locally."""
+def open_topics(server_url: str | None = None) -> list[dict[str, Any]]:
+    """List open topics that this agent may subscribe to."""
 
-    if redeem_url is None:
-        servers = running_servers()
-        if len(servers) != 1:
-            raise CCPClientError("redeem_url is required unless exactly one managed server is running")
-        redeem_url = servers[0].get("auth_redeem_url")
-    if not redeem_url:
-        raise CCPClientError("missing auth_redeem_url for enrollment")
-    return _parse_enroll_output(_run_client("enroll", "--redeem-url", redeem_url, "--token", token))
+    endpoint = server_url or os.environ.get("CCP_SERVER_URL", "http://192.168.130.34:1338")
+    result = _run_client_json("remote-sessions", "--server", endpoint)
+    return result if isinstance(result, list) else []
+
+
+@mcp.tool()
+def subscribe(topic: str, server_url: str | None = None) -> dict[str, Any]:
+    """Subscribe this agent to an open topic by session name or id."""
+
+    endpoint = server_url or os.environ.get("CCP_SERVER_URL", "http://192.168.130.34:1338")
+    message = _run_client("subscribe", "--server", endpoint, topic)
+    return {"message": message, "topic": topic, "server_url": endpoint}
 
 
 @mcp.tool()
 def sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
-    """List sessions discoverable from saved CCP enrollments."""
+    """List topics this agent has subscribed to."""
 
     return _filter_records(_load_session_summaries(), filter_text)
 

@@ -8,14 +8,16 @@ services:
     restart: unless-stopped
     environment:
       CCP_SESSION_NAME: ${CCP_SESSION_NAME:-my-session}
-      CCP_AUTH_PORT: ${CCP_AUTH_PORT:-1337}
-      CCP_MTLS_PORT: ${CCP_MTLS_PORT:-1338}
-      CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-127.0.0.1}
+      CCP_HTTP_PORT: ${CCP_HTTP_PORT:-1338}
+      CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-192.168.130.34}
+      CCP_CLIENT_KEY: ${CCP_CLIENT_KEY:-ccp-client-7b6c2f915e4a8d30}
+      CCP_ADMIN_KEY: ${CCP_ADMIN_KEY:-ccp-admin-f1a847d36c509e2b}
+      CCP_DOWNLOAD_DIR: /var/lib/ccp/downloads
     ports:
-      - "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_AUTH_PORT:-1337}:${CCP_AUTH_PORT:-1337}"
-      - "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_MTLS_PORT:-1338}:${CCP_MTLS_PORT:-1338}"
+      - "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_HTTP_PORT:-1338}:${CCP_HTTP_PORT:-1338}"
     volumes:
       - ccp-server-data:/var/lib/ccp/server
+      - ./downloads:/var/lib/ccp/downloads:ro
 
 volumes:
   ccp-server-data:

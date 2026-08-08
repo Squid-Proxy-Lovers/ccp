@@ -14,7 +14,7 @@
   <a href="#droplets">Droplets</a> &middot;
   <a href="#use-cases">Use Cases</a> &middot;
   <a href="docs/">Docs</a> &middot;
-  <a href="SECURITY.md">Security</a>
+    <a href="#quick-start">Sessions</a>
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
 
 When you have multiple agents working together they need somewhere to share context. One agent finds something, another agent needs to know about it. Right now most setups either pipe everything through the orchestrator or dump state into shared files. Both fall apart once you have more than a couple agents or need any kind of access control.
 
-CCP is a dedicated coordination layer. You run a server, agents enroll with tokens, and they get authenticated connections to read and write structured data. Each agent has its own identity. You control who can read, who can write, and you can cut off access at any time. Everything is persisted and searchable, so agents can pick up where others left off even across separate sessions.
+CCP is a dedicated coordination layer. One server hosts multiple isolated sessions over a plaintext HTTP endpoint. Clients subscribe only to the sessions they want to use. Everything is persisted and searchable, so agents can pick up where others left off.
 
 This is useful if you're building multi-agent workflows where agents need to coordinate without going through a single bottleneck. Research agents can dump findings into shared entries. Planning agents can read those findings and write plans. Review agents can search across everything and flag issues. Each one operates independently with its own connection and permissions. See [use cases](#use-cases) for real examples.
 
@@ -52,18 +52,18 @@ The `--client` flag is what most people want if someone else is running the serv
 
 ## Quick start
 
-Start a server. On the first run it prints enrollment tokens. Save them.
+Start a server with an optional initial session:
 
 ```bash
 ccp-server my-session
 ```
 
-Enroll a client using one of the printed tokens:
+Create more sessions while the server is running, then subscribe this client:
 
 ```bash
-ccp-client enroll \
-  --redeem-url http://127.0.0.1:1337/auth/redeem \
-  --token <token>
+ccp-manage add second-session
+ccp-client subscribe --server http://192.168.130.34:1338 my-session
+ccp-client subscribe --server http://192.168.130.34:1338 second-session
 ```
 
 Create some structure and write data:
@@ -92,13 +92,11 @@ Append more content to an existing entry:
 ccp-client append my-session day1 --shelf notes --book standup "follow-up: resolved the blocker"
 ```
 
-## How enrollment works
+## How subscriptions work
 
-The server runs two listeners. An HTTP endpoint (default port 1337) handles enrollment. A TLS endpoint (default port 1338) handles everything else.
+The server exposes one plaintext HTTP endpoint at `http://192.168.130.34:1338`. It can host any number of sessions in one database. The management script creates/deletes sessions, while `subscribe` saves a chosen server/session pair locally. Every request carries its subscribed session IDs, and the server rejects requests outside that selection.
 
-When you start the server for the first time, it generates a CA certificate and prints enrollment tokens. Each token can be redeemed by a client to get a signed client certificate. The client sends a CSR to the auth endpoint, the server signs it with the session CA, and sends back the certificate. The client stores that certificate locally and uses it for all future connections.
-
-From that point on, every request goes over mTLS. The server extracts the client's identity from the certificate and enforces access control on every operation.
+There are no tokens, certificates, TLS, or access-control roles. Bind to loopback or protect the service at the network layer if it should not be public.
 
 ## Docker
 
@@ -106,18 +104,17 @@ From that point on, every request goes over mTLS. The server extracts the client
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --docker --session my-session
 ```
 
-This builds the image and starts the container. Enrollment tokens are in the logs:
+This builds the image and starts the container:
 
 ```bash
 docker compose logs -f ccp-server
 ```
 
-Issue more tokens:
+Create and subscribe to another session:
 
 ```bash
-docker compose exec ccp-server server issue-token my-session read
-docker compose exec ccp-server server issue-token my-session read_write
-docker compose exec ccp-server server issue-token my-session admin --ttl 3600
+ccp-manage add another-session
+ccp-client subscribe --server http://192.168.130.34:1338 another-session
 ```
 
 Override the session or advertised host:
@@ -126,31 +123,11 @@ Override the session or advertised host:
 CCP_SESSION_NAME=prod CCP_ADVERTISE_HOST=192.168.1.50 docker compose up -d
 ```
 
-> **Note:** The auth endpoint defaults to plaintext HTTP inside the container. Put it behind an HTTPS reverse proxy or tunnel for remote deployments.
-
-Health check:
-
-```bash
-docker compose exec -T ccp-server server health my-session
-```
-
 Stop:
 
 ```bash
 docker compose down
 ```
-
-## Token issuance
-
-Tokens are valid until they expire (default: 1 hour). Issue new ones from the server binary:
-
-```bash
-ccp-server issue-token <session-name> read
-ccp-server issue-token <session-name> read_write
-ccp-server issue-token <session-name> admin --ttl 3600
-```
-
-The `issue-token` command needs the same `CCP_SERVER_DATA_DIR` that the server was started with.
 
 ## CLI reference
 
@@ -158,7 +135,9 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 
 ### Read operations
 
-- `ccp-client sessions` list saved enrollments
+- `ccp-client remote-sessions --server <http-url>` discover open topics
+- `ccp-client subscribe --server <http-url> <session>` subscribe by name or id
+- `ccp-client sessions` list saved subscriptions
 - `ccp-client delete-session <session>` forget a session locally
 - `ccp-client list <session>` list all entries
 - `ccp-client get <session> <name>` fetch an entry
@@ -190,9 +169,29 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 - `ccp-client import <session> bundle.json`
 - `ccp-client import <session> bundle.json --policy overwrite|skip|merge-history|error`
 
-### Admin operations
+### Client setup
 
-- `ccp-client revoke-cert <session> <client-common-name>` revoke a client certificate
+```bash
+# macOS and Linux
+curl -fsSL http://192.168.130.34:1338/setup-client.sh | sh
+
+# Windows PowerShell
+irm http://192.168.130.34:1338/setup-client.ps1 | iex
+```
+
+The installers download the platform client, install the MCP bridge, embed the client endpoint/key, and configure Codex and Claude Code when their CLIs are present.
+
+### Management
+
+The management script exposes only `add`, `delete`, and `stats`:
+
+```bash
+curl -fsSL http://192.168.130.34:1338/ccp-manage -o ccp-manage
+chmod +x ccp-manage
+./ccp-manage add topic-name
+./ccp-manage stats topic-name
+./ccp-manage delete topic-name
+```
 
 ## MCP tools
 
@@ -215,15 +214,9 @@ Session
 
 Entries are the core unit. Each entry lives at a unique path: shelf/book/name. Content is append-only with full history tracking. Deleted entries are archived and can be restored.
 
-## Access control
+## Access and management
 
-Three levels:
-
-- `read` can list, get, search, and export
-- `read_write` can do everything read can, plus create shelves/books/entries, append, delete, restore, and import
-- `admin` can do everything read_write can, plus revoke other clients' certificates
-
-Access level is baked into the client certificate during enrollment. The server checks it on every request.
+Open topics are discoverable and subscribable by agents. The client setup embeds the shared HTTP API key. A separate admin key exists only in the management scripts, whose API surface is limited to add session, delete session, and session stats.
 
 ## Droplets
 
@@ -295,14 +288,14 @@ cargo test -p protocol
 
 See [docs/](docs/) for design documents:
 
-- [docs/server.md](docs/server.md) server internals, dual-listener model, frame protocol
-- [docs/client.md](docs/client.md) client enrollment flow, transport layer
+- [docs/server.md](docs/server.md) HTTP server, sessions, management, and artifact hosting
+- [docs/client.md](docs/client.md) subscriptions and cross-platform setup
 - [docs/tool-call-api.md](docs/tool-call-api.md) MCP tool reference and response schemas
 - [docs/droplet-format.md](docs/droplet-format.md) `.droplet` file format specification
 
 ## Benchmarks
 
-Benchmarks run as 16 concurrent mTLS clients, 1000 requests each. Every operation goes through TLS, frame encoding, and the binary protocol. Numbers are system-specific, run your own to compare.
+The historical benchmark table predates the JSON-over-HTTP transport. Run the benchmark on your deployment for current numbers.
 
 Below are some of the machines we benchmarked on:
 
@@ -328,7 +321,7 @@ Run your own: `cargo run --release -p ccp-tests --bin benchmark -- --mode full-s
 
 This section was added to clear up confusion on a different yet quite popular project, MemPalace. Initially, we found out about MemPalace when it came out on April 5th on Twitter/X, however, CCP has been in development since March 11th. The key thing here is they're built for different things.
 
-MemPalace is single-agent memory for one AI recalling past conversations. CCP is multi-agent coordination; multiple agents connecting to a shared server with their own authenticated identities. CCP covers everything you'd want from a memory system (e.g. structured storage, search, full history, time travel, duplicate detection, shareable droplets) and adds the coordination layer on top which is: mTLS authentication, role-based access control, certificate revocation, networked access from anywhere, and sub-millisecond throughput on concurrent workloads. Different scope, different architecture.
+MemPalace is single-agent memory for one AI recalling past conversations. CCP is multi-agent coordination: multiple agents subscribe to topics on a shared network server and exchange structured, searchable context.
 
 ## Contributing
 

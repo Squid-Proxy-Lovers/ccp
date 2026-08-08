@@ -31,6 +31,11 @@ pub async fn handle_message_request(
     request: ClientRequest,
 ) -> ServerResponse {
     match request {
+        ClientRequest::ListSessions
+        | ClientRequest::CreateSession { .. }
+        | ClientRequest::Subscribe { .. } => {
+            bad_request("session discovery and subscription are handled by the connection layer")
+        }
         ClientRequest::Ping => match state.ensure_ping_access(auth_context).await {
             Ok(()) => ServerResponse::Pong,
             Err(_) => map_error(CcpError::Forbidden),
