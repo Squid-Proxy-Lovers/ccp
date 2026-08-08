@@ -19,6 +19,8 @@ esac
 mkdir -p "$INSTALL_DIR"
 curl -fsSL "$SERVER_URL/downloads/ccp-client-${os}-${arch}" -o "$INSTALL_DIR/ccp-client"
 chmod 0755 "$INSTALL_DIR/ccp-client"
+curl -fsSL "$SERVER_URL/ccp-update" -o "$INSTALL_DIR/ccp-update"
+chmod 0755 "$INSTALL_DIR/ccp-update"
 "$INSTALL_DIR/ccp-client" subscribe-all
 
 MCP_VENV="$HOME/.ccp-client/mcp-venv"
@@ -46,4 +48,5 @@ fi
 
 echo "Installed $INSTALL_DIR/ccp-client"
 echo "All open topics are connected automatically."
+echo "Update anytime:  ccp-update"
 echo "Discover topics: ccp-client remote-sessions"

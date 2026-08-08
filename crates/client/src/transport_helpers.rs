@@ -137,6 +137,9 @@ pub(crate) fn response_to_json_string(response: ServerResponse) -> anyhow::Resul
         ServerResponse::SessionCreated(session) => {
             serde_json::to_string(&session).context("failed to serialize created session")
         }
+        ServerResponse::MasterInstructions(instructions) => {
+            serde_json::to_string(&instructions).context("failed to serialize master instructions")
+        }
         ServerResponse::Error(error) => error_response_to_anyhow(error),
     }
 }

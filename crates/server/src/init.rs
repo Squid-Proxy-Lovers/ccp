@@ -57,7 +57,7 @@ const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
 const DEFAULT_HTTP_LISTENER_ADDR: &str = "0.0.0.0:1338";
 const DEFAULT_HTTP_SERVER_BASE_URL: &str = "http://192.168.130.34:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;

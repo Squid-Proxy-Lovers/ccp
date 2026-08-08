@@ -58,6 +58,17 @@ struct CreateSessionBody {
     session_name: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct InstructionUpdate {
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminOverview {
+    sessions: Vec<protocol::SessionStats>,
+    global_master: protocol::InstructionRecord,
+}
+
 pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
     run_plain_server(Some(session_name)).await
 }
@@ -87,15 +98,27 @@ pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<(
         .route("/v1/subscribe", post(subscribe))
         .route("/v1/request", post(request))
         .route("/v1/admin/sessions", post(admin_create_session))
+        .route("/v1/admin/overview", get(admin_overview))
+        .route(
+            "/v1/admin/master",
+            get(admin_get_global_master).put(admin_set_global_master),
+        )
         .route("/v1/admin/sessions/{session}", delete(admin_delete_session))
         .route(
             "/v1/admin/sessions/{session}/stats",
             get(admin_session_stats),
         )
+        .route(
+            "/v1/admin/sessions/{session}/master",
+            get(admin_get_session_master).put(admin_set_session_master),
+        )
+        .route("/admin", get(admin_dashboard))
         .route("/setup-client.sh", get(setup_client_script))
         .route("/setup-client.ps1", get(setup_client_powershell))
         .route("/ccp-manage", get(management_script))
         .route("/ccp-manage.ps1", get(management_powershell))
+        .route("/ccp-update", get(update_script))
+        .route("/ccp-update.ps1", get(update_powershell))
         .route("/downloads/{artifact}", get(download_artifact))
         .with_state(state);
 
@@ -201,6 +224,44 @@ async fn admin_create_session(
     }
 }
 
+async fn admin_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.global_master_instructions() {
+        Ok(global_master) => Json(AdminOverview {
+            sessions: state.ccp.all_session_stats().await,
+            global_master,
+        })
+        .into_response(),
+        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
+async fn admin_get_global_master(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.global_master_instructions() {
+        Ok(record) => Json(record).into_response(),
+        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
+async fn admin_set_global_master(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(update): Json<InstructionUpdate>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.set_global_master_instructions(&update.content) {
+        Ok(record) => Json(record).into_response(),
+        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
 async fn admin_delete_session(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -229,6 +290,53 @@ async fn admin_session_stats(
     }
 }
 
+async fn admin_get_session_master(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.session_stats(&session).await {
+        Ok(stats) => match state
+            .ccp
+            .master_instructions(stats.session.session_id)
+            .await
+        {
+            Ok(instructions) => Json(instructions.session).into_response(),
+            Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+        },
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_set_session_master(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+    Json(update): Json<InstructionUpdate>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state
+        .ccp
+        .set_session_master_instructions(&session, &update.content)
+        .await
+    {
+        Ok(record) => Json(record).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_dashboard() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        include_str!("admin.html"),
+    )
+}
+
 async fn setup_client_script() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
@@ -254,6 +362,20 @@ async fn management_powershell() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
         include_str!("../../../scripts/ccp-manage.ps1"),
+    )
+}
+
+async fn update_script() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
+        include_str!("../../../scripts/ccp-update"),
+    )
+}
+
+async fn update_powershell() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        include_str!("../../../scripts/ccp-update.ps1"),
     )
 }
 
@@ -300,6 +422,7 @@ fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
 fn request_session_id(request: &ClientRequest) -> Option<i64> {
     match request {
         ClientRequest::List { session_id }
+        | ClientRequest::GetMasterInstructions { session_id }
         | ClientRequest::Get { session_id, .. }
         | ClientRequest::AddShelf { session_id, .. }
         | ClientRequest::AddBook { session_id, .. }

@@ -25,6 +25,9 @@ ccp-server initial-topic
 - `POST /v1/admin/sessions` — add a session
 - `DELETE /v1/admin/sessions/{session}` — delete a session
 - `GET /v1/admin/sessions/{session}/stats` — get session statistics
+- `GET /admin` — central management dashboard
+- `GET|PUT /v1/admin/master` — global master instructions
+- `GET|PUT /v1/admin/sessions/{session}/master` — session master instructions
 - `GET /setup-client.sh` and `GET /setup-client.ps1`
 - `GET /ccp-manage` and `GET /ccp-manage.ps1`
 - `GET /downloads/{artifact}`
@@ -42,6 +45,8 @@ add SESSION
 delete SESSION
 stats SESSION
 ```
+
+Running `ccp-manage` with no arguments opens the central dashboard. It displays every session and its counts, creates/deletes sessions, and edits both the global and selected-session master instruction boards.
 
 ## Artifact publishing
 

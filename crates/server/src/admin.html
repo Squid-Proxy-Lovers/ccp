@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CCP Control Board</title>
+  <style>
+    :root{color-scheme:dark;--bg:#07100d;--panel:#101c17;--line:#294337;--ink:#eafff4;--muted:#8eb3a1;--green:#4cff9a;--red:#ff667d}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#153a29 0,transparent 34%),var(--bg);color:var(--ink);font:15px ui-monospace,SFMono-Regular,Menlo,monospace}
+    header{display:flex;align-items:center;justify-content:space-between;padding:20px 28px;border-bottom:1px solid var(--line);position:sticky;top:0;background:#07100deb;backdrop-filter:blur(12px);z-index:2}
+    h1,h2,h3{margin:0}.brand{display:flex;gap:12px;align-items:center}.pulse{width:11px;height:11px;border-radius:50%;background:var(--green);box-shadow:0 0 18px var(--green)}
+    main{max-width:1500px;margin:auto;padding:24px;display:grid;grid-template-columns:1.1fr .9fr;gap:20px}.panel{background:linear-gradient(145deg,#14231c,#0c1612);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:0 18px 50px #0006}.wide{grid-column:1/-1}
+    .toolbar,.row{display:flex;gap:10px;align-items:center}.toolbar{margin:16px 0}input,textarea,button{font:inherit;border-radius:7px;border:1px solid var(--line)}input,textarea{width:100%;background:#07100d;color:var(--ink);padding:11px}textarea{min-height:230px;resize:vertical;line-height:1.5}button{padding:10px 14px;background:#193c2b;color:var(--ink);cursor:pointer}button:hover{border-color:var(--green)}button.danger{background:#421923;color:#ffdce2;border-color:#72303e}
+    .sessions{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.session{padding:14px;border:1px solid var(--line);border-radius:9px;background:#09130f;cursor:pointer}.session.active{border-color:var(--green);box-shadow:inset 3px 0 var(--green)}.stats{display:flex;gap:15px;color:var(--muted);font-size:12px;margin-top:9px}.meta{color:var(--muted);font-size:12px;margin:8px 0 14px}.status{color:var(--muted)}#login{position:fixed;inset:0;background:#030806ed;display:grid;place-items:center;z-index:10}.loginbox{width:min(430px,90vw)}@media(max-width:900px){main{grid-template-columns:1fr}.wide{grid-column:auto}}
+  </style>
+</head>
+<body>
+  <div id="login"><div class="panel loginbox"><h2>CCP Central Control</h2><p class="meta">Enter the management key. It stays in this browser.</p><input id="key" type="password" placeholder="Admin key"><div class="toolbar"><button onclick="connect()">Connect</button><span id="loginError" class="status"></span></div></div></div>
+  <header><div class="brand"><span class="pulse"></span><h1>CCP CONTROL BOARD</h1></div><div class="row"><span id="status" class="status">offline</span><button onclick="logout()">Lock</button></div></header>
+  <main>
+    <section class="panel wide"><div class="row"><h2>Sessions</h2></div><div class="toolbar"><input id="newSession" placeholder="new-session-name"><button onclick="addSession()">Add session</button><button onclick="refresh()">Refresh</button></div><div id="sessions" class="sessions"></div></section>
+    <section class="panel"><h2>Global master instructions</h2><div id="globalMeta" class="meta"></div><textarea id="globalText" placeholder="Instructions for every agent in every session"></textarea><div class="toolbar"><button onclick="saveGlobal()">Publish global instructions</button></div></section>
+    <section class="panel"><div class="row"><h2>Session master instructions</h2><button class="danger" onclick="deleteSelected()">Delete session</button></div><div id="sessionMeta" class="meta">Select a session</div><textarea id="sessionText" disabled placeholder="Instructions for the selected session"></textarea><div class="toolbar"><button id="saveSession" disabled onclick="saveSessionMaster()">Publish session instructions</button></div></section>
+  </main>
+  <script>
+    let adminKey=localStorage.getItem('ccpAdminKey')||'',selected=null,overview=null;
+    const $=id=>document.getElementById(id);
+    async function api(path,options={}){options.headers={...(options.headers||{}),'X-CCP-Admin-Key':adminKey};if(options.body)options.headers['Content-Type']='application/json';const r=await fetch(path,options);if(!r.ok)throw new Error((await r.json()).error||r.statusText);return r.json()}
+    function connect(){adminKey=$('key').value.trim();localStorage.setItem('ccpAdminKey',adminKey);refresh().then(()=>$('login').style.display='none').catch(e=>$('loginError').textContent=e.message)}
+    function logout(){localStorage.removeItem('ccpAdminKey');location.reload()}
+    async function refresh(){overview=await api('/v1/admin/overview');$('status').textContent=`online · ${overview.sessions.length} sessions`;$('globalText').value=overview.global_master.content;$('globalMeta').textContent=`Updated ${overview.global_master.updated_at||'never'}`;renderSessions();if(selected)await selectSession(selected)}
+    function renderSessions(){$('sessions').innerHTML=overview.sessions.map(x=>`<div class="session ${selected===x.session.session_name?'active':''}" onclick="selectSession('${escapeJs(x.session.session_name)}')"><h3>${escapeHtml(x.session.session_name)}</h3><div class="meta">ID ${x.session.session_id} · ${x.session.visibility}</div><div class="stats"><span>${x.shelves} shelves</span><span>${x.books} books</span><span>${x.entries} entries</span></div></div>`).join('')||'<span class="status">No sessions</span>'}
+    async function selectSession(name){selected=name;renderSessions();const record=await api(`/v1/admin/sessions/${encodeURIComponent(name)}/master`);$('sessionText').disabled=false;$('saveSession').disabled=false;$('sessionText').value=record.content;$('sessionMeta').textContent=`${name} · updated ${record.updated_at||'never'}`}
+    async function saveGlobal(){const r=await api('/v1/admin/master',{method:'PUT',body:JSON.stringify({content:$('globalText').value})});$('globalMeta').textContent=`Updated ${r.updated_at}`}
+    async function saveSessionMaster(){if(!selected)return;const r=await api(`/v1/admin/sessions/${encodeURIComponent(selected)}/master`,{method:'PUT',body:JSON.stringify({content:$('sessionText').value})});$('sessionMeta').textContent=`${selected} · updated ${r.updated_at}`}
+    async function addSession(){const name=$('newSession').value.trim();if(!name)return;await api('/v1/admin/sessions',{method:'POST',body:JSON.stringify({session_name:name})});$('newSession').value='';await refresh();await selectSession(name)}
+    async function deleteSelected(){if(!selected||!confirm(`Delete session ${selected} and all of its data?`))return;await api(`/v1/admin/sessions/${encodeURIComponent(selected)}`,{method:'DELETE'});selected=null;$('sessionText').value='';$('sessionText').disabled=true;$('saveSession').disabled=true;$('sessionMeta').textContent='Select a session';await refresh()}
+    const escapeHtml=s=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));const escapeJs=s=>s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    if(adminKey){$('key').value=adminKey;connect()}setInterval(()=>{if($('login').style.display==='none')refresh().catch(()=>{})},15000);
+  </script>
+</body>
+</html>

@@ -12,6 +12,8 @@ $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitect
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $ClientPath = Join-Path $InstallDir "ccp-client.exe"
 Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/downloads/ccp-client-windows-$arch.exe" -OutFile $ClientPath
+$UpdatePath = Join-Path $InstallDir "ccp-update.ps1"
+Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/ccp-update.ps1" -OutFile $UpdatePath
 & $ClientPath subscribe-all
 
 $McpVenv = Join-Path $env:USERPROFILE ".ccp-client\mcp-venv"
@@ -39,4 +41,5 @@ if (($userPath -split ';') -notcontains $InstallDir) {
 
 Write-Host "Installed $ClientPath"
 Write-Host "All open topics are connected automatically."
+Write-Host "Update anytime:  powershell -File $UpdatePath"
 Write-Host "Discover topics: ccp-client remote-sessions"

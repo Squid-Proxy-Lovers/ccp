@@ -87,6 +87,18 @@ pub struct SessionStats {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstructionRecord {
+    pub content: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MasterInstructions {
+    pub global: InstructionRecord,
+    pub session: InstructionRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EntrySummary {
     pub name: String,
     pub description: String,
@@ -323,6 +335,9 @@ pub enum ClientRequest {
     Subscribe {
         session_ids: Vec<i64>,
     },
+    GetMasterInstructions {
+        session_id: i64,
+    },
     List {
         session_id: i64,
     },
@@ -447,6 +462,7 @@ pub enum ServerResponse {
     Sessions(Vec<SessionMetadata>),
     SessionCreated(SessionMetadata),
     Subscribed(Vec<SessionMetadata>),
+    MasterInstructions(MasterInstructions),
     EntrySummaries(Vec<EntrySummary>),
     ShelfSummaries(Vec<ShelfSummary>),
     BookSummaries(Vec<BookSummary>),

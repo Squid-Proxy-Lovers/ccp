@@ -48,6 +48,12 @@ pub async fn handle_message_request(
                 ServerResponse::HandshakeRejected(build_version_info(false))
             }
         }
+        ClientRequest::GetMasterInstructions { session_id } => {
+            match state.master_instructions(session_id).await {
+                Ok(instructions) => ServerResponse::MasterInstructions(instructions),
+                Err(error) => map_error(error),
+            }
+        }
         ClientRequest::List { session_id } => {
             match state.list_entries(session_id, auth_context).await {
                 Ok(entries) => ServerResponse::EntrySummaries(entries),

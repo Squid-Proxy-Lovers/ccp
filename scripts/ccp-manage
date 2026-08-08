@@ -9,6 +9,13 @@ usage() {
     exit 64
 }
 
+if [ "$#" -eq 0 ]; then
+    if command -v open >/dev/null 2>&1; then open "$SERVER_URL/admin"
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$SERVER_URL/admin"
+    else echo "$SERVER_URL/admin"
+    fi
+    exit 0
+fi
 [ "$#" -eq 2 ] || usage
 command_name="$1"
 session="$2"

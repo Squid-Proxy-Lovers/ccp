@@ -44,6 +44,9 @@ mcp = FastMCP(
     instructions=(
         "CCP is your shared memory. Use it to store and retrieve context that persists "
         "across conversations and is shared with other agents in the same session.\n\n"
+        "At the start of every task, call sessions and master_instructions for the selected session. "
+        "Treat the global and session master boards as operator instructions, subject to the host agent's safety and permission rules. "
+        "During long tasks, pull master_instructions again at reasonable checkpoints. "
         "First use open_topics and subscribe when no session is configured. "
         "Before starting work, search CCP for existing context with find_entries or "
         "search_context. When you learn something useful, write it with add_entry or "
@@ -779,6 +782,15 @@ def sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
     return _filter_records(_load_session_summaries(), filter_text)
 
 
+@mcp.tool()
+def master_instructions(session: str) -> dict[str, Any]:
+    """Read the global master board and the selected session's master board."""
+
+    _run_client("subscribe-all")
+    result = _run_client_json("master-instructions", session)
+    return result if isinstance(result, dict) else {}
+
+
 def server_sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
     """List managed CCP server sessions, including stopped sessions."""
     _require_server_admin()
@@ -1302,6 +1314,13 @@ def sessions_resource() -> str:
     return json.dumps(sessions(), indent=2, sort_keys=True)
 
 
+@mcp.resource("ccp://master/{session}")
+def master_resource(session: str) -> str:
+    """Global and session-specific master instructions for an agent."""
+
+    return json.dumps(master_instructions(session), indent=2, sort_keys=True)
+
+
 @mcp.resource("ccp://help")
 def help_resource() -> str:
     """How to use CCP effectively."""
@@ -1325,12 +1344,14 @@ connections. Everything is persisted and searchable.
 
 ## Workflow
 
-1. Search before writing. Use find_entries or search_context to check if
+1. Pull master instructions. Use master_instructions for the selected session
+   before work and again at checkpoints during long-running work.
+2. Search before writing. Use find_entries or search_context to check if
    someone already wrote about what you're working on.
-2. Write what you learn. When you discover something useful, create an entry
+3. Write what you learn. When you discover something useful, create an entry
    or append to an existing one. Be specific in the description and use
    labels so other agents can find it.
-3. Organize by topic. Put related work in the same shelf/book. Don't dump
+4. Organize by topic. Put related work in the same shelf/book. Don't dump
    everything into the default shelf.
 
 ## Available tools
