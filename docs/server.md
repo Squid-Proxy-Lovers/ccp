@@ -25,6 +25,7 @@ ccp-server initial-topic
 - `POST /v1/admin/sessions` — add a session
 - `DELETE /v1/admin/sessions/{session}` — delete a session
 - `GET /v1/admin/sessions/{session}/stats` — get session statistics
+- `GET /v1/admin/activity?session={session}&limit=100` — recent live session activity
 - `GET /admin` — central management dashboard
 - `GET|PUT /v1/admin/master` — global master instructions
 - `GET|PUT /v1/admin/sessions/{session}/master` — session master instructions

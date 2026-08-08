@@ -142,6 +142,41 @@ async fn management_is_limited_and_multi_session_stats_work() -> anyhow::Result<
     );
 
     client
+        .post(format!("{}/v1/request", server.base_url))
+        .json(&Envelope {
+            subscribed_session_ids: vec![created.session_id],
+            request: ClientRequest::AddEntry {
+                session_id: created.session_id,
+                name: "agent-progress".to_string(),
+                description: "live work update".to_string(),
+                labels: vec!["status".to_string()],
+                context: "Finished the first implementation phase.".to_string(),
+                shelf_name: "main".to_string(),
+                book_name: "default".to_string(),
+            },
+        })
+        .send()
+        .await?
+        .error_for_status()?;
+    let activity: serde_json::Value = client
+        .get(format!(
+            "{}/v1/admin/activity?session=topic-two&limit=20",
+            server.base_url
+        ))
+        .header("X-CCP-Admin-Key", server::DEFAULT_ADMIN_KEY)
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert_eq!(activity[0]["session_name"], "topic-two");
+    assert_eq!(activity[0]["entry_name"], "agent-progress");
+    assert_eq!(
+        activity[0]["content"],
+        "Finished the first implementation phase."
+    );
+
+    client
         .get(format!("{}/admin", server.base_url))
         .send()
         .await?
