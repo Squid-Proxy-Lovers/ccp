@@ -20,8 +20,9 @@ use crate::transport::{
 };
 
 const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
-  client subscribe --server <http-url> <session>
-  client remote-sessions --server <http-url>
+  client subscribe <session>
+  client subscribe-all
+  client remote-sessions
   client sessions
   client delete-session <session>
   client list <session>
@@ -56,6 +57,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Subscribe(SubscribeArgs),
+    SubscribeAll(ServerArgs),
     RemoteSessions(RemoteSessionsArgs),
     Sessions,
     DeleteSession(SessionSelectorArgs),
@@ -83,7 +85,7 @@ enum Command {
 #[derive(Args)]
 struct SubscribeArgs {
     #[arg(long, value_name = "http-url")]
-    server: String,
+    server: Option<String>,
     #[arg(value_name = "session")]
     session: String,
 }
@@ -91,7 +93,13 @@ struct SubscribeArgs {
 #[derive(Args)]
 struct RemoteSessionsArgs {
     #[arg(long, value_name = "http-url")]
-    server: String,
+    server: Option<String>,
+}
+
+#[derive(Args)]
+struct ServerArgs {
+    #[arg(long, value_name = "http-url")]
+    server: Option<String>,
 }
 
 #[derive(Args)]
@@ -251,7 +259,8 @@ pub(crate) async fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Subscribe(args) => {
-            let sessions = crate::transport_helpers::list_remote_sessions(&args.server).await?;
+            let server = resolved_server(args.server.as_deref());
+            let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
             let session = sessions
                 .iter()
                 .find(|candidate| {
@@ -259,20 +268,31 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                         || candidate.session_id.to_string() == args.session
                 })
                 .with_context(|| {
-                    format!(
-                        "session '{}' is not hosted by {}",
-                        args.session, args.server
-                    )
+                    format!("session '{}' is not hosted by {}", args.session, server)
                 })?;
-            let saved = crate::storage::save_subscription(&args.server, session)?;
+            let saved = crate::storage::save_subscription(&server, session)?;
             println!(
                 "Subscribed to session '{}' (id={}) at {}",
-                saved.metadata.session_name, saved.metadata.session_id, args.server
+                saved.metadata.session_name, saved.metadata.session_id, server
+            );
+        }
+
+        Command::SubscribeAll(args) => {
+            let server = resolved_server(args.server.as_deref());
+            let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
+            for session in &sessions {
+                crate::storage::save_subscription(&server, session)?;
+            }
+            println!(
+                "Subscribed to {} open topic(s) at {}",
+                sessions.len(),
+                server
             );
         }
 
         Command::RemoteSessions(args) => {
-            let sessions = crate::transport_helpers::list_remote_sessions(&args.server).await?;
+            let server = resolved_server(args.server.as_deref());
+            let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
             println!("{}", serde_json::to_string_pretty(&sessions)?);
         }
 
@@ -282,7 +302,10 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         // delete a session and all its enrollments
         Command::DeleteSession(args) => {
             let removed = delete_session_enrollments(&args.session)?;
-            println!("Removed {removed} saved subscription(s) for session '{}'.", args.session);
+            println!(
+                "Removed {removed} saved subscription(s) for session '{}'.",
+                args.session
+            );
         }
 
         // list all entries in a session
@@ -587,6 +610,13 @@ fn append_metadata_from_env() -> AppendMetadata {
         host_name,
         reason,
     }
+}
+
+fn resolved_server(explicit: Option<&str>) -> String {
+    explicit
+        .map(ToString::to_string)
+        .or_else(|| std::env::var("CCP_SERVER_URL").ok())
+        .unwrap_or_else(|| "http://192.168.130.34:1338".to_string())
 }
 
 fn hostname_fallback() -> Option<String> {

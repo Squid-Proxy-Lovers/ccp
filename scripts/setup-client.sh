@@ -19,6 +19,7 @@ esac
 mkdir -p "$INSTALL_DIR"
 curl -fsSL "$SERVER_URL/downloads/ccp-client-${os}-${arch}" -o "$INSTALL_DIR/ccp-client"
 chmod 0755 "$INSTALL_DIR/ccp-client"
+"$INSTALL_DIR/ccp-client" subscribe-all
 
 MCP_VENV="$HOME/.ccp-client/mcp-venv"
 python3 -m venv "$MCP_VENV"
@@ -44,5 +45,5 @@ if command -v claude >/dev/null 2>&1; then
 fi
 
 echo "Installed $INSTALL_DIR/ccp-client"
-echo "Discover topics: ccp-client remote-sessions --server $SERVER_URL"
-echo "Subscribe:       ccp-client subscribe --server $SERVER_URL <topic>"
+echo "All open topics are connected automatically."
+echo "Discover topics: ccp-client remote-sessions"

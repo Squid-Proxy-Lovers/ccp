@@ -16,13 +16,14 @@ Windows PowerShell:
 irm http://192.168.130.34:1338/setup-client.ps1 | iex
 ```
 
-The installer detects the OS/CPU, downloads the matching Rust client, installs the MCP bridge in an isolated Python virtual environment, and configures Codex and Claude Code when installed.
+The installer detects the OS/CPU, downloads the matching Rust client, automatically connects every open topic, installs the MCP bridge in an isolated Python virtual environment, and configures Codex and Claude Code when installed. No server argument or manual subscription is required.
 
 ## Topics and subscriptions
 
 ```sh
-ccp-client remote-sessions --server http://192.168.130.34:1338
-ccp-client subscribe --server http://192.168.130.34:1338 <topic-name-or-id>
+ccp-client remote-sessions
+ccp-client subscribe-all
+ccp-client subscribe <topic-name-or-id>
 ccp-client sessions
 ```
 

@@ -58,12 +58,11 @@ Start a server with an optional initial session:
 ccp-server my-session
 ```
 
-Create more sessions while the server is running, then subscribe this client:
+Create more sessions while the server is running. Client setup automatically connects every open topic:
 
 ```bash
 ccp-manage add second-session
-ccp-client subscribe --server http://192.168.130.34:1338 my-session
-ccp-client subscribe --server http://192.168.130.34:1338 second-session
+ccp-client subscribe-all
 ```
 
 Create some structure and write data:
