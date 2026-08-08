@@ -588,6 +588,110 @@ fn message_entry_from(entry: &CachedMessagePack) -> MessageEntry {
 }
 
 impl ServerState {
+    pub async fn list_sessions(&self) -> Vec<SessionMetadata> {
+        let sessions = self.sessions.read().await;
+        let mut result = sessions
+            .values()
+            .map(|session| session.metadata.clone())
+            .collect::<Vec<_>>();
+        result.sort_by(|left, right| left.session_name.cmp(&right.session_name));
+        result
+    }
+
+    pub async fn sessions_by_id(
+        &self,
+        session_ids: &[i64],
+    ) -> anyhow::Result<Vec<SessionMetadata>> {
+        let sessions = self.sessions.read().await;
+        let mut result = Vec::with_capacity(session_ids.len());
+        for session_id in session_ids {
+            let session = sessions
+                .get(session_id)
+                .with_context(|| format!("unknown session id {session_id}"))?;
+            result.push(session.metadata.clone());
+        }
+        Ok(result)
+    }
+
+    pub async fn create_session(&self, session_name: &str) -> anyhow::Result<SessionMetadata> {
+        let name = session_name.trim();
+        if name.is_empty() {
+            bail!("session name must not be empty");
+        }
+        if let Some(existing) = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .find(|session| session.metadata.session_name == name)
+            .map(|session| session.metadata.clone())
+        {
+            return Ok(existing);
+        }
+        let session_id = crate::init::create_session(name)?;
+        let metadata = SessionMetadata {
+            session_name: name.to_string(),
+            session_id,
+            description: "Runtime session for CCP inter-agent communication".to_string(),
+            owner: String::new(),
+            labels: Vec::new(),
+            visibility: "public".to_string(),
+            purpose: "Runtime session for CCP inter-agent communication".to_string(),
+        };
+        self.sessions
+            .write()
+            .await
+            .insert(session_id, SessionCache::new(metadata.clone(), true));
+        Ok(metadata)
+    }
+
+    pub async fn delete_session(&self, session_selector: &str) -> anyhow::Result<SessionMetadata> {
+        let mut sessions = self.sessions.write().await;
+        let session_id = sessions
+            .iter()
+            .find(|(id, session)| {
+                id.to_string() == session_selector
+                    || session.metadata.session_name == session_selector
+            })
+            .map(|(id, _)| *id)
+            .with_context(|| format!("unknown session '{session_selector}'"))?;
+        let removed = sessions
+            .remove(&session_id)
+            .expect("session was just resolved");
+        drop(sessions);
+        self.append_locks
+            .lock()
+            .await
+            .retain(|(candidate_id, _), _| *candidate_id != session_id);
+        let connection = open_sqlite_connection()?;
+        connection
+            .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
+            .with_context(|| format!("failed to delete session {session_id}"))?;
+        Ok(removed.metadata)
+    }
+
+    pub async fn session_stats(
+        &self,
+        session_selector: &str,
+    ) -> anyhow::Result<protocol::SessionStats> {
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .iter()
+            .find(|(id, session)| {
+                id.to_string() == session_selector
+                    || session.metadata.session_name == session_selector
+            })
+            .map(|(_, session)| session)
+            .with_context(|| format!("unknown session '{session_selector}'"))?;
+        Ok(protocol::SessionStats {
+            session: session.metadata.clone(),
+            shelves: session.shelves.len(),
+            books: session.books.len(),
+            entries: session.entries.len(),
+            is_active: session.is_active,
+        })
+    }
+
     pub async fn resolve_auth_token(&self, token: &str) -> Option<AuthGrant> {
         self.auth_tokens.read().await.get(token).cloned()
     }

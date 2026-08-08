@@ -10,14 +10,15 @@ use protocol::{
 };
 
 use crate::enrollment_structs::StoredEnrollment;
-use crate::transport_helpers::{connect_mtls, error_response_to_anyhow, response_to_json_string};
+use crate::transport_helpers::{
+    error_response_to_anyhow, perform_http_request, response_to_json_string,
+};
 
 pub(crate) async fn perform_request(
     enrollment: &StoredEnrollment,
     request: ClientRequest,
 ) -> anyhow::Result<ServerResponse> {
-    let mut connection = connect_mtls(enrollment).await?;
-    connection.request(request).await
+    perform_http_request(enrollment, request).await
 }
 
 pub(crate) async fn perform_get(
@@ -260,22 +261,6 @@ pub(crate) async fn perform_import(
                 session_id: enrollment.metadata.session_id,
                 bundle,
                 policy,
-            },
-        )
-        .await?,
-    )
-}
-
-pub(crate) async fn perform_revoke_cert(
-    enrollment: &StoredEnrollment,
-    client_common_name: &str,
-) -> anyhow::Result<String> {
-    response_to_json_string(
-        perform_request(
-            enrollment,
-            ClientRequest::RevokeClientCert {
-                session_id: enrollment.metadata.session_id,
-                client_common_name: client_common_name.to_string(),
             },
         )
         .await?,

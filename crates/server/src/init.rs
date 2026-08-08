@@ -34,6 +34,8 @@ pub const AUTH_SERVER_BASE_URL_ENV: &str = "CCP_AUTH_BASE_URL";
 pub const MTLS_SERVER_BASE_URL_ENV: &str = "CCP_MTLS_BASE_URL";
 pub const AUTH_LISTENER_ADDR_ENV: &str = "CCP_AUTH_LISTENER_ADDR";
 pub const MTLS_LISTENER_ADDR_ENV: &str = "CCP_MTLS_LISTENER_ADDR";
+pub const HTTP_LISTENER_ADDR_ENV: &str = "CCP_HTTP_LISTENER_ADDR";
+pub const HTTP_SERVER_BASE_URL_ENV: &str = "CCP_HTTP_BASE_URL";
 pub const TLS_SERVER_NAMES_ENV: &str = "CCP_TLS_SERVER_NAMES";
 pub const ALLOW_NON_LOOPBACK_AUTH_LISTENER_ENV: &str = "CCP_ALLOW_NON_LOOPBACK_AUTH_LISTENER";
 pub const SESSION_OWNER_ENV: &str = "CCP_SESSION_OWNER";
@@ -52,6 +54,8 @@ const DEFAULT_AUTH_SERVER_BASE_URL: &str = "http://127.0.0.1:1337";
 const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
+const DEFAULT_HTTP_LISTENER_ADDR: &str = "0.0.0.0:1338";
+const DEFAULT_HTTP_SERVER_BASE_URL: &str = "http://192.168.130.34:1338";
 /// Current schema version. Bump when adding new migrations.
 pub const SCHEMA_VERSION: u32 = 2;
 
@@ -106,6 +110,42 @@ pub async fn initialize_cpp_server(session_name: &str) -> anyhow::Result<Session
         initial_read_token,
         initial_read_write_token,
     })
+}
+
+/// Initialize the shared, plaintext server database without generating any
+/// authentication or TLS material.
+pub fn initialize_plain_server(initial_session: Option<&str>) -> anyhow::Result<Option<i64>> {
+    fs::create_dir_all(server_data_dir()).with_context(|| {
+        format!(
+            "failed to create server data directory {}",
+            server_data_dir().display()
+        )
+    })?;
+    init_sqlite(&db_path())?;
+    match initial_session
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => create_session(name).map(Some),
+        None => Ok(None),
+    }
+}
+
+pub fn create_session(session_name: &str) -> anyhow::Result<i64> {
+    let name = session_name.trim();
+    if name.is_empty() {
+        bail!("session name must not be empty");
+    }
+    let mut connection = open_sqlite_connection()?;
+    ensure_runtime_session(&mut connection, name)
+}
+
+pub fn http_listener_addr() -> String {
+    env::var(HTTP_LISTENER_ADDR_ENV).unwrap_or_else(|_| DEFAULT_HTTP_LISTENER_ADDR.to_string())
+}
+
+pub fn http_server_base_url() -> String {
+    env::var(HTTP_SERVER_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_HTTP_SERVER_BASE_URL.to_string())
 }
 
 pub fn open_sqlite_connection() -> anyhow::Result<Connection> {
@@ -667,7 +707,7 @@ pub fn ensure_active_session_binding(session_id: i64) -> anyhow::Result<SessionB
 fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> anyhow::Result<i64> {
     let owner = env::var(SESSION_OWNER_ENV).unwrap_or_default();
     let labels = env::var(SESSION_LABELS_ENV).unwrap_or_default();
-    let visibility = env::var(SESSION_VISIBILITY_ENV).unwrap_or_else(|_| "private".to_string());
+    let visibility = env::var(SESSION_VISIBILITY_ENV).unwrap_or_else(|_| "public".to_string());
     let purpose = env::var(SESSION_PURPOSE_ENV)
         .unwrap_or_else(|_| "Runtime session for CCP inter-agent communication".to_string());
     connection

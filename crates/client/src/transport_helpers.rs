@@ -2,121 +2,66 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use anyhow::{Context, bail};
-use protocol::{ClientRequest, ErrorCode, ErrorResponse, ServerResponse, decode, encode};
+use protocol::{ClientRequest, ErrorCode, ErrorResponse, ServerResponse};
 use reqwest::Url;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
-use rustls::{ClientConfig, RootCertStore};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
-use tokio_rustls::TlsConnector;
-use tokio_rustls::client::TlsStream;
+use serde::Serialize;
 
 use crate::enrollment_structs::StoredEnrollment;
 
-pub(crate) struct PersistentClientConnection {
-    pub(crate) stream: TlsStream<TcpStream>,
+fn normalized_endpoint(endpoint: &str) -> anyhow::Result<String> {
+    let url = Url::parse(endpoint).context("invalid HTTP endpoint URL")?;
+    if url.scheme() != "http" {
+        bail!("server endpoint must use plaintext http://");
+    }
+    if url.host_str().is_none() {
+        bail!("HTTP endpoint missing host");
+    }
+    Ok(endpoint.trim_end_matches('/').to_string())
 }
 
-pub(crate) async fn connect_mtls(
+#[derive(Serialize)]
+struct RequestEnvelope {
+    subscribed_session_ids: Vec<i64>,
+    request: ClientRequest,
+}
+
+pub(crate) async fn list_remote_sessions(
+    endpoint: &str,
+) -> anyhow::Result<Vec<protocol::SessionMetadata>> {
+    let endpoint = normalized_endpoint(endpoint)?;
+    reqwest::Client::new()
+        .get(format!("{endpoint}/v1/sessions"))
+        .send()
+        .await
+        .context("failed to list remote sessions")?
+        .error_for_status()
+        .context("server rejected session discovery")?
+        .json()
+        .await
+        .context("failed to decode remote sessions")
+}
+
+pub(crate) async fn perform_http_request(
     enrollment: &StoredEnrollment,
-) -> anyhow::Result<PersistentClientConnection> {
-    check_cert_time(enrollment)?;
-    let url =
-        Url::parse(&enrollment.metadata.mtls_endpoint).context("invalid mTLS endpoint URL")?;
-    let host = url
-        .host_str()
-        .context("mTLS endpoint missing host")?
-        .to_string();
-    let port = url
-        .port_or_known_default()
-        .context("mTLS endpoint missing port")?;
-    let address = if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    };
-
-    let ca_pem = std::fs::read(enrollment.directory.join("ca.pem")).with_context(|| {
-        format!(
-            "failed to read {}",
-            enrollment.directory.join("ca.pem").display()
-        )
-    })?;
-    let client_cert_pem =
-        std::fs::read(enrollment.directory.join("client.pem")).with_context(|| {
-            format!(
-                "failed to read {}",
-                enrollment.directory.join("client.pem").display()
-            )
-        })?;
-    let client_key_pem =
-        std::fs::read(enrollment.directory.join("client.key")).with_context(|| {
-            format!(
-                "failed to read {}",
-                enrollment.directory.join("client.key").display()
-            )
-        })?;
-
-    let mut root_store = RootCertStore::empty();
-    for cert in CertificateDer::pem_slice_iter(&ca_pem) {
-        root_store
-            .add(cert.context("failed to parse CA certificate")?)
-            .context("failed to add CA certificate to root store")?;
-    }
-
-    let cert_chain = CertificateDer::pem_slice_iter(&client_cert_pem)
-        .collect::<Result<Vec<_>, _>>()
-        .context("failed to parse client certificate chain")?;
-    let private_key = PrivateKeyDer::from_pem_slice(&client_key_pem)
-        .context("failed to parse client private key")?;
-
-    let config = ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_client_auth_cert(cert_chain, private_key)
-        .context("failed to build rustls client config")?;
-    let connector = TlsConnector::from(Arc::new(config));
-
-    let stream = TcpStream::connect(&address)
+    request: ClientRequest,
+) -> anyhow::Result<ServerResponse> {
+    let endpoint = normalized_endpoint(&enrollment.metadata.mtls_endpoint)?;
+    let client_key = std::env::var("CCP_CLIENT_KEY")
+        .unwrap_or_else(|_| "ccp-client-7b6c2f915e4a8d30".to_string());
+    reqwest::Client::new()
+        .post(format!("{endpoint}/v1/request"))
+        .header("X-CCP-Client-Key", client_key)
+        .json(&RequestEnvelope {
+            subscribed_session_ids: vec![enrollment.metadata.session_id],
+            request,
+        })
+        .send()
         .await
-        .with_context(|| format!("failed to connect to {address}"))?;
-    stream.set_nodelay(true).ok();
-    let server_name = ServerName::try_from(host.clone()).context("invalid TLS server name")?;
-    let tls_stream = connector
-        .connect(server_name, stream)
+        .context("failed to send HTTP request")?
+        .json()
         .await
-        .context("mTLS handshake failed")?;
-
-    Ok(PersistentClientConnection { stream: tls_stream })
-}
-
-fn check_cert_time(enrollment: &StoredEnrollment) -> anyhow::Result<()> {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before UNIX_EPOCH")?
-        .as_secs();
-    if now >= enrollment.metadata.client_cert_expires_at {
-        bail!(
-            "client certificate expired at unix={}; request a new enrollment token and re-enroll",
-            enrollment.metadata.client_cert_expires_at
-        );
-    }
-    Ok(())
-}
-
-impl PersistentClientConnection {
-    pub(crate) async fn request(
-        &mut self,
-        request: ClientRequest,
-    ) -> anyhow::Result<ServerResponse> {
-        write_frame(&mut self.stream, &request).await?;
-        read_frame(&mut self.stream)
-            .await?
-            .context("server closed the TLS session before responding")
-    }
+        .context("failed to decode HTTP response")
 }
 
 pub(crate) fn response_to_json_string(response: ServerResponse) -> anyhow::Result<String> {
@@ -186,6 +131,12 @@ pub(crate) fn response_to_json_string(response: ServerResponse) -> anyhow::Resul
                 protocol::PROTOCOL_VERSION
             )
         }
+        ServerResponse::Sessions(sessions) | ServerResponse::Subscribed(sessions) => {
+            serde_json::to_string(&sessions).context("failed to serialize sessions")
+        }
+        ServerResponse::SessionCreated(session) => {
+            serde_json::to_string(&session).context("failed to serialize created session")
+        }
         ServerResponse::Error(error) => error_response_to_anyhow(error),
     }
 }
@@ -198,51 +149,4 @@ pub(crate) fn error_response_to_anyhow(error: ErrorResponse) -> anyhow::Result<S
         ErrorCode::Internal => "internal error",
     };
     bail!("{label}: {}", error.message)
-}
-
-async fn read_frame<T, R>(reader: &mut R) -> anyhow::Result<Option<T>>
-where
-    T: serde::de::DeserializeOwned,
-    R: AsyncRead + Unpin,
-{
-    let mut header = [0u8; 4];
-    match reader.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error).context("failed to read frame header"),
-    }
-
-    let frame_len = u32::from_be_bytes(header) as usize;
-    if frame_len == 0 {
-        bail!("empty frames are not allowed");
-    }
-    if frame_len > 8 * 1024 * 1024 {
-        bail!("frame exceeds maximum size");
-    }
-
-    let mut payload = vec![0u8; frame_len];
-    reader
-        .read_exact(&mut payload)
-        .await
-        .context("failed to read frame payload")?;
-    decode(&payload).context("failed to decode frame").map(Some)
-}
-
-async fn write_frame<T, W>(writer: &mut W, value: &T) -> anyhow::Result<()>
-where
-    T: serde::Serialize,
-    W: AsyncWrite + Unpin,
-{
-    let payload = encode(value).context("failed to encode frame")?;
-    let frame_len = u32::try_from(payload.len()).context("encoded frame is too large")?;
-    writer
-        .write_all(&frame_len.to_be_bytes())
-        .await
-        .context("failed to write frame header")?;
-    writer
-        .write_all(&payload)
-        .await
-        .context("failed to write frame payload")?;
-    writer.flush().await.context("failed to flush frame")?;
-    Ok(())
 }

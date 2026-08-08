@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 /// Wire protocol version. Bump this when the ClientRequest/ServerResponse
 /// enums change in a backward-incompatible way.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 // ── Offline transfer ──────────────────────────────────────────────────────────
 
@@ -75,6 +75,15 @@ pub struct SessionMetadata {
     pub labels: Vec<String>,
     pub visibility: String,
     pub purpose: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionStats {
+    pub session: SessionMetadata,
+    pub shelves: usize,
+    pub books: usize,
+    pub entries: usize,
+    pub is_active: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -304,6 +313,16 @@ pub struct ServerVersionInfo {
 pub enum ClientRequest {
     Ping,
     Handshake(VersionInfo),
+    /// Discover every session hosted by this server.
+    ListSessions,
+    /// Create a session on this server. Plaintext mode has no remote ACL.
+    CreateSession {
+        session_name: String,
+    },
+    /// Select the sessions this connection may operate on.
+    Subscribe {
+        session_ids: Vec<i64>,
+    },
     List {
         session_id: i64,
     },
@@ -425,6 +444,9 @@ pub enum ServerResponse {
     Pong,
     HandshakeOk(ServerVersionInfo),
     HandshakeRejected(ServerVersionInfo),
+    Sessions(Vec<SessionMetadata>),
+    SessionCreated(SessionMetadata),
+    Subscribed(Vec<SessionMetadata>),
     EntrySummaries(Vec<EntrySummary>),
     ShelfSummaries(Vec<ShelfSummary>),
     BookSummaries(Vec<BookSummary>),
