@@ -25,7 +25,8 @@ chmod 0755 "$INSTALL_DIR/ccp-update"
 
 MCP_VENV="$HOME/.ccp-client/mcp-venv"
 python3 -m venv "$MCP_VENV"
-"$MCP_VENV/bin/pip" install --upgrade "$SERVER_URL/downloads/ccp-mcp.tar.gz"
+"$MCP_VENV/bin/pip" install --upgrade --force-reinstall --no-cache-dir "$SERVER_URL/downloads/ccp-mcp.tar.gz"
+"$MCP_VENV/bin/python" -c 'from ccp_mcp_server.server import master_instructions'
 MCP_CMD="$MCP_VENV/bin/ccp-mcp-server"
 
 if command -v codex >/dev/null 2>&1; then
@@ -49,4 +50,5 @@ fi
 echo "Installed $INSTALL_DIR/ccp-client"
 echo "All open topics are connected automatically."
 echo "Update anytime:  ccp-update"
+echo "Restart Codex or Claude Code after updating so it reloads the MCP tool list."
 echo "Discover topics: ccp-client remote-sessions"

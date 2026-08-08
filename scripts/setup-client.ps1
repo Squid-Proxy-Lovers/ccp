@@ -19,7 +19,8 @@ Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/ccp-update.ps1" -OutFile $Up
 $McpVenv = Join-Path $env:USERPROFILE ".ccp-client\mcp-venv"
 py -m venv $McpVenv
 $McpPython = Join-Path $McpVenv "Scripts\python.exe"
-& $McpPython -m pip install --upgrade "$ServerUrl/downloads/ccp-mcp.tar.gz"
+& $McpPython -m pip install --upgrade --force-reinstall --no-cache-dir "$ServerUrl/downloads/ccp-mcp.tar.gz"
+& $McpPython -c "from ccp_mcp_server.server import master_instructions"
 $McpCommand = Join-Path $McpVenv "Scripts\ccp-mcp-server.exe"
 
 if (Get-Command codex -ErrorAction SilentlyContinue) {
@@ -42,4 +43,5 @@ if (($userPath -split ';') -notcontains $InstallDir) {
 Write-Host "Installed $ClientPath"
 Write-Host "All open topics are connected automatically."
 Write-Host "Update anytime:  powershell -File $UpdatePath"
+Write-Host "Restart Codex or Claude Code after updating so it reloads the MCP tool list."
 Write-Host "Discover topics: ccp-client remote-sessions"
