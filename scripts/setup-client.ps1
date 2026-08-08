@@ -12,6 +12,7 @@ $arch = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitect
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $ClientPath = Join-Path $InstallDir "ccp-client.exe"
 Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/downloads/ccp-client-windows-$arch.exe" -OutFile $ClientPath
+& $ClientPath subscribe-all
 
 $McpVenv = Join-Path $env:USERPROFILE ".ccp-client\mcp-venv"
 py -m venv $McpVenv
@@ -37,5 +38,5 @@ if (($userPath -split ';') -notcontains $InstallDir) {
 }
 
 Write-Host "Installed $ClientPath"
-Write-Host "Discover topics: ccp-client remote-sessions --server $ServerUrl"
-Write-Host "Subscribe:       ccp-client subscribe --server $ServerUrl TOPIC"
+Write-Host "All open topics are connected automatically."
+Write-Host "Discover topics: ccp-client remote-sessions"

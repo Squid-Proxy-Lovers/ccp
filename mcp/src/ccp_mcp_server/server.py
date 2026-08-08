@@ -775,7 +775,7 @@ def subscribe(topic: str, server_url: str | None = None) -> dict[str, Any]:
 @mcp.tool()
 def sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
     """List topics this agent has subscribed to."""
-
+    _run_client("subscribe-all")
     return _filter_records(_load_session_summaries(), filter_text)
 
 
