@@ -16,6 +16,7 @@ use protocol::{
     ShelfSummary,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
+use serde::Serialize;
 use strsim::{jaro_winkler, normalized_levenshtein};
 use uuid::Uuid;
 
@@ -574,6 +575,23 @@ pub struct ServerState {
     journal: Arc<JournalHandle>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct SessionActivity {
+    pub id: String,
+    pub session_id: i64,
+    pub session_name: String,
+    pub kind: String,
+    pub shelf_name: String,
+    pub book_name: String,
+    pub entry_name: String,
+    pub actor: String,
+    pub agent_name: Option<String>,
+    pub host_name: Option<String>,
+    pub reason: Option<String>,
+    pub content: String,
+    pub created_at: String,
+}
+
 fn message_entry_from(entry: &CachedMessagePack) -> MessageEntry {
     MessageEntry {
         name: entry.summary.name.clone(),
@@ -588,6 +606,97 @@ fn message_entry_from(entry: &CachedMessagePack) -> MessageEntry {
 }
 
 impl ServerState {
+    pub async fn recent_activity(
+        &self,
+        session_selector: Option<&str>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<SessionActivity>> {
+        let sessions = self.sessions.read().await;
+        let mut activity = Vec::new();
+
+        for (session_id, session) in sessions.iter() {
+            if session_selector.is_some_and(|selector| {
+                selector != session_id.to_string() && selector != session.metadata.session_name
+            }) {
+                continue;
+            }
+
+            for entry in session.entries.values() {
+                let mut original_content = entry.context.clone();
+                for history in entry.history.iter().rev() {
+                    if original_content == history.appended_content {
+                        original_content.clear();
+                    } else if let Some(prefix) =
+                        original_content.strip_suffix(&format!("\n{}", history.appended_content))
+                    {
+                        original_content = prefix.to_string();
+                    }
+                }
+                activity.push(SessionActivity {
+                    id: format!(
+                        "entry:{session_id}:{}:{}:{}",
+                        entry.path.shelf_name(),
+                        entry.path.book_name(),
+                        entry.name()
+                    ),
+                    session_id: *session_id,
+                    session_name: session.metadata.session_name.clone(),
+                    kind: "entry_created".to_string(),
+                    shelf_name: entry.path.shelf_name().to_string(),
+                    book_name: entry.path.book_name().to_string(),
+                    entry_name: entry.name().to_string(),
+                    actor: "http-client".to_string(),
+                    agent_name: None,
+                    host_name: None,
+                    reason: None,
+                    content: original_content,
+                    created_at: entry.created_at.clone(),
+                });
+
+                for (index, history) in entry.history.iter().enumerate() {
+                    activity.push(SessionActivity {
+                        id: format!(
+                            "append:{session_id}:{}:{}:{}:{index}:{}",
+                            entry.path.shelf_name(),
+                            entry.path.book_name(),
+                            entry.name(),
+                            history.operation_id
+                        ),
+                        session_id: *session_id,
+                        session_name: session.metadata.session_name.clone(),
+                        kind: "entry_appended".to_string(),
+                        shelf_name: entry.path.shelf_name().to_string(),
+                        book_name: entry.path.book_name().to_string(),
+                        entry_name: entry.name().to_string(),
+                        actor: history.client_common_name.clone(),
+                        agent_name: history.agent_name.clone(),
+                        host_name: history.host_name.clone(),
+                        reason: history.reason.clone(),
+                        content: history.appended_content.clone(),
+                        created_at: history.created_at.clone(),
+                    });
+                }
+            }
+        }
+
+        if let Some(selector) = session_selector
+            && !sessions.iter().any(|(id, session)| {
+                selector == id.to_string() || selector == session.metadata.session_name
+            })
+        {
+            bail!("unknown session '{selector}'");
+        }
+
+        activity.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        activity.truncate(limit.clamp(1, 500));
+        Ok(activity)
+    }
+
     pub async fn list_sessions(&self) -> Vec<SessionMetadata> {
         let sessions = self.sessions.read().await;
         let mut result = sessions

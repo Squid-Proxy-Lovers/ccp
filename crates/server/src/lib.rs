@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -63,6 +63,12 @@ struct InstructionUpdate {
     content: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct ActivityQuery {
+    session: Option<String>,
+    limit: Option<usize>,
+}
+
 #[derive(Debug, Serialize)]
 struct AdminOverview {
     sessions: Vec<protocol::SessionStats>,
@@ -99,6 +105,7 @@ pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<(
         .route("/v1/request", post(request))
         .route("/v1/admin/sessions", post(admin_create_session))
         .route("/v1/admin/overview", get(admin_overview))
+        .route("/v1/admin/activity", get(admin_activity))
         .route(
             "/v1/admin/master",
             get(admin_get_global_master).put(admin_set_global_master),
@@ -235,6 +242,24 @@ async fn admin_overview(State(state): State<AppState>, headers: HeaderMap) -> Re
         })
         .into_response(),
         Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
+async fn admin_activity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ActivityQuery>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state
+        .ccp
+        .recent_activity(query.session.as_deref(), query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(activity) => Json(activity).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
     }
 }
 
