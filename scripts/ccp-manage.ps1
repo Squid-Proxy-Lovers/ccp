@@ -2,6 +2,10 @@ $ErrorActionPreference = "Stop"
 $ServerUrl = "http://192.168.130.34:1338"
 $AdminKey = "ccp-admin-f1a847d36c509e2b"
 
+if ($args.Count -eq 0) {
+    Start-Process "$ServerUrl/admin"
+    exit 0
+}
 if ($args.Count -ne 2 -or $args[0] -notin @("add", "delete", "stats")) {
     throw "Usage: ccp-manage.ps1 add|delete|stats SESSION"
 }

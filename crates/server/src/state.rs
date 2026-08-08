@@ -692,6 +692,137 @@ impl ServerState {
         })
     }
 
+    pub async fn all_session_stats(&self) -> Vec<protocol::SessionStats> {
+        let sessions = self.sessions.read().await;
+        let mut result = sessions
+            .values()
+            .map(|session| protocol::SessionStats {
+                session: session.metadata.clone(),
+                shelves: session.shelves.len(),
+                books: session.books.len(),
+                entries: session.entries.len(),
+                is_active: session.is_active,
+            })
+            .collect::<Vec<_>>();
+        result.sort_by(|left, right| left.session.session_name.cmp(&right.session.session_name));
+        result
+    }
+
+    pub async fn master_instructions(
+        &self,
+        session_id: i64,
+    ) -> anyhow::Result<protocol::MasterInstructions> {
+        if !self.sessions.read().await.contains_key(&session_id) {
+            bail!("unknown session id {session_id}");
+        }
+        let connection = open_sqlite_connection()?;
+        let global = connection.query_row(
+            "SELECT content, updated_at FROM global_master_instructions WHERE id = 1",
+            [],
+            |row| {
+                Ok(protocol::InstructionRecord {
+                    content: row.get(0)?,
+                    updated_at: row.get(1)?,
+                })
+            },
+        )?;
+        let session = connection
+            .query_row(
+                "SELECT content, updated_at FROM session_master_instructions WHERE session_id = ?1",
+                [session_id],
+                |row| {
+                    Ok(protocol::InstructionRecord {
+                        content: row.get(0)?,
+                        updated_at: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?
+            .unwrap_or_else(|| protocol::InstructionRecord {
+                content: String::new(),
+                updated_at: String::new(),
+            });
+        Ok(protocol::MasterInstructions { global, session })
+    }
+
+    pub fn global_master_instructions(&self) -> anyhow::Result<protocol::InstructionRecord> {
+        let connection = open_sqlite_connection()?;
+        connection
+            .query_row(
+                "SELECT content, updated_at FROM global_master_instructions WHERE id = 1",
+                [],
+                |row| {
+                    Ok(protocol::InstructionRecord {
+                        content: row.get(0)?,
+                        updated_at: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn set_global_master_instructions(
+        &self,
+        content: &str,
+    ) -> anyhow::Result<protocol::InstructionRecord> {
+        let connection = open_sqlite_connection()?;
+        connection.execute(
+            "INSERT INTO global_master_instructions (id, content, updated_at)
+             VALUES (1, ?1, CURRENT_TIMESTAMP)
+             ON CONFLICT(id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP",
+            [content],
+        )?;
+        connection
+            .query_row(
+                "SELECT content, updated_at FROM global_master_instructions WHERE id = 1",
+                [],
+                |row| {
+                    Ok(protocol::InstructionRecord {
+                        content: row.get(0)?,
+                        updated_at: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
+    pub async fn set_session_master_instructions(
+        &self,
+        session_selector: &str,
+        content: &str,
+    ) -> anyhow::Result<protocol::InstructionRecord> {
+        let session_id = self
+            .sessions
+            .read()
+            .await
+            .iter()
+            .find(|(id, session)| {
+                id.to_string() == session_selector
+                    || session.metadata.session_name == session_selector
+            })
+            .map(|(id, _)| *id)
+            .with_context(|| format!("unknown session '{session_selector}'"))?;
+        let connection = open_sqlite_connection()?;
+        connection.execute(
+            "INSERT INTO session_master_instructions (session_id, content, updated_at)
+             VALUES (?1, ?2, CURRENT_TIMESTAMP)
+             ON CONFLICT(session_id) DO UPDATE SET content = excluded.content, updated_at = CURRENT_TIMESTAMP",
+            params![session_id, content],
+        )?;
+        connection
+            .query_row(
+                "SELECT content, updated_at FROM session_master_instructions WHERE session_id = ?1",
+                [session_id],
+                |row| {
+                    Ok(protocol::InstructionRecord {
+                        content: row.get(0)?,
+                        updated_at: row.get(1)?,
+                    })
+                },
+            )
+            .map_err(Into::into)
+    }
+
     pub async fn resolve_auth_token(&self, token: &str) -> Option<AuthGrant> {
         self.auth_tokens.read().await.get(token).cloned()
     }

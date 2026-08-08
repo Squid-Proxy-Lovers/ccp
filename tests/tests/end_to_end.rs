@@ -107,6 +107,47 @@ async fn management_is_limited_and_multi_session_stats_work() -> anyhow::Result<
     assert_eq!(stats.entries, 0);
 
     client
+        .put(format!("{}/v1/admin/master", server.base_url))
+        .header("X-CCP-Admin-Key", server::DEFAULT_ADMIN_KEY)
+        .json(&serde_json::json!({"content": "global command"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    client
+        .put(format!(
+            "{}/v1/admin/sessions/topic-two/master",
+            server.base_url
+        ))
+        .header("X-CCP-Admin-Key", server::DEFAULT_ADMIN_KEY)
+        .json(&serde_json::json!({"content": "session command"}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let instructions: ServerResponse = client
+        .post(format!("{}/v1/request", server.base_url))
+        .json(&Envelope {
+            subscribed_session_ids: vec![created.session_id],
+            request: ClientRequest::GetMasterInstructions {
+                session_id: created.session_id,
+            },
+        })
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    assert!(
+        matches!(instructions, ServerResponse::MasterInstructions(value)
+        if value.global.content == "global command" && value.session.content == "session command")
+    );
+
+    client
+        .get(format!("{}/admin", server.base_url))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    client
         .delete(format!("{}/v1/admin/sessions/topic-two", server.base_url))
         .header("X-CCP-Admin-Key", server::DEFAULT_ADMIN_KEY)
         .send()

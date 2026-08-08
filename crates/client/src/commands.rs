@@ -24,6 +24,7 @@ const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
   client subscribe-all
   client remote-sessions
   client sessions
+  client master-instructions <session>
   client delete-session <session>
   client list <session>
   client get <session> <entry-name> [--shelf <name>] [--book <name>]
@@ -60,6 +61,7 @@ enum Command {
     SubscribeAll(ServerArgs),
     RemoteSessions(RemoteSessionsArgs),
     Sessions,
+    MasterInstructions(SessionSelectorArgs),
     DeleteSession(SessionSelectorArgs),
     List(SessionSelectorArgs),
     Get(EntryArgs),
@@ -298,6 +300,20 @@ pub(crate) async fn run() -> anyhow::Result<()> {
 
         // list all sessions and their details
         Command::Sessions => list_sessions()?,
+
+        Command::MasterInstructions(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            let response = crate::transport::perform_request(
+                &enrollment,
+                protocol::ClientRequest::GetMasterInstructions {
+                    session_id: enrollment.metadata.session_id,
+                },
+            )
+            .await?;
+            print_json(&crate::transport_helpers::response_to_json_string(
+                response,
+            )?)?;
+        }
 
         // delete a session and all its enrollments
         Command::DeleteSession(args) => {
