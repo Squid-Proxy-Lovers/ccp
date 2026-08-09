@@ -3,21 +3,241 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>CCP Operations Console</title>
+  <title>CCP Control</title>
   <style>
-    :root{color-scheme:dark;--bg:#07100d;--panel:#101b16;--panel2:#0b1511;--line:#263e33;--line2:#355746;--ink:#ecfff5;--muted:#8dad9e;--green:#48f597;--green2:#1eaf68;--amber:#ffc766;--red:#ff6b7e;--blue:#76b9ff;--shadow:0 18px 50px #0007}
-    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:radial-gradient(circle at 12% -8%,#17462f 0,transparent 28%),radial-gradient(circle at 90% 8%,#102d23 0,transparent 25%),var(--bg);color:var(--ink);font:14px Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}
-    header{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;padding:15px 24px;border-bottom:1px solid var(--line);background:#07100dea;backdrop-filter:blur(16px)}.brand{display:flex;align-items:center;gap:12px}.mark{display:grid;place-items:center;width:34px;height:34px;border:1px solid #3b7658;border-radius:10px;background:#123523;color:var(--green);font-weight:900}.brand h1{font-size:16px;letter-spacing:.12em}.brand small{display:block;margin-top:2px;color:var(--muted);font-size:11px;letter-spacing:.04em}.header-actions,.row,.toolbar{display:flex;align-items:center;gap:9px}.live-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 12px var(--green)}.live-dot.paused{background:var(--amber);box-shadow:none}
-    main{max-width:1600px;margin:auto;padding:20px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}.metric,.panel{border:1px solid var(--line);background:linear-gradient(145deg,#122018,#0b1511);border-radius:13px;box-shadow:var(--shadow)}.metric{padding:15px 17px}.metric .label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em}.metric strong{display:block;margin-top:7px;font:700 27px ui-monospace,SFMono-Regular,Menlo,monospace}.workspace{display:grid;grid-template-columns:300px minmax(0,1fr);gap:16px}.panel{overflow:hidden}.panel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:15px 17px;border-bottom:1px solid var(--line)}.panel-head h2{margin:0;font-size:14px;letter-spacing:.04em}.panel-body{padding:16px}.sessions-panel{align-self:start;position:sticky;top:82px}.session-list{display:grid;gap:7px;max-height:calc(100vh - 230px);overflow:auto;padding:10px}.session{width:100%;text-align:left;padding:12px;border:1px solid transparent;border-radius:9px;background:#0a130f;color:var(--ink)}.session:hover{border-color:var(--line2);background:#101d17}.session.active{border-color:var(--green2);background:#10291c;box-shadow:inset 3px 0 var(--green)}.session-title{display:flex;justify-content:space-between;gap:8px;font-weight:700}.badge{display:inline-flex;align-items:center;padding:2px 7px;border:1px solid var(--line2);border-radius:999px;color:var(--muted);font-size:10px;font-weight:600}.session.active .badge{border-color:#286b48;color:var(--green)}.session-meta{display:flex;gap:10px;margin-top:7px;color:var(--muted);font-size:11px}
-    .activity-panel{min-height:570px}.activity-tools{display:grid;grid-template-columns:minmax(180px,1fr) 150px auto auto;gap:8px;padding:12px 16px;border-bottom:1px solid var(--line)}input,select,textarea{width:100%;border:1px solid var(--line);border-radius:8px;background:#07100d;color:var(--ink);padding:9px 11px;outline:none}input:focus,select:focus,textarea:focus{border-color:var(--green2);box-shadow:0 0 0 2px #32e28418}.btn{border:1px solid var(--line2);border-radius:8px;background:#153424;color:var(--ink);padding:8px 11px}.btn:hover{border-color:var(--green);background:#19452e}.btn.ghost{background:#0a130f}.btn.danger{border-color:#71303c;background:#3b1720;color:#ffdce2}.activity-list{max-height:720px;overflow:auto}.empty{padding:70px 20px;text-align:center;color:var(--muted)}.event{display:grid;grid-template-columns:12px minmax(0,1fr);gap:11px;padding:15px 17px;border-bottom:1px solid #203329}.event:hover{background:#102019}.event-marker{width:9px;height:9px;margin-top:5px;border-radius:50%;background:var(--blue);box-shadow:0 0 0 4px #76b9ff13}.event.append .event-marker{background:var(--green);box-shadow:0 0 0 4px #48f59712}.event-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px}.event-title{font-weight:700}.event-session{color:var(--green)}.event-time{flex:none;color:var(--muted);font-size:11px}.event-meta{display:flex;flex-wrap:wrap;gap:7px;margin:6px 0;color:var(--muted);font-size:11px}.event-meta span{padding-right:7px;border-right:1px solid var(--line)}.event-meta span:last-child{border:0}.content{margin:9px 0 0;border:1px solid #22382d;border-radius:8px;background:#07100d;padding:10px 12px;color:#cee8da;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45;max-height:180px;overflow:auto}.reason{margin-top:7px;color:var(--amber);font-size:12px}.feed-footer{padding:10px 16px;color:var(--muted);font-size:11px;border-top:1px solid var(--line)}
-    .instructions{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}.instructions textarea{min-height:230px;resize:vertical;line-height:1.5}.editor-meta{color:var(--muted);font-size:11px}.editor-actions{display:flex;justify-content:space-between;align-items:center;margin-top:10px}.dirty{color:var(--amber)}
-    #login{position:fixed;inset:0;z-index:20;display:grid;place-items:center;padding:20px;background:#030806ef;backdrop-filter:blur(12px)}.loginbox{width:min(440px,100%);padding:25px}.loginbox h2{margin:0 0 8px}.loginbox p{margin:0 0 18px;color:var(--muted);line-height:1.5}.login-actions{display:flex;gap:8px;margin-top:10px}.error{color:var(--red);font-size:12px;margin-top:10px;min-height:18px}.toast{position:fixed;right:20px;bottom:20px;z-index:30;max-width:430px;padding:11px 14px;border:1px solid #32724f;border-radius:9px;background:#10291c;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.bad{border-color:#79333f;background:#35171e}
-    @media(max-width:900px){.metrics{grid-template-columns:1fr 1fr}.workspace{grid-template-columns:1fr}.sessions-panel{position:static}.session-list{grid-template-columns:repeat(auto-fit,minmax(210px,1fr));max-height:none}.instructions{grid-template-columns:1fr}.activity-tools{grid-template-columns:1fr 1fr}.activity-tools input{grid-column:1/-1}}@media(max-width:520px){header{padding:12px}.brand small{display:none}main{padding:10px}.metrics{gap:8px}.metric{padding:12px}.metric strong{font-size:21px}.activity-tools{grid-template-columns:1fr}.activity-tools input{grid-column:auto}.event-top{display:block}.event-time{margin-top:4px}}
+    :root {
+      color-scheme: light;
+      --bg: #f5f6f8;
+      --panel: #ffffff;
+      --ink: #17191c;
+      --muted: #6b7280;
+      --subtle: #f8f9fa;
+      --line: #e2e5e9;
+      --line-strong: #cdd2d8;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --green: #16803c;
+      --green-soft: #edf9f1;
+      --amber: #9a6700;
+      --red: #c02b3a;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 64px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.96);
+    }
+    .brand, .header-actions, .row, .toolbar { display: flex; align-items: center; }
+    .brand { gap: 10px; }
+    .header-actions, .row, .toolbar { gap: 8px; }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: #17191c;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .brand h1 { margin: 0; font-size: 15px; font-weight: 650; }
+    .brand small { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #22a559; }
+    .live-dot.paused { background: #d29a16; }
+    main { max-width: 1540px; margin: 0 auto; padding: 24px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+    .metric, .panel { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+    .metric { padding: 15px 16px; }
+    .metric .label { color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; font-size: 23px; font-weight: 650; letter-spacing: -.02em; }
+    .workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
+    .panel { overflow: hidden; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 56px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+    .panel-body { padding: 14px; }
+    .sessions-panel { position: sticky; top: 80px; align-self: start; }
+    .session-list { display: grid; max-height: calc(100vh - 250px); overflow: auto; padding: 6px; }
+    .session {
+      width: 100%;
+      padding: 11px 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+    }
+    .session:hover { background: var(--subtle); }
+    .session.active { background: var(--accent-soft); color: #174ea6; }
+    .session-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: #f0f1f3;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 500;
+    }
+    .session.active .badge { background: #dbeafe; color: #1d4ed8; }
+    .session-meta { display: flex; gap: 10px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 8px 10px;
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+    .btn {
+      flex: none;
+      padding: 7px 11px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 550;
+    }
+    .btn:hover { background: #1d4ed8; border-color: #1d4ed8; }
+    .btn.ghost { border-color: var(--line-strong); background: #fff; color: #35383d; }
+    .btn.ghost:hover { background: var(--subtle); border-color: #aeb4bc; }
+    .btn.danger { border-color: #efc2c8; background: #fff; color: var(--red); }
+    .btn.danger:hover { background: #fff5f6; border-color: #df929c; }
+    .activity-panel { min-height: 570px; }
+    .activity-tools {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 145px 120px auto;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--subtle);
+    }
+    .activity-list { max-height: 720px; overflow: auto; }
+    .empty { padding: 64px 20px; color: var(--muted); text-align: center; line-height: 1.6; }
+    .event {
+      display: grid;
+      grid-template-columns: 8px minmax(0,1fr);
+      gap: 11px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .event:hover { background: #fbfbfc; }
+    .event-marker { width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: #8b95a5; }
+    .event.append .event-marker { background: var(--accent); }
+    .event-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .event-title { font-weight: 600; }
+    .event-session { color: #1d4ed8; }
+    .event-time, .editor-meta { color: var(--muted); font-size: 11px; }
+    .event-time { flex: none; }
+    .event-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .event-meta span { padding-right: 7px; border-right: 1px solid var(--line); }
+    .event-meta span:last-child { border: 0; }
+    .content {
+      max-height: 170px;
+      overflow: auto;
+      margin-top: 9px;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--subtle);
+      color: #34373c;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .reason { margin-top: 7px; color: var(--amber); font-size: 12px; }
+    .feed-footer { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .instructions { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .instructions textarea { min-height: 210px; resize: vertical; line-height: 1.5; }
+    .editor-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+    .dirty { color: var(--amber); }
+    #login {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(17,24,39,.38);
+    }
+    .loginbox { width: min(400px,100%); padding: 24px; box-shadow: 0 18px 55px rgba(17,24,39,.18); }
+    .loginbox h2 { margin: 0 0 7px; font-size: 18px; }
+    .loginbox p { margin: 0 0 17px; color: var(--muted); line-height: 1.5; }
+    .login-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .error { min-height: 18px; margin-top: 10px; color: var(--red); font-size: 12px; }
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 30;
+      max-width: 420px;
+      padding: 10px 13px;
+      border-radius: 7px;
+      background: #202226;
+      color: #fff;
+      box-shadow: 0 8px 28px rgba(17,24,39,.18);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: .18s;
+    }
+    .toast.show { opacity: 1; transform: none; }
+    .toast.bad { background: #9f2432; }
+    @media (max-width: 900px) {
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .workspace { grid-template-columns: 1fr; }
+      .sessions-panel { position: static; }
+      .session-list { grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); max-height: none; }
+      .instructions { grid-template-columns: 1fr; }
+      .activity-tools { grid-template-columns: 1fr 1fr; }
+      .activity-tools input { grid-column: 1/-1; }
+    }
+    @media (max-width: 540px) {
+      header { min-height: 56px; padding: 0 12px; }
+      .brand small { display: none; }
+      main { padding: 10px; }
+      .metrics { gap: 8px; }
+      .metric { padding: 12px; }
+      .metric strong { font-size: 20px; }
+      .activity-tools { grid-template-columns: 1fr; }
+      .activity-tools input { grid-column: auto; }
+      .event-top { display: block; }
+      .event-time { display: block; margin-top: 3px; }
+      #status { display: none; }
+    }
   </style>
 </head>
 <body>
-  <div id="login"><div class="panel loginbox"><h2>CCP Operations Console</h2><p>Enter the management key to monitor sessions and control agent instructions. The key stays in this browser.</p><input id="key" type="password" placeholder="Admin key" autocomplete="current-password"><div class="login-actions"><button class="btn" id="connectButton">Connect</button></div><div id="loginError" class="error"></div></div></div>
-  <header><div class="brand"><div class="mark">C</div><div><h1>CCP OPERATIONS</h1><small>Sessions · activity · command boards</small></div></div><div class="header-actions"><span id="liveDot" class="live-dot"></span><span id="status" class="editor-meta">Connecting</span><button class="btn ghost" id="lockButton">Lock</button></div></header>
+  <div id="login"><div class="panel loginbox"><h2>Sign in to CCP Control</h2><p>Enter the admin key to manage sessions and instructions.</p><input id="key" type="password" placeholder="Admin key" autocomplete="current-password"><div class="login-actions"><button class="btn" id="connectButton">Continue</button></div><div id="loginError" class="error"></div></div></div>
+  <header><div class="brand"><div class="mark">C</div><div><h1>CCP Control</h1><small>Sessions, activity, and instructions</small></div></div><div class="header-actions"><span id="liveDot" class="live-dot"></span><span id="status" class="editor-meta">Connecting</span><button class="btn ghost" id="lockButton">Sign out</button></div></header>
   <main>
     <section class="metrics"><div class="metric"><span class="label">Sessions</span><strong id="metricSessions">—</strong></div><div class="metric"><span class="label">Active sessions</span><strong id="metricActive">—</strong></div><div class="metric"><span class="label">Total entries</span><strong id="metricEntries">—</strong></div><div class="metric"><span class="label">Visible events</span><strong id="metricEvents">—</strong></div></section>
     <div class="workspace">
