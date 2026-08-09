@@ -15,8 +15,9 @@ use crate::storage::{
 };
 use crate::transport::{
     perform_add_book, perform_add_entry, perform_add_shelf, perform_append, perform_brief_me,
-    perform_delete, perform_delete_shelf, perform_export, perform_get, perform_get_entry_at,
-    perform_import, perform_restore, perform_search,
+    perform_clear_status, perform_delete, perform_delete_shelf, perform_export, perform_get,
+    perform_get_entry_at, perform_import, perform_list_team_status, perform_restore,
+    perform_search, perform_search_team_status, perform_set_status,
 };
 
 const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
@@ -45,6 +46,10 @@ const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
   client import <session> <file.droplet> [--policy error|overwrite|skip|merge-history]
   client brief-me <session>
   client get-entry-at <session> <entry-name> --at <timestamp> [--shelf <name>] [--book <name>]
+  client set-status <session> --team <shelf> --agent <name> <status...>
+  client clear-status <session> --team <shelf> --agent <name>
+  client team-status <session> --team <shelf>
+  client search-team-status <session> --team <shelf> <query...>
 
 <session> can be a session name or session id discovered via `client sessions`."#;
 
@@ -82,6 +87,10 @@ enum Command {
     Import(ImportArgs),
     BriefMe(SessionSelectorArgs),
     GetEntryAt(GetEntryAtArgs),
+    SetStatus(SetStatusArgs),
+    ClearStatus(StatusIdentityArgs),
+    TeamStatus(TeamStatusArgs),
+    SearchTeamStatus(SearchTeamStatusArgs),
 }
 
 #[derive(Args)]
@@ -254,6 +263,46 @@ struct GetEntryAtArgs {
     shelf: Option<String>,
     #[arg(long, value_name = "name")]
     book: Option<String>,
+}
+
+#[derive(Args)]
+struct SetStatusArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+    #[arg(long, value_name = "name")]
+    agent: String,
+    #[arg(required = true, value_name = "status")]
+    status: Vec<String>,
+}
+
+#[derive(Args)]
+struct StatusIdentityArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+    #[arg(long, value_name = "name")]
+    agent: String,
+}
+
+#[derive(Args)]
+struct TeamStatusArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+}
+
+#[derive(Args)]
+struct SearchTeamStatusArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+    #[arg(required = true, value_name = "query")]
+    query: Vec<String>,
 }
 
 pub(crate) async fn run() -> anyhow::Result<()> {
@@ -579,6 +628,31 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                     &args.at,
                 )
                 .await?,
+            )?;
+        }
+
+        Command::SetStatus(args) => {
+            let enrollment = select_enrollment(&args.session, true)?;
+            print_json(
+                &perform_set_status(&enrollment, &args.team, &args.agent, &args.status.join(" "))
+                    .await?,
+            )?;
+        }
+
+        Command::ClearStatus(args) => {
+            let enrollment = select_enrollment(&args.session, true)?;
+            print_json(&perform_clear_status(&enrollment, &args.team, &args.agent).await?)?;
+        }
+
+        Command::TeamStatus(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            print_json(&perform_list_team_status(&enrollment, &args.team).await?)?;
+        }
+
+        Command::SearchTeamStatus(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            print_json(
+                &perform_search_team_status(&enrollment, &args.team, &args.query.join(" ")).await?,
             )?;
         }
     }

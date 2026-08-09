@@ -124,6 +124,15 @@ pub(crate) fn response_to_json_string(response: ServerResponse) -> anyhow::Resul
         ServerResponse::Brief(brief) => {
             serde_json::to_string(&brief).context("failed to serialize session brief")
         }
+        ServerResponse::StatusSet(status) => {
+            serde_json::to_string(&status).context("failed to serialize agent status")
+        }
+        ServerResponse::StatusCleared(result) => {
+            serde_json::to_string(&result).context("failed to serialize clear status result")
+        }
+        ServerResponse::TeamStatuses(statuses) => {
+            serde_json::to_string(&statuses).context("failed to serialize team statuses")
+        }
         ServerResponse::HandshakeRejected(info) => {
             anyhow::bail!(
                 "protocol version mismatch: server={}, client={}",

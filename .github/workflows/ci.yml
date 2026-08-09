@@ -30,6 +30,9 @@ jobs:
       - name: Protocol tests
         run: cargo test -p protocol
 
+      - name: MCP bridge tests
+        run: python3 -m unittest discover -s mcp/tests -v
+
       - name: No secrets tracked
         run: |
           SECRETS=$(git ls-files '*.pem' '*.sqlite3' '*.key' '*.bin')

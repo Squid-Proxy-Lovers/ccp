@@ -50,6 +50,18 @@ Binaries go to `~/.local/bin`. Pass `--install-dir /usr/local/bin` to change tha
 
 The `--client` flag is what most people want if someone else is running the server. It installs the client binary and auto-detects your Claude, Cursor, or Codex config files to register the MCP bridge.
 
+## Build from a checkout
+
+The repository selects Rust 1.88.0 automatically when used with `rustup`.
+
+```bash
+make release       # optimized server and client binaries in target/release/
+make test          # full Rust test suite
+make integration   # end-to-end CLI suite
+```
+
+Run `make help` for the available local build, lint, formatting, and Docker targets.
+
 ## Quick start
 
 Start a server with an optional initial session:
@@ -147,6 +159,8 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 - `ccp-client search-books <session> <query>`
 - `ccp-client search-context <session> <query>` full-text in entry content
 - `ccp-client search-deleted <session> <query>` archived deleted entries
+- `ccp-client team-status <session> --team <shelf>` list active work in a challenge team
+- `ccp-client search-team-status <session> --team <shelf> <query>` search agent names and work in a team
 - `ccp-client brief-me <session>` session overview in one call (structure, recent entries, labels)
 - `ccp-client get-entry-at <session> <name> --at <timestamp>` entry content at a point in time
 - `ccp-client export <session>` export full session to stdout
@@ -162,6 +176,8 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 - `ccp-client add-book <session> --shelf <shelf> <book-name> <description>`
 - `ccp-client add-entry <session> --shelf <shelf> --book <book> <name> <desc> <data>`
 - `ccp-client append <session> <name> <content>`
+- `ccp-client set-status <session> --team <shelf> --agent <name> <status>` join a team or update current work
+- `ccp-client clear-status <session> --team <shelf> --agent <name>` clear current work and leave the team
 - `ccp-client delete <session> <name>` soft-delete entry (archived)
 - `ccp-client delete-shelf <session> <shelf-name>` remove a shelf and everything in it
 - `ccp-client restore <session> <entry-key>`
@@ -194,7 +210,9 @@ chmod +x ccp-manage
 
 ## MCP tools
 
-Run `bash install.sh --client` to set up the FastMCP bridge. Agents get tools for reading, searching, creating entries, and appending content. Destructive operations (delete, import, revoke, restore) and server management are CLI-only.
+Run `bash install.sh --client` to set up the FastMCP bridge. Agents get tools for reading, searching, creating entries, appending content, and publishing temporary team status. Destructive operations (delete, import, revoke, restore) and server management are CLI-only.
+
+Challenge teams use existing shelves. An agent sets its status when starting work, updates it when the task changes, and clears it when finished; unrefreshed statuses expire after three hours so stale workers disappear automatically.
 
 Agents automatically learn how to use CCP through the MCP instructions and the `ccp://help` resource. No extra prompting needed. See [mcp/README.md](mcp/README.md) for the full tool list and details.
 

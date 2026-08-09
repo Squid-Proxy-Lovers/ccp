@@ -1,0 +1,48 @@
+name: ccp
+
+services:
+  ccp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ccp-server:43156f35425a
+    container_name: ccp-server
+    restart: unless-stopped
+    init: true
+    environment:
+      CCP_SESSION_NAME: sdcl
+      CCP_AUTH_PORT: "1337"
+      CCP_MTLS_PORT: "1338"
+      CCP_ADVERTISE_HOST: 192.168.130.5
+      CCP_AUTH_BASE_URL: http://127.0.0.1:1337
+      CCP_AUTO_ISSUE_INITIAL_TOKENS: "0"
+    ports:
+      - "127.0.0.1:1337:1337"
+      - "192.168.130.5:1338:1338"
+    volumes:
+      - ccp-server-data:/var/lib/ccp/server
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: "4.0"
+    mem_limit: 4g
+    pids_limit: 512
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "server health sdcl >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  ccp-server-data:

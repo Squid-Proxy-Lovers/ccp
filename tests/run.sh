@@ -14,6 +14,10 @@ set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SERVER_BIN="$REPO_ROOT/target/release/server"
 CLIENT_BIN="$REPO_ROOT/target/release/client"
+CARGO_BIN="${CARGO:-cargo}"
+if ! command -v "$CARGO_BIN" >/dev/null 2>&1; then
+    CARGO_BIN="${CARGO_HOME:-$HOME/.cargo}/bin/cargo"
+fi
 SKIP_BUILD=false
 
 for arg in "$@"; do
@@ -146,7 +150,7 @@ if [ "$SKIP_BUILD" = true ]; then
         exit 1
     fi
 else
-    OUT=$(cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1)
+    OUT=$("$CARGO_BIN" build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1)
     if [ $? -eq 0 ]; then
         pass "cargo build --release"
     else
@@ -160,7 +164,7 @@ fi
 
 section "Unit tests"
 
-OUT=$(cargo test -p server --lib -- --test-threads=1 2>&1)
+OUT=$("$CARGO_BIN" test -p server --lib -- --test-threads=1 2>&1)
 if echo "$OUT" | grep -q "test result: ok"; then
     COUNT=$(echo "$OUT" | grep "test result:" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')
     pass "server ($COUNT passed)"
@@ -168,7 +172,7 @@ else
     fail "server unit tests"
 fi
 
-OUT=$(cargo test -p client --lib 2>&1)
+OUT=$("$CARGO_BIN" test -p client --lib 2>&1)
 if echo "$OUT" | grep -q "test result: ok"; then
     COUNT=$(echo "$OUT" | grep "test result:" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')
     pass "client ($COUNT passed)"
@@ -265,6 +269,38 @@ section "Shelf and book operations"
 
 OUT=$(expect_success "add shelf" "$CLIENT_BIN" add-shelf integration-test research "collected research")
 OUT=$(expect_success "add book" "$CLIENT_BIN" add-book integration-test --shelf research findings "key findings")
+
+# ── Agent team status ────────────────────────────────────────────────────────
+
+section "Agent team status"
+
+STATUS_OUT=$(expect_success "set agent status" "$CLIENT_BIN" set-status integration-test \
+    --team research --agent scout-one "Investigating parser performance")
+expect_contains "set-status returns agent" "$STATUS_OUT" "scout-one"
+expect_contains "set-status returns expiry" "$STATUS_OUT" "expires_at"
+
+OUT=$(expect_success "set second logical agent status" "$CLIENT_BIN" set-status integration-test \
+    --team research --agent scout-two "Writing transport regression tests")
+
+TEAM_STATUS=$($CLIENT_BIN team-status integration-test --team research 2>&1)
+expect_contains "team-status lists first agent" "$TEAM_STATUS" "scout-one"
+expect_contains "team-status lists second agent" "$TEAM_STATUS" "scout-two"
+
+STATUS_SEARCH=$($CLIENT_BIN search-team-status integration-test --team research "PARSER PERFORMANCE" 2>&1)
+expect_contains "status search is case-insensitive" "$STATUS_SEARCH" "scout-one"
+expect_not_contains "status search excludes non-matches" "$STATUS_SEARCH" "scout-two"
+
+OUT=$(expect_success "update agent status" "$CLIENT_BIN" set-status integration-test \
+    --team research --agent scout-one "Integrating parser optimizations")
+STATUS_SEARCH=$($CLIENT_BIN search-team-status integration-test --team research "optimizations" 2>&1)
+expect_contains "updated status is searchable" "$STATUS_SEARCH" "scout-one"
+
+CLEAR_OUT=$(expect_success "clear agent status" "$CLIENT_BIN" clear-status integration-test \
+    --team research --agent scout-two)
+expect_contains "clear-status reports removal" "$CLEAR_OUT" '"cleared": true'
+
+CLEAR_AGAIN=$($CLIENT_BIN clear-status integration-test --team research --agent scout-two 2>&1)
+expect_contains "clear-status is idempotent" "$CLEAR_AGAIN" '"cleared": false'
 
 # ── Entry CRUD ───────────────────────────────────────────────────────────────
 
@@ -463,6 +499,14 @@ else
     fail "read client was allowed to write"
 fi
 
+RO_STATUS=$(CCP_CLIENT_HOME="$READ_ONLY_HOME" "$CLIENT_BIN" set-status integration-test \
+    --team research --agent read-only "should not publish" 2>&1)
+if echo "$RO_STATUS" | grep -qi "denied\|error\|access\|write\|forbidden"; then
+    pass "read client cannot publish status"
+else
+    fail "read client was allowed to publish status"
+fi
+
 # ── Certificate revocation ───────────────────────────────────────────────────
 
 section "Certificate revocation"
@@ -519,7 +563,7 @@ KEY_FILES=$(find "$CLIENT_HOME" -name "client.key" -type f 2>/dev/null)
 if [ -n "$KEY_FILES" ]; then
     BAD_PERMS=false
     while IFS= read -r kf; do
-        PERMS=$(stat -f "%Lp" "$kf" 2>/dev/null || stat -c "%a" "$kf" 2>/dev/null)
+        PERMS=$(stat -c "%a" "$kf" 2>/dev/null || stat -f "%Lp" "$kf" 2>/dev/null)
         if [ "$PERMS" != "600" ]; then
             BAD_PERMS=true
             fail "client.key at $kf has permissions $PERMS (should be 600)"

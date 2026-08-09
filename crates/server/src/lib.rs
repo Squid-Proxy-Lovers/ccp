@@ -466,7 +466,11 @@ fn request_session_id(request: &ClientRequest) -> Option<i64> {
         | ClientRequest::RevokeClientCert { session_id, .. }
         | ClientRequest::DeleteShelf { session_id, .. }
         | ClientRequest::BriefMe { session_id }
-        | ClientRequest::GetEntryAt { session_id, .. } => Some(*session_id),
+        | ClientRequest::GetEntryAt { session_id, .. }
+        | ClientRequest::SetStatus { session_id, .. }
+        | ClientRequest::ClearStatus { session_id, .. }
+        | ClientRequest::ListTeamStatus { session_id, .. }
+        | ClientRequest::SearchTeamStatus { session_id, .. } => Some(*session_id),
         ClientRequest::Ping
         | ClientRequest::Handshake(_)
         | ClientRequest::ListSessions

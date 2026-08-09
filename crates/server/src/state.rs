@@ -10,10 +10,10 @@ use tokio::sync::{Mutex, RwLock};
 
 use anyhow::{Context, bail};
 use protocol::{
-    AddBookResult, AddShelfResult, AppendMetadata, AppendResult, BookSummary, BundleEntry,
-    DeleteResult, DeleteShelfResult, DeletedEntrySummary, EntrySummary, MessageEntry,
-    MessageHistoryEntry, RestoreResult, RevokeCertResult, SearchContextMatch, SessionMetadata,
-    ShelfSummary,
+    AddBookResult, AddShelfResult, AgentStatus, AppendMetadata, AppendResult, BookSummary,
+    BundleEntry, ClearStatusResult, DeleteResult, DeleteShelfResult, DeletedEntrySummary,
+    EntrySummary, MessageEntry, MessageHistoryEntry, RestoreResult, RevokeCertResult,
+    SearchContextMatch, SessionMetadata, ShelfSummary,
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;

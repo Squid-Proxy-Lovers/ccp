@@ -47,6 +47,7 @@ pub const CLIENT_CERT_TTL_SECONDS_ENV: &str = "CCP_CLIENT_CERT_TTL_SECONDS";
 pub const CA_CERT_TTL_DAYS_ENV: &str = "CCP_CA_CERT_TTL_DAYS";
 pub const CERT_WARNING_WINDOW_SECONDS_ENV: &str = "CCP_CERT_WARNING_WINDOW_SECONDS";
 pub const AUTO_ISSUE_INITIAL_TOKENS_ENV: &str = "CCP_AUTO_ISSUE_INITIAL_TOKENS";
+pub const AGENT_STATUS_TTL_SECONDS_ENV: &str = "CCP_AGENT_STATUS_TTL_SECONDS";
 
 const DEFAULT_DATA_DIR: &str = "data";
 const DEFAULT_SERVER_HOME: &str = "sessions";
@@ -64,6 +65,7 @@ const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
 const DEFAULT_CLIENT_CERT_TTL_SECONDS: u64 = 3650 * 24 * 60 * 60;
 const DEFAULT_CA_CERT_TTL_DAYS: i64 = 3650;
 const DEFAULT_CERT_WARNING_WINDOW_SECONDS: u64 = 0;
+const DEFAULT_AGENT_STATUS_TTL_SECONDS: u64 = 3 * 60 * 60;
 
 const SCHEMA: &str = include_str!("init-db.sql");
 
@@ -370,6 +372,14 @@ pub fn cert_warning_window_seconds() -> u64 {
         .unwrap_or(DEFAULT_CERT_WARNING_WINDOW_SECONDS)
 }
 
+pub fn agent_status_ttl_seconds() -> u64 {
+    env::var(AGENT_STATUS_TTL_SECONDS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_AGENT_STATUS_TTL_SECONDS)
+}
+
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> &'static Mutex<()> {
     static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -385,7 +395,8 @@ pub(crate) fn configure_sqlite(connection: &Connection) -> anyhow::Result<()> {
         .execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;",
+             PRAGMA synchronous = NORMAL;
+             PRAGMA busy_timeout = 5000;",
         )
         .context("failed to configure sqlite pragmas")?;
     Ok(())
@@ -671,7 +682,7 @@ fn initialize_ca_material(session_id: i64, session_name: &str) -> anyhow::Result
     params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(ca_cert_ttl_days());
     params.distinguished_name.push(
         DnType::CommonName,
-        format!("CCP Session CA [{}:{}]", session_name, session_id),
+        format!("CCP Session CA [{session_name}:{session_id}]"),
     );
 
     let certificate = params
@@ -910,6 +921,26 @@ fn apply_schema_migrations(connection: &Connection) -> anyhow::Result<()> {
             ON transfer_log(session_id);",
         )
         .context("failed to apply v2 migration: transfer_log table")?;
+
+    // v3: short-lived worker status within a shelf/team.
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_statuses (
+                session_id INTEGER NOT NULL,
+                team TEXT NOT NULL,
+                worker_id TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (session_id, team, worker_id, agent_name),
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_statuses_team_expiry
+            ON agent_statuses(session_id, team, expires_at);",
+        )
+        .context("failed to apply v3 migration: agent_statuses table")?;
 
     record_schema_version(connection)?;
 
@@ -1166,7 +1197,7 @@ fn get_host(value: &str) -> Option<String> {
     let to_parse = if value.contains("://") {
         value.to_string()
     } else {
-        format!("https://{}", value)
+        format!("https://{value}")
     };
     Url::parse(&to_parse)
         .ok()
