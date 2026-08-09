@@ -300,3 +300,75 @@ pub(crate) async fn perform_get_entry_at(
         .await?,
     )
 }
+
+pub(crate) async fn perform_set_status(
+    enrollment: &StoredEnrollment,
+    team: &str,
+    agent_name: &str,
+    status: &str,
+) -> anyhow::Result<String> {
+    response_to_json_string(
+        perform_request(
+            enrollment,
+            ClientRequest::SetStatus {
+                session_id: enrollment.metadata.session_id,
+                team: team.to_string(),
+                agent_name: agent_name.to_string(),
+                status: status.to_string(),
+            },
+        )
+        .await?,
+    )
+}
+
+pub(crate) async fn perform_clear_status(
+    enrollment: &StoredEnrollment,
+    team: &str,
+    agent_name: &str,
+) -> anyhow::Result<String> {
+    response_to_json_string(
+        perform_request(
+            enrollment,
+            ClientRequest::ClearStatus {
+                session_id: enrollment.metadata.session_id,
+                team: team.to_string(),
+                agent_name: agent_name.to_string(),
+            },
+        )
+        .await?,
+    )
+}
+
+pub(crate) async fn perform_list_team_status(
+    enrollment: &StoredEnrollment,
+    team: &str,
+) -> anyhow::Result<String> {
+    response_to_json_string(
+        perform_request(
+            enrollment,
+            ClientRequest::ListTeamStatus {
+                session_id: enrollment.metadata.session_id,
+                team: team.to_string(),
+            },
+        )
+        .await?,
+    )
+}
+
+pub(crate) async fn perform_search_team_status(
+    enrollment: &StoredEnrollment,
+    team: &str,
+    query: &str,
+) -> anyhow::Result<String> {
+    response_to_json_string(
+        perform_request(
+            enrollment,
+            ClientRequest::SearchTeamStatus {
+                session_id: enrollment.metadata.session_id,
+                team: team.to_string(),
+                query: query.to_string(),
+            },
+        )
+        .await?,
+    )
+}

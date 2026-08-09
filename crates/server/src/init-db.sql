@@ -193,6 +193,21 @@ CREATE TABLE IF NOT EXISTS transfer_log (
 CREATE INDEX IF NOT EXISTS idx_transfer_log_session_id
 ON transfer_log(session_id);
 
+CREATE TABLE IF NOT EXISTS agent_statuses (
+    session_id INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    worker_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, team, worker_id, agent_name),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_statuses_team_expiry
+ON agent_statuses(session_id, team, expires_at);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS message_packs_fts USING fts5(
     name,
     description,

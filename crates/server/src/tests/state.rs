@@ -35,6 +35,15 @@ fn writer(session_id: i64, common_name: &str) -> ConnectionAuthContext {
     }
 }
 
+fn reader(session_id: i64, common_name: &str) -> ConnectionAuthContext {
+    ConnectionAuthContext {
+        common_name: common_name.to_string(),
+        session_id,
+        can_write: false,
+        can_revoke_others: false,
+    }
+}
+
 fn admin(session_id: i64, common_name: &str) -> ConnectionAuthContext {
     ConnectionAuthContext {
         common_name: common_name.to_string(),
@@ -113,6 +122,222 @@ impl Drop for TestContext {
         }
         let _ = fs::remove_dir_all(&self.data_dir);
     }
+}
+
+#[tokio::test]
+async fn status_upsert_lists_searches_and_clears_only_its_owner() {
+    let ctx = TestContext::new("agent-status-lifecycle")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "worker-a");
+    let other = writer(ctx.session_id, "worker-b");
+
+    let initial = ctx
+        .state
+        .set_status(ctx.session_id, "main", "parser", "Reading grammar", &owner)
+        .await
+        .expect("status should be created");
+    assert_eq!(initial.worker_id, "worker-a");
+    let updated = ctx
+        .state
+        .set_status(
+            ctx.session_id,
+            "main",
+            "parser",
+            "Writing PARSER tests",
+            &owner,
+        )
+        .await
+        .expect("status should be updated");
+    assert_eq!(updated.status, "Writing PARSER tests");
+
+    ctx.state
+        .set_status(ctx.session_id, "main", "parser", "Reviewing docs", &other)
+        .await
+        .expect("same logical name from another worker should be allowed");
+    let statuses = ctx
+        .state
+        .list_team_status(ctx.session_id, "main", &reader(ctx.session_id, "reader"))
+        .await
+        .expect("reader should list statuses");
+    assert_eq!(statuses.len(), 2);
+    assert_eq!(
+        statuses.iter().filter(|s| s.agent_name == "parser").count(),
+        2
+    );
+
+    let matches = ctx
+        .state
+        .search_team_status(ctx.session_id, "main", "parser TESTS", &owner)
+        .await
+        .expect("search should be case insensitive across status text");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].worker_id, "worker-a");
+
+    let other_clear = ctx
+        .state
+        .clear_status(ctx.session_id, "main", "parser", &other)
+        .await
+        .expect("other worker can clear only its own status");
+    assert!(other_clear.cleared);
+    let repeated = ctx
+        .state
+        .clear_status(ctx.session_id, "main", "parser", &other)
+        .await
+        .expect("clear should be idempotent");
+    assert!(!repeated.cleared);
+    let remaining = ctx
+        .state
+        .list_team_status(ctx.session_id, "main", &owner)
+        .await
+        .expect("remaining status should list");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].worker_id, "worker-a");
+}
+
+#[tokio::test]
+async fn expired_statuses_are_purged_and_shelf_deletion_removes_statuses() {
+    let ctx = TestContext::new("agent-status-expiry")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "worker");
+    ctx.state
+        .set_status(ctx.session_id, "main", "builder", "Compiling", &owner)
+        .await
+        .expect("status should be created");
+    open_sqlite_connection()
+        .expect("database should open")
+        .execute(
+            "UPDATE agent_statuses SET expires_at = '0' WHERE session_id = ?1",
+            [ctx.session_id],
+        )
+        .expect("status should be made expired");
+    assert!(
+        ctx.state
+            .list_team_status(ctx.session_id, "main", &owner)
+            .await
+            .expect("list should hide expired status")
+            .is_empty()
+    );
+    ctx.state
+        .set_status(ctx.session_id, "main", "active", "Working", &owner)
+        .await
+        .expect("a subsequent write should purge expired rows");
+    let persisted: i64 = open_sqlite_connection()
+        .expect("database should open")
+        .query_row(
+            "SELECT COUNT(*) FROM agent_statuses WHERE agent_name = 'builder'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count should query");
+    assert_eq!(persisted, 0);
+
+    ctx.state
+        .add_shelf(ctx.session_id, "challenge", "", &owner)
+        .await
+        .expect("challenge shelf should be added");
+    ctx.state
+        .set_status(ctx.session_id, "challenge", "builder", "Compiling", &owner)
+        .await
+        .expect("challenge status should be created");
+    ctx.state
+        .delete_shelf(ctx.session_id, "challenge", &owner)
+        .await
+        .expect("challenge shelf should be deleted");
+    let persisted: i64 = open_sqlite_connection()
+        .expect("database should open")
+        .query_row(
+            "SELECT COUNT(*) FROM agent_statuses WHERE team = 'challenge'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count should query");
+    assert_eq!(persisted, 0);
+}
+
+#[tokio::test]
+async fn snapshot_rebuild_preserves_active_statuses() {
+    let ctx = TestContext::new("agent-status-snapshot")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "snapshot-worker");
+    let expected = ctx
+        .state
+        .set_status(
+            ctx.session_id,
+            "main",
+            "builder",
+            "Running the release build",
+            &owner,
+        )
+        .await
+        .expect("status should be created");
+
+    ctx.state
+        .persist_snapshot_to_sqlite()
+        .await
+        .expect("snapshot persistence should succeed");
+
+    let statuses = ctx
+        .state
+        .list_team_status(ctx.session_id, "main", &owner)
+        .await
+        .expect("status should survive snapshot persistence");
+    assert_eq!(statuses, vec![expected]);
+}
+
+#[tokio::test]
+async fn status_validation_and_access_are_enforced() {
+    let ctx = TestContext::new("agent-status-validation")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "worker");
+    let read_only = reader(ctx.session_id, "reader");
+
+    for (agent, status, expected) in [
+        ("", "working", "agent_name is required"),
+        ("agent", "   ", "status is required"),
+    ] {
+        let error = ctx
+            .state
+            .set_status(ctx.session_id, "main", agent, status, &owner)
+            .await
+            .expect_err("invalid status should fail");
+        assert!(error.to_string().contains(expected));
+    }
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "main", &"a".repeat(129), "working", &owner)
+            .await
+            .expect_err("oversized agent name should fail")
+            .to_string()
+            .contains("128 bytes")
+    );
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "main", "agent", &"x".repeat(4097), &owner)
+            .await
+            .expect_err("oversized status should fail")
+            .to_string()
+            .contains("4096 bytes")
+    );
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "missing", "agent", "working", &owner)
+            .await
+            .expect_err("missing shelf should fail")
+            .to_string()
+            .contains("not found")
+    );
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "main", "agent", "working", &read_only)
+            .await
+            .expect_err("reader cannot set status")
+            .to_string()
+            .contains("write access")
+    );
 }
 
 #[tokio::test]

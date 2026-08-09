@@ -5,6 +5,7 @@
 mod add_book;
 mod add_entry;
 mod add_shelf;
+mod agent_status;
 mod append_to_entry;
 mod brief_me;
 mod delete_entry;

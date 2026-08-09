@@ -247,6 +247,23 @@ pub struct RevokeCertResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentStatus {
+    pub team: String,
+    pub agent_name: String,
+    pub status: String,
+    pub worker_id: String,
+    pub updated_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClearStatusResult {
+    pub team: String,
+    pub agent_name: String,
+    pub cleared: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchContextMatch {
     pub name: String,
     pub description: String,
@@ -438,6 +455,26 @@ pub enum ClientRequest {
         book_name: Option<String>,
         at_timestamp: String,
     },
+    SetStatus {
+        session_id: i64,
+        team: String,
+        agent_name: String,
+        status: String,
+    },
+    ClearStatus {
+        session_id: i64,
+        team: String,
+        agent_name: String,
+    },
+    ListTeamStatus {
+        session_id: i64,
+        team: String,
+    },
+    SearchTeamStatus {
+        session_id: i64,
+        team: String,
+        query: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -485,6 +522,9 @@ pub enum ServerResponse {
     Brief(SessionBrief),
     EntryAtTime(MessageEntry),
     ShelfDeleted(DeleteShelfResult),
+    StatusSet(AgentStatus),
+    StatusCleared(ClearStatusResult),
+    TeamStatuses(Vec<AgentStatus>),
     Error(ErrorResponse),
 }
 
