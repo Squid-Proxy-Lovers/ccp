@@ -28,7 +28,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
       - run: cargo build --release -p client
       - shell: bash
         run: cp '${{ matrix.source }}' '${{ matrix.artifact }}'

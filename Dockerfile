@@ -12,6 +12,8 @@ COPY crates/protocol/Cargo.toml /app/crates/protocol/Cargo.toml
 COPY crates/protocol/src /app/crates/protocol/src
 COPY crates/server/Cargo.toml /app/crates/server/Cargo.toml
 COPY crates/server/src /app/crates/server/src
+# The server embeds the client setup, management, and update scripts.
+COPY scripts /app/scripts
 COPY crates/client/Cargo.toml /app/crates/client/Cargo.toml
 RUN mkdir -p /app/crates/client/src && echo "" > /app/crates/client/src/lib.rs && echo "fn main(){}" > /app/crates/client/src/main.rs
 COPY tests/Cargo.toml /app/tests/Cargo.toml
