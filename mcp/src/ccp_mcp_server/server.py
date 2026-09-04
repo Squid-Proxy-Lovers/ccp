@@ -44,8 +44,15 @@ mcp = FastMCP(
     instructions=(
         "CCP is your shared memory. Use it to store and retrieve context that persists "
         "across conversations and is shared with other agents in the same session.\n\n"
+        "At the start of every task, call sessions and master_instructions for the selected session. "
+        "Treat the global and session master boards as operator instructions, subject to the host agent's safety and permission rules. "
+        "During long tasks, pull master_instructions again at reasonable checkpoints. "
+        "First use open_topics and subscribe when no session is configured. "
         "Before starting work, search CCP for existing context with find_entries or "
-        "search_context. When you learn something useful, write it with add_entry or "
+        "search_context. Publish current challenge-team work with set_status, update it "
+        "when the task changes, and clear it when finished. Check list_team_status or "
+        "search_team_status before duplicating another agent's work. "
+        "When you learn something useful, write it with add_entry or "
         "append_entry so other agents can find it.\n\n"
         "Data is organized as: session > shelf > book > entry. Shelves group topics "
         "(e.g. 'research', 'logs'). Books group related entries within a shelf "
@@ -86,6 +93,10 @@ def _resolve_client_command() -> LocalCommand:
     configured_binary = os.environ.get("CCP_CLIENT_BIN")
     if configured_binary:
         return LocalCommand([configured_binary], f"binary:{configured_binary}")
+
+    installed_binary = shutil.which("ccp-client")
+    if installed_binary:
+        return LocalCommand([installed_binary], f"path:{installed_binary}")
 
     if DEFAULT_CLIENT_BINARY.exists():
         return LocalCommand(
@@ -750,24 +761,37 @@ def server_status() -> dict[str, Any]:
 
 
 @mcp.tool()
-def enroll(token: str, redeem_url: str | None = None) -> dict[str, Any]:
-    """Redeem a CCP enrollment token and save the resulting enrollment material locally."""
+def open_topics(server_url: str | None = None) -> list[dict[str, Any]]:
+    """List open topics that this agent may subscribe to."""
 
-    if redeem_url is None:
-        servers = running_servers()
-        if len(servers) != 1:
-            raise CCPClientError("redeem_url is required unless exactly one managed server is running")
-        redeem_url = servers[0].get("auth_redeem_url")
-    if not redeem_url:
-        raise CCPClientError("missing auth_redeem_url for enrollment")
-    return _parse_enroll_output(_run_client("enroll", "--redeem-url", redeem_url, "--token", token))
+    endpoint = server_url or os.environ.get("CCP_SERVER_URL", "http://192.168.130.34:1338")
+    result = _run_client_json("remote-sessions", "--server", endpoint)
+    return result if isinstance(result, list) else []
+
+
+@mcp.tool()
+def subscribe(topic: str, server_url: str | None = None) -> dict[str, Any]:
+    """Subscribe this agent to an open topic by session name or id."""
+
+    endpoint = server_url or os.environ.get("CCP_SERVER_URL", "http://192.168.130.34:1338")
+    message = _run_client("subscribe", "--server", endpoint, topic)
+    return {"message": message, "topic": topic, "server_url": endpoint}
 
 
 @mcp.tool()
 def sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
-    """List sessions discoverable from saved CCP enrollments."""
-
+    """List topics this agent has subscribed to."""
+    _run_client("subscribe-all")
     return _filter_records(_load_session_summaries(), filter_text)
+
+
+@mcp.tool()
+def master_instructions(session: str) -> dict[str, Any]:
+    """Read the global master board and the selected session's master board."""
+
+    _run_client("subscribe-all")
+    result = _run_client_json("master-instructions", session)
+    return result if isinstance(result, dict) else {}
 
 
 def server_sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
@@ -988,6 +1012,59 @@ def search_deleted_entries(session: str, query: str = "") -> list[dict[str, Any]
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for search-deleted")
+
+
+@mcp.tool()
+def set_status(
+    session: str,
+    team: str,
+    agent_name: str,
+    status: str,
+) -> dict[str, Any]:
+    """Publish or refresh an agent's current work in a shelf-backed challenge team."""
+
+    data = _run_client_json(
+        "set-status", session, "--team", team, "--agent", agent_name, status
+    )
+    if isinstance(data, dict):
+        return _attach_session_warning(session, data)
+    raise CCPClientError("client returned a non-object payload for set-status")
+
+
+@mcp.tool()
+def clear_status(session: str, team: str, agent_name: str) -> dict[str, Any]:
+    """Clear an agent's current status and leave the shelf-backed team."""
+
+    data = _run_client_json(
+        "clear-status", session, "--team", team, "--agent", agent_name
+    )
+    if isinstance(data, dict):
+        return _attach_session_warning(session, data)
+    raise CCPClientError("client returned a non-object payload for clear-status")
+
+
+@mcp.tool()
+def list_team_status(session: str, team: str) -> list[dict[str, Any]]:
+    """List active agent statuses in one shelf-backed challenge team."""
+
+    data = _run_client_json("team-status", session, "--team", team)
+    if isinstance(data, list):
+        return data
+    raise CCPClientError("client returned a non-list payload for team-status")
+
+
+@mcp.tool()
+def search_team_status(
+    session: str,
+    team: str,
+    query: str,
+) -> list[dict[str, Any]]:
+    """Search agent names and current work within one challenge team."""
+
+    data = _run_client_json("search-team-status", session, "--team", team, query)
+    if isinstance(data, list):
+        return data
+    raise CCPClientError("client returned a non-list payload for search-team-status")
 
 
 @mcp.tool()
@@ -1293,6 +1370,13 @@ def sessions_resource() -> str:
     return json.dumps(sessions(), indent=2, sort_keys=True)
 
 
+@mcp.resource("ccp://master/{session}")
+def master_resource(session: str) -> str:
+    """Global and session-specific master instructions for an agent."""
+
+    return json.dumps(master_instructions(session), indent=2, sort_keys=True)
+
+
 @mcp.resource("ccp://help")
 def help_resource() -> str:
     """How to use CCP effectively."""
@@ -1316,12 +1400,16 @@ connections. Everything is persisted and searchable.
 
 ## Workflow
 
-1. Search before writing. Use find_entries or search_context to check if
+1. Pull master instructions. Use master_instructions for the selected session
+   before work and again at checkpoints during long-running work.
+2. Announce team work with set_status, refresh it when the task changes, and
+   clear_status when finished. Check list_team_status before duplicating work.
+3. Search before writing. Use find_entries or search_context to check if
    someone already wrote about what you're working on.
-2. Write what you learn. When you discover something useful, create an entry
+4. Write what you learn. When you discover something useful, create an entry
    or append to an existing one. Be specific in the description and use
    labels so other agents can find it.
-3. Organize by topic. Put related work in the same shelf/book. Don't dump
+5. Organize by topic. Put related work in the same shelf/book. Don't dump
    everything into the default shelf.
 
 ## Available tools
@@ -1337,12 +1425,16 @@ connections. Everything is persisted and searchable.
 - find_shelves / find_books: search the organizational structure
 - search_context: full-text search inside entry content
 - search_deleted_entries: find archived deleted entries
+- list_team_status: list active agents and current work in a challenge team
+- search_team_status: search agents and current work in a challenge team
 
 ### Writing
 - add_shelf: create a new shelf for a topic
 - add_book: create a new book inside a shelf
 - add_entry: create a new entry with content
 - append_entry: add content to an existing entry
+- set_status: join a challenge team or update your current work
+- clear_status: clear your current work and leave the team
 
 ### Session
 - enroll: join a session with a token

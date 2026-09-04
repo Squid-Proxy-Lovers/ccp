@@ -63,7 +63,7 @@ impl ServerState {
                             existing_name: existing.name().to_string(),
                             existing_shelf: existing.path.shelf_name().to_string(),
                             existing_book: existing.path.book_name().to_string(),
-                            similarity: format!("{:.2}", score),
+                            similarity: format!("{score:.2}"),
                         },
                     ));
                 }

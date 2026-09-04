@@ -1,0 +1,44 @@
+#!/bin/sh
+set -eu
+
+SERVER_URL="http://192.168.130.34:1338"
+ADMIN_KEY="ccp-admin-f1a847d36c509e2b"
+
+usage() {
+    echo "Usage: ccp-manage add <session> | delete <session> | stats <session>" >&2
+    exit 64
+}
+
+if [ "$#" -eq 0 ]; then
+    if command -v open >/dev/null 2>&1; then open "$SERVER_URL/admin"
+    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$SERVER_URL/admin"
+    else echo "$SERVER_URL/admin"
+    fi
+    exit 0
+fi
+[ "$#" -eq 2 ] || usage
+command_name="$1"
+session="$2"
+
+case "$command_name" in
+    add)
+        escaped=$(printf '%s' "$session" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-CCP-Admin-Key: $ADMIN_KEY" \
+            -d "{\"session_name\":\"$escaped\"}" \
+            "$SERVER_URL/v1/admin/sessions"
+        ;;
+    delete)
+        curl -fsS -X DELETE \
+            -H "X-CCP-Admin-Key: $ADMIN_KEY" \
+            "$SERVER_URL/v1/admin/sessions/$session"
+        ;;
+    stats)
+        curl -fsS \
+            -H "X-CCP-Admin-Key: $ADMIN_KEY" \
+            "$SERVER_URL/v1/admin/sessions/$session/stats"
+        ;;
+    *) usage ;;
+esac
+printf '\n'

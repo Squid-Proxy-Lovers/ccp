@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>CCP Control</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f6f8;
+      --panel: #ffffff;
+      --ink: #17191c;
+      --muted: #6b7280;
+      --subtle: #f8f9fa;
+      --line: #e2e5e9;
+      --line-strong: #cdd2d8;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --green: #16803c;
+      --green-soft: #edf9f1;
+      --amber: #9a6700;
+      --red: #c02b3a;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 14px Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 64px;
+      padding: 0 24px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.96);
+    }
+    .brand, .header-actions, .row, .toolbar { display: flex; align-items: center; }
+    .brand { gap: 10px; }
+    .header-actions, .row, .toolbar { gap: 8px; }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: #17191c;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .brand h1 { margin: 0; font-size: 15px; font-weight: 650; }
+    .brand small { display: block; margin-top: 1px; color: var(--muted); font-size: 11px; }
+    .live-dot { width: 7px; height: 7px; border-radius: 50%; background: #22a559; }
+    .live-dot.paused { background: #d29a16; }
+    main { max-width: 1540px; margin: 0 auto; padding: 24px; }
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+    .metric, .panel { border: 1px solid var(--line); border-radius: 9px; background: var(--panel); }
+    .metric { padding: 15px 16px; }
+    .metric .label { color: var(--muted); font-size: 12px; }
+    .metric strong { display: block; margin-top: 4px; font-size: 23px; font-weight: 650; letter-spacing: -.02em; }
+    .workspace { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; }
+    .panel { overflow: hidden; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 56px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .panel-head h2 { margin: 0; font-size: 14px; font-weight: 650; }
+    .panel-body { padding: 14px; }
+    .sessions-panel { position: sticky; top: 80px; align-self: start; }
+    .session-list { display: grid; max-height: calc(100vh - 250px); overflow: auto; padding: 6px; }
+    .session {
+      width: 100%;
+      padding: 11px 10px;
+      border: 0;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--ink);
+      text-align: left;
+    }
+    .session:hover { background: var(--subtle); }
+    .session.active { background: var(--accent-soft); color: #174ea6; }
+    .session-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 600; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 1px 6px;
+      border-radius: 999px;
+      background: #f0f1f3;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 500;
+    }
+    .session.active .badge { background: #dbeafe; color: #1d4ed8; }
+    .session-meta { display: flex; gap: 10px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    input, select, textarea {
+      width: 100%;
+      border: 1px solid var(--line-strong);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      padding: 8px 10px;
+      outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+    .btn {
+      flex: none;
+      padding: 7px 11px;
+      border: 1px solid var(--accent);
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 550;
+    }
+    .btn:hover { background: #1d4ed8; border-color: #1d4ed8; }
+    .btn.ghost { border-color: var(--line-strong); background: #fff; color: #35383d; }
+    .btn.ghost:hover { background: var(--subtle); border-color: #aeb4bc; }
+    .btn.danger { border-color: #efc2c8; background: #fff; color: var(--red); }
+    .btn.danger:hover { background: #fff5f6; border-color: #df929c; }
+    .activity-panel { min-height: 570px; }
+    .activity-tools {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) 145px 120px auto;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--subtle);
+    }
+    .activity-list { max-height: 720px; overflow: auto; }
+    .empty { padding: 64px 20px; color: var(--muted); text-align: center; line-height: 1.6; }
+    .event {
+      display: grid;
+      grid-template-columns: 8px minmax(0,1fr);
+      gap: 11px;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+    }
+    .event:hover { background: #fbfbfc; }
+    .event-marker { width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: #8b95a5; }
+    .event.append .event-marker { background: var(--accent); }
+    .event-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .event-title { font-weight: 600; }
+    .event-session { color: #1d4ed8; }
+    .event-time, .editor-meta { color: var(--muted); font-size: 11px; }
+    .event-time { flex: none; }
+    .event-meta { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+    .event-meta span { padding-right: 7px; border-right: 1px solid var(--line); }
+    .event-meta span:last-child { border: 0; }
+    .content {
+      max-height: 170px;
+      overflow: auto;
+      margin-top: 9px;
+      padding: 9px 11px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--subtle);
+      color: #34373c;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+    .reason { margin-top: 7px; color: var(--amber); font-size: 12px; }
+    .feed-footer { padding: 9px 14px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .instructions { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+    .instructions textarea { min-height: 210px; resize: vertical; line-height: 1.5; }
+    .editor-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+    .dirty { color: var(--amber); }
+    #login {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      background: rgba(17,24,39,.38);
+    }
+    .loginbox { width: min(400px,100%); padding: 24px; box-shadow: 0 18px 55px rgba(17,24,39,.18); }
+    .loginbox h2 { margin: 0 0 7px; font-size: 18px; }
+    .loginbox p { margin: 0 0 17px; color: var(--muted); line-height: 1.5; }
+    .login-actions { display: flex; gap: 8px; margin-top: 10px; }
+    .error { min-height: 18px; margin-top: 10px; color: var(--red); font-size: 12px; }
+    .toast {
+      position: fixed;
+      right: 20px;
+      bottom: 20px;
+      z-index: 30;
+      max-width: 420px;
+      padding: 10px 13px;
+      border-radius: 7px;
+      background: #202226;
+      color: #fff;
+      box-shadow: 0 8px 28px rgba(17,24,39,.18);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: .18s;
+    }
+    .toast.show { opacity: 1; transform: none; }
+    .toast.bad { background: #9f2432; }
+    @media (max-width: 900px) {
+      .metrics { grid-template-columns: 1fr 1fr; }
+      .workspace { grid-template-columns: 1fr; }
+      .sessions-panel { position: static; }
+      .session-list { grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); max-height: none; }
+      .instructions { grid-template-columns: 1fr; }
+      .activity-tools { grid-template-columns: 1fr 1fr; }
+      .activity-tools input { grid-column: 1/-1; }
+    }
+    @media (max-width: 540px) {
+      header { min-height: 56px; padding: 0 12px; }
+      .brand small { display: none; }
+      main { padding: 10px; }
+      .metrics { gap: 8px; }
+      .metric { padding: 12px; }
+      .metric strong { font-size: 20px; }
+      .activity-tools { grid-template-columns: 1fr; }
+      .activity-tools input { grid-column: auto; }
+      .event-top { display: block; }
+      .event-time { display: block; margin-top: 3px; }
+      #status { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="login"><div class="panel loginbox"><h2>Sign in to CCP Control</h2><p>Enter the admin key to manage sessions and instructions.</p><input id="key" type="password" placeholder="Admin key" autocomplete="current-password"><div class="login-actions"><button class="btn" id="connectButton">Continue</button></div><div id="loginError" class="error"></div></div></div>
+  <header><div class="brand"><div class="mark">C</div><div><h1>CCP Control</h1><small>Sessions, activity, and instructions</small></div></div><div class="header-actions"><span id="liveDot" class="live-dot"></span><span id="status" class="editor-meta">Connecting</span><button class="btn ghost" id="lockButton">Sign out</button></div></header>
+  <main>
+    <section class="metrics"><div class="metric"><span class="label">Sessions</span><strong id="metricSessions">—</strong></div><div class="metric"><span class="label">Active sessions</span><strong id="metricActive">—</strong></div><div class="metric"><span class="label">Total entries</span><strong id="metricEntries">—</strong></div><div class="metric"><span class="label">Visible events</span><strong id="metricEvents">—</strong></div></section>
+    <div class="workspace">
+      <aside class="panel sessions-panel"><div class="panel-head"><h2>Sessions</h2><button class="btn ghost" id="allSessionsButton">View all</button></div><div class="panel-body"><div class="row"><input id="newSession" placeholder="new-topic-name"><button class="btn" id="addSessionButton">Add</button></div></div><div id="sessions" class="session-list"></div></aside>
+      <section class="panel activity-panel"><div class="panel-head"><div><h2 id="activityTitle">Live activity · all sessions</h2><div id="activityUpdated" class="editor-meta">Waiting for data</div></div><div class="row"><button class="btn ghost" id="pauseButton">Pause live</button><button class="btn" id="refreshButton">Refresh</button></div></div><div class="activity-tools"><input id="activitySearch" type="search" placeholder="Search session, entry, agent, or content"><select id="kindFilter"><option value="all">All activity</option><option value="entry_created">New entries</option><option value="entry_appended">Updates</option></select><select id="limitFilter"><option value="50">50 events</option><option value="100" selected>100 events</option><option value="250">250 events</option><option value="500">500 events</option></select><button class="btn ghost" id="clearFiltersButton">Clear filters</button></div><div id="activity" class="activity-list"></div><div id="feedFooter" class="feed-footer"></div></section>
+    </div>
+    <section class="instructions">
+      <div class="panel"><div class="panel-head"><div><h2>Global master instructions</h2><div id="globalMeta" class="editor-meta">Applies to every session</div></div></div><div class="panel-body"><textarea id="globalText" placeholder="Instructions for every agent in every session"></textarea><div class="editor-actions"><span id="globalState" class="editor-meta"></span><button class="btn" id="saveGlobalButton">Publish global</button></div></div></div>
+      <div class="panel"><div class="panel-head"><div><h2>Session master instructions</h2><div id="sessionMeta" class="editor-meta">Select a session</div></div><button class="btn danger" id="deleteSessionButton" disabled>Delete session</button></div><div class="panel-body"><textarea id="sessionText" disabled placeholder="Select a session to edit its instructions"></textarea><div class="editor-actions"><span id="sessionState" class="editor-meta"></span><button class="btn" id="saveSessionButton" disabled>Publish session</button></div></div></div>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script>
+    const $=id=>document.getElementById(id);let adminKey=localStorage.getItem('ccpAdminKey')||'',overview=null,activity=[],selected=null,activitySession=null,live=true,globalDirty=false,sessionDirty=false,timer=null;
+    async function api(path,options={}){const headers={...(options.headers||{}),'X-CCP-Admin-Key':adminKey};if(options.body)headers['Content-Type']='application/json';const response=await fetch(path,{...options,headers});if(!response.ok){let message=response.statusText;try{message=(await response.json()).error||message}catch{}throw new Error(message)}return response.json()}
+    function escapeHtml(value){return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))}
+    function parseTime(value){if(!value)return null;const normalized=/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(value)?value.replace(' ','T')+'Z':value;const date=new Date(normalized);return Number.isNaN(date.valueOf())?null:date}
+    function relativeTime(value){const date=parseTime(value);if(!date)return value||'unknown';const seconds=Math.round((date-Date.now())/1000),abs=Math.abs(seconds);if(abs<45)return 'just now';const units=[[60,'minute'],[3600,'hour'],[86400,'day'],[604800,'week']];let unit=units[0];for(const candidate of units)if(abs>=candidate[0])unit=candidate;const amount=Math.round(seconds/unit[0]);return new Intl.RelativeTimeFormat(undefined,{numeric:'auto'}).format(amount,unit[1])}
+    function toast(message,bad=false){const node=$('toast');node.textContent=message;node.className='toast show'+(bad?' bad':'');clearTimeout(node._timer);node._timer=setTimeout(()=>node.className='toast',2600)}
+    async function connect(){adminKey=$('key').value.trim();$('connectButton').disabled=true;$('loginError').textContent='';try{await refresh();localStorage.setItem('ccpAdminKey',adminKey);$('login').style.display='none';schedule()}catch(error){$('loginError').textContent=error.message}finally{$('connectButton').disabled=false}}
+    function logout(){localStorage.removeItem('ccpAdminKey');location.reload()}
+    function activityUrl(){const params=new URLSearchParams({limit:$('limitFilter').value});if(activitySession)params.set('session',activitySession);return '/v1/admin/activity?'+params}
+    async function refresh(silent=false){try{const [nextOverview,nextActivity]=await Promise.all([api('/v1/admin/overview'),api(activityUrl())]);overview=nextOverview;activity=nextActivity;renderOverview();renderActivity();if(selected&&!sessionDirty)await loadSessionMaster(selected);$('status').textContent=`Online · ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;$('activityUpdated').textContent=`Updated ${new Date().toLocaleTimeString()} · refreshes every 5 seconds`;if(!silent)toast('Dashboard refreshed')}catch(error){$('status').textContent='Connection error';if(!silent)toast(error.message,true);throw error}}
+    function renderOverview(){const sessions=overview.sessions;$('metricSessions').textContent=sessions.length;$('metricActive').textContent=sessions.filter(item=>item.is_active).length;$('metricEntries').textContent=sessions.reduce((sum,item)=>sum+item.entries,0);if(!globalDirty){$('globalText').value=overview.global_master.content;$('globalMeta').textContent=`Applies to every session · updated ${relativeTime(overview.global_master.updated_at)}`}$('sessions').innerHTML='';if(!sessions.length){$('sessions').innerHTML='<div class="empty">No sessions yet</div>';return}for(const item of sessions){const button=document.createElement('button');button.className='session'+(selected===item.session.session_name?' active':'');button.innerHTML=`<div class="session-title"><span>${escapeHtml(item.session.session_name)}</span><span class="badge">${item.is_active?'online':'stored'}</span></div><div class="session-meta"><span>${item.shelves} shelves</span><span>${item.books} books</span><span>${item.entries} entries</span></div>`;button.addEventListener('click',()=>selectSession(item.session.session_name));$('sessions').appendChild(button)}}
+    function renderActivity(){const query=$('activitySearch').value.trim().toLowerCase(),kind=$('kindFilter').value;const filtered=activity.filter(event=>(kind==='all'||event.kind===kind)&&(!query||[event.session_name,event.entry_name,event.shelf_name,event.book_name,event.actor,event.agent_name,event.host_name,event.reason,event.content].some(value=>String(value??'').toLowerCase().includes(query))));$('metricEvents').textContent=filtered.length;$('activityTitle').textContent=`Live activity · ${activitySession||'all sessions'}`;$('activity').innerHTML='';if(!filtered.length){$('activity').innerHTML='<div class="empty">No matching activity yet.<br>Agent entries and updates will appear here automatically.</div>';$('feedFooter').textContent='No events shown';return}for(const event of filtered){const node=document.createElement('article');node.className='event '+(event.kind==='entry_appended'?'append':'create');const actor=event.agent_name||event.actor||'unknown client',path=[event.shelf_name,event.book_name,event.entry_name].filter(Boolean).join(' / '),label=event.kind==='entry_appended'?'updated':'created';node.innerHTML=`<div class="event-marker"></div><div><div class="event-top"><div class="event-title"><span class="event-session">${escapeHtml(event.session_name)}</span> · ${escapeHtml(actor)} ${label} <span>${escapeHtml(event.entry_name)}</span></div><time class="event-time" title="${escapeHtml(event.created_at)}">${escapeHtml(relativeTime(event.created_at))}</time></div><div class="event-meta"><span>${escapeHtml(path)}</span>${event.host_name?`<span>host ${escapeHtml(event.host_name)}</span>`:''}<span>${event.kind==='entry_appended'?'append':'new entry'}</span></div>${event.reason?`<div class="reason">Reason: ${escapeHtml(event.reason)}</div>`:''}${event.content?`<div class="content">${escapeHtml(event.content)}</div>`:'<div class="editor-meta">No text content</div>'}</div>`;$('activity').appendChild(node)}$('feedFooter').textContent=`Showing ${filtered.length} of ${activity.length} loaded events${query?' · search filter active':''}`}
+    async function selectSession(name){selected=name;activitySession=name;sessionDirty=false;renderOverview();await Promise.all([loadSessionMaster(name),loadActivity()])}
+    async function loadSessionMaster(name){const record=await api(`/v1/admin/sessions/${encodeURIComponent(name)}/master`);if(selected!==name||sessionDirty)return;$('sessionText').disabled=false;$('saveSessionButton').disabled=false;$('deleteSessionButton').disabled=false;$('sessionText').value=record.content;$('sessionMeta').textContent=`${name} · updated ${relativeTime(record.updated_at)}`;$('sessionState').textContent=''}
+    async function loadActivity(){activity=await api(activityUrl());renderActivity();$('activityUpdated').textContent=`Updated ${new Date().toLocaleTimeString()} · refreshes every 5 seconds`}
+    async function saveGlobal(){const record=await api('/v1/admin/master',{method:'PUT',body:JSON.stringify({content:$('globalText').value})});globalDirty=false;$('globalState').textContent='Published';$('globalState').className='editor-meta';$('globalMeta').textContent=`Applies to every session · updated ${relativeTime(record.updated_at)}`;toast('Global instructions published')}
+    async function saveSessionMaster(){if(!selected)return;const record=await api(`/v1/admin/sessions/${encodeURIComponent(selected)}/master`,{method:'PUT',body:JSON.stringify({content:$('sessionText').value})});sessionDirty=false;$('sessionState').textContent='Published';$('sessionState').className='editor-meta';$('sessionMeta').textContent=`${selected} · updated ${relativeTime(record.updated_at)}`;toast(`Instructions published to ${selected}`)}
+    async function addSession(){const name=$('newSession').value.trim();if(!name)return;try{await api('/v1/admin/sessions',{method:'POST',body:JSON.stringify({session_name:name})});$('newSession').value='';await refresh(true);await selectSession(name);toast(`Session ${name} created`)}catch(error){toast(error.message,true)}}
+    async function deleteSelected(){if(!selected||!confirm(`Delete ${selected} and all of its data? This cannot be undone.`))return;const name=selected;await api(`/v1/admin/sessions/${encodeURIComponent(name)}`,{method:'DELETE'});selected=null;activitySession=null;sessionDirty=false;$('sessionText').value='';$('sessionText').disabled=true;$('saveSessionButton').disabled=true;$('deleteSessionButton').disabled=true;$('sessionMeta').textContent='Select a session';await refresh(true);toast(`Session ${name} deleted`)}
+    function showAll(){activitySession=null;loadActivity().catch(error=>toast(error.message,true))}
+    function toggleLive(){live=!live;$('pauseButton').textContent=live?'Pause live':'Resume live';$('liveDot').classList.toggle('paused',!live);$('activityUpdated').textContent=live?'Live refresh resumed':'Live refresh paused'}
+    function schedule(){clearInterval(timer);timer=setInterval(()=>{if(live&&$('login').style.display==='none')refresh(true).catch(()=>{})},5000)}
+    $('connectButton').addEventListener('click',connect);$('key').addEventListener('keydown',event=>{if(event.key==='Enter')connect()});$('lockButton').addEventListener('click',logout);$('refreshButton').addEventListener('click',()=>refresh());$('pauseButton').addEventListener('click',toggleLive);$('allSessionsButton').addEventListener('click',showAll);$('addSessionButton').addEventListener('click',addSession);$('newSession').addEventListener('keydown',event=>{if(event.key==='Enter')addSession()});$('deleteSessionButton').addEventListener('click',()=>deleteSelected().catch(error=>toast(error.message,true)));$('saveGlobalButton').addEventListener('click',()=>saveGlobal().catch(error=>toast(error.message,true)));$('saveSessionButton').addEventListener('click',()=>saveSessionMaster().catch(error=>toast(error.message,true)));$('activitySearch').addEventListener('input',renderActivity);$('kindFilter').addEventListener('change',renderActivity);$('limitFilter').addEventListener('change',()=>loadActivity().catch(error=>toast(error.message,true)));$('clearFiltersButton').addEventListener('click',()=>{$('activitySearch').value='';$('kindFilter').value='all';renderActivity()});$('globalText').addEventListener('input',()=>{globalDirty=true;$('globalState').textContent='Unsaved changes';$('globalState').className='editor-meta dirty'});$('sessionText').addEventListener('input',()=>{sessionDirty=true;$('sessionState').textContent='Unsaved changes';$('sessionState').className='editor-meta dirty'});window.addEventListener('beforeunload',event=>{if(globalDirty||sessionDirty){event.preventDefault();event.returnValue=''}});
+    if(adminKey){$('key').value=adminKey;connect()}
+  </script>
+</body>
+</html>

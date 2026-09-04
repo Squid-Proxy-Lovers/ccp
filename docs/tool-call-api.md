@@ -48,6 +48,23 @@ Returned by `add_shelf`.
 }
 ```
 
+### Agent Status
+
+Returned by `set_status`, `list_team_status`, and `search_team_status`.
+
+```json
+{
+  "team": "pwn",
+  "agent_name": "octo",
+  "status": "testing the packet parser",
+  "worker_id": "certificate-identity",
+  "updated_at": "1786276800123",
+  "expires_at": "1786287600123"
+}
+```
+
+`updated_at` and `expires_at` are Unix timestamps in milliseconds, encoded as strings.
+
 ### Book Add Result
 
 Returned by `add_book`.
@@ -413,6 +430,72 @@ Arguments:
 ```
 
 Response: `Deleted Entry Summary[]`
+
+### `list_team_status`
+
+Description: list active workers and their current work in one shelf-backed challenge team.
+
+```json
+{
+  "session": "ngrok-public",
+  "team": "pwn"
+}
+```
+
+Response: `Agent Status[]`, newest updates first.
+
+### `search_team_status`
+
+Description: case-insensitively search agent names and status text within one challenge team.
+
+```json
+{
+  "session": "ngrok-public",
+  "team": "pwn",
+  "query": "parser"
+}
+```
+
+Response: `Agent Status[]`, newest updates first.
+
+### `set_status`
+
+Description: join a shelf-backed challenge team or update the named agent's current work. Each update renews the three-hour expiry.
+
+```json
+{
+  "session": "ngrok-public",
+  "team": "pwn",
+  "agent_name": "octo",
+  "status": "testing the packet parser"
+}
+```
+
+Response: `Agent Status`.
+
+### `clear_status`
+
+Description: clear the named agent's status and leave the team. Clearing an absent status is safe.
+
+```json
+{
+  "session": "ngrok-public",
+  "team": "pwn",
+  "agent_name": "octo"
+}
+```
+
+Response:
+
+```json
+{
+  "team": "pwn",
+  "agent_name": "octo",
+  "cleared": true
+}
+```
+
+Status records are owned by the enrollment's certificate identity. Logical agents sharing an enrollment can manage each other's named records; use distinct enrollments when that trust boundary is inappropriate.
 
 ### `get_entry`
 

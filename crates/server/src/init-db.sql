@@ -21,6 +21,21 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS global_master_instructions (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    content TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO global_master_instructions (id, content) VALUES (1, '');
+
+CREATE TABLE IF NOT EXISTS session_master_instructions (
+    session_id INTEGER PRIMARY KEY,
+    content TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS auth_tokens (
     id INTEGER PRIMARY KEY,
     session_id INTEGER NOT NULL,
@@ -177,6 +192,21 @@ CREATE TABLE IF NOT EXISTS transfer_log (
 
 CREATE INDEX IF NOT EXISTS idx_transfer_log_session_id
 ON transfer_log(session_id);
+
+CREATE TABLE IF NOT EXISTS agent_statuses (
+    session_id INTEGER NOT NULL,
+    team TEXT NOT NULL,
+    worker_id TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    status TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, team, worker_id, agent_name),
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_statuses_team_expiry
+ON agent_statuses(session_id, team, expires_at);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS message_packs_fts USING fts5(
     name,

@@ -4,26 +4,28 @@
 
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use clap::{Args, Parser, Subcommand};
 use protocol::{AppendMetadata, ConflictPolicy, TransferScope, TransferSelector};
 
-use crate::enrollment::enroll;
 use crate::enrollment_structs::StoredEnrollment;
 use crate::storage::{
     delete_session_enrollments, load_enrollments, select_enrollment, summarize_sessions,
 };
 use crate::transport::{
     perform_add_book, perform_add_entry, perform_add_shelf, perform_append, perform_brief_me,
-    perform_delete, perform_delete_shelf, perform_export, perform_get, perform_get_entry_at,
-    perform_import, perform_restore, perform_revoke_cert, perform_search,
+    perform_clear_status, perform_delete, perform_delete_shelf, perform_export, perform_get,
+    perform_get_entry_at, perform_import, perform_list_team_status, perform_restore,
+    perform_search, perform_search_team_status, perform_set_status,
 };
 
 const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
-  client enroll --redeem-url <url> --token <token>
+  client subscribe <session>
+  client subscribe-all
+  client remote-sessions
   client sessions
+  client master-instructions <session>
   client delete-session <session>
   client list <session>
   client get <session> <entry-name> [--shelf <name>] [--book <name>]
@@ -42,9 +44,12 @@ const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
   client history <session> <entry-name> [--shelf <name>] [--book <name>]
   client export <session> [--output <name.droplet>] [--shelf <name>] [--book <name>] [--entry <name>]... [--no-history]
   client import <session> <file.droplet> [--policy error|overwrite|skip|merge-history]
-  client revoke-cert <session> <client-common-name>
   client brief-me <session>
   client get-entry-at <session> <entry-name> --at <timestamp> [--shelf <name>] [--book <name>]
+  client set-status <session> --team <shelf> --agent <name> <status...>
+  client clear-status <session> --team <shelf> --agent <name>
+  client team-status <session> --team <shelf>
+  client search-team-status <session> --team <shelf> <query...>
 
 <session> can be a session name or session id discovered via `client sessions`."#;
 
@@ -57,8 +62,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    Enroll(EnrollArgs),
+    Subscribe(SubscribeArgs),
+    SubscribeAll(ServerArgs),
+    RemoteSessions(RemoteSessionsArgs),
     Sessions,
+    MasterInstructions(SessionSelectorArgs),
     DeleteSession(SessionSelectorArgs),
     List(SessionSelectorArgs),
     Get(EntryArgs),
@@ -77,17 +85,32 @@ enum Command {
     History(EntryArgs),
     Export(ExportArgs),
     Import(ImportArgs),
-    RevokeCert(RevokeCertArgs),
     BriefMe(SessionSelectorArgs),
     GetEntryAt(GetEntryAtArgs),
+    SetStatus(SetStatusArgs),
+    ClearStatus(StatusIdentityArgs),
+    TeamStatus(TeamStatusArgs),
+    SearchTeamStatus(SearchTeamStatusArgs),
 }
 
 #[derive(Args)]
-struct EnrollArgs {
-    #[arg(long, value_name = "url")]
-    redeem_url: String,
-    #[arg(long, value_name = "token")]
-    token: String,
+struct SubscribeArgs {
+    #[arg(long, value_name = "http-url")]
+    server: Option<String>,
+    #[arg(value_name = "session")]
+    session: String,
+}
+
+#[derive(Args)]
+struct RemoteSessionsArgs {
+    #[arg(long, value_name = "http-url")]
+    server: Option<String>,
+}
+
+#[derive(Args)]
+struct ServerArgs {
+    #[arg(long, value_name = "http-url")]
+    server: Option<String>,
 }
 
 #[derive(Args)]
@@ -229,14 +252,6 @@ struct ImportArgs {
 }
 
 #[derive(Args)]
-struct RevokeCertArgs {
-    #[arg(value_name = "session")]
-    session: String,
-    #[arg(value_name = "client-common-name")]
-    client_common_name: String,
-}
-
-#[derive(Args)]
 struct GetEntryAtArgs {
     #[arg(value_name = "session")]
     session: String,
@@ -250,24 +265,110 @@ struct GetEntryAtArgs {
     book: Option<String>,
 }
 
+#[derive(Args)]
+struct SetStatusArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+    #[arg(long, value_name = "name")]
+    agent: String,
+    #[arg(required = true, value_name = "status")]
+    status: Vec<String>,
+}
+
+#[derive(Args)]
+struct StatusIdentityArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+    #[arg(long, value_name = "name")]
+    agent: String,
+}
+
+#[derive(Args)]
+struct TeamStatusArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+}
+
+#[derive(Args)]
+struct SearchTeamStatusArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(long, value_name = "shelf")]
+    team: String,
+    #[arg(required = true, value_name = "query")]
+    query: Vec<String>,
+}
+
 pub(crate) async fn run() -> anyhow::Result<()> {
     let cli = parse_cli();
 
     match cli.command {
-        // authentication command, send redeem url and token to the server
-        // save the enrollment to the filesystem (~/.ccp/enrollments/<session-name>/<session-id>/enrollment.json)
-        Command::Enroll(args) => {
-            enroll(&args.redeem_url, &args.token).await?;
+        Command::Subscribe(args) => {
+            let server = resolved_server(args.server.as_deref());
+            let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
+            let session = sessions
+                .iter()
+                .find(|candidate| {
+                    candidate.session_name == args.session
+                        || candidate.session_id.to_string() == args.session
+                })
+                .with_context(|| {
+                    format!("session '{}' is not hosted by {}", args.session, server)
+                })?;
+            let saved = crate::storage::save_subscription(&server, session)?;
+            println!(
+                "Subscribed to session '{}' (id={}) at {}",
+                saved.metadata.session_name, saved.metadata.session_id, server
+            );
+        }
+
+        Command::SubscribeAll(args) => {
+            let server = resolved_server(args.server.as_deref());
+            let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
+            for session in &sessions {
+                crate::storage::save_subscription(&server, session)?;
+            }
+            println!(
+                "Subscribed to {} open topic(s) at {}",
+                sessions.len(),
+                server
+            );
+        }
+
+        Command::RemoteSessions(args) => {
+            let server = resolved_server(args.server.as_deref());
+            let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
+            println!("{}", serde_json::to_string_pretty(&sessions)?);
         }
 
         // list all sessions and their details
         Command::Sessions => list_sessions()?,
 
+        Command::MasterInstructions(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            let response = crate::transport::perform_request(
+                &enrollment,
+                protocol::ClientRequest::GetMasterInstructions {
+                    session_id: enrollment.metadata.session_id,
+                },
+            )
+            .await?;
+            print_json(&crate::transport_helpers::response_to_json_string(
+                response,
+            )?)?;
+        }
+
         // delete a session and all its enrollments
         Command::DeleteSession(args) => {
             let removed = delete_session_enrollments(&args.session)?;
             println!(
-                "Removed {removed} saved enrollment(s) for session '{}'.",
+                "Removed {removed} saved subscription(s) for session '{}'.",
                 args.session
             );
         }
@@ -509,13 +610,6 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             print_json(&perform_import(&enrollment, &args.bundle_path, policy).await?)?;
         }
 
-        // revoke a client certificate
-        Command::RevokeCert(args) => {
-            let enrollment = select_enrollment(&args.session, true)?;
-            check_cert_timeout(&enrollment);
-            print_json(&perform_revoke_cert(&enrollment, &args.client_common_name).await?)?;
-        }
-
         Command::BriefMe(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
@@ -536,6 +630,31 @@ pub(crate) async fn run() -> anyhow::Result<()> {
                 .await?,
             )?;
         }
+
+        Command::SetStatus(args) => {
+            let enrollment = select_enrollment(&args.session, true)?;
+            print_json(
+                &perform_set_status(&enrollment, &args.team, &args.agent, &args.status.join(" "))
+                    .await?,
+            )?;
+        }
+
+        Command::ClearStatus(args) => {
+            let enrollment = select_enrollment(&args.session, true)?;
+            print_json(&perform_clear_status(&enrollment, &args.team, &args.agent).await?)?;
+        }
+
+        Command::TeamStatus(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            print_json(&perform_list_team_status(&enrollment, &args.team).await?)?;
+        }
+
+        Command::SearchTeamStatus(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            print_json(
+                &perform_search_team_status(&enrollment, &args.team, &args.query.join(" ")).await?,
+            )?;
+        }
     }
 
     Ok(())
@@ -544,28 +663,20 @@ pub(crate) async fn run() -> anyhow::Result<()> {
 fn list_sessions() -> anyhow::Result<()> {
     let enrollments = load_enrollments()?;
     if enrollments.is_empty() {
-        println!("No saved enrollments found.");
+        println!("No saved subscriptions found.");
         return Ok(());
     }
 
     for session in summarize_sessions(&enrollments) {
         println!(
-            "session={} session_id={} access={} certs={} endpoint={} owner={} visibility={} labels={} purpose={} client_cert_expires_at={}{}",
+            "session={} session_id={} endpoint={} owner={} visibility={} labels={} purpose={}",
             session.session_name,
             session.session_id,
-            session.available_access.join(","),
-            session.enrollment_count,
             session.endpoint,
             session.owner,
             session.visibility,
             session.labels.join(","),
             session.purpose,
-            session.latest_client_cert_expires_at,
-            session
-                .cert_warning
-                .as_ref()
-                .map(|warning| format!(" cert_warning={warning}"))
-                .unwrap_or_default(),
         );
     }
 
@@ -591,6 +702,13 @@ fn append_metadata_from_env() -> AppendMetadata {
     }
 }
 
+fn resolved_server(explicit: Option<&str>) -> String {
+    explicit
+        .map(ToString::to_string)
+        .or_else(|| std::env::var("CCP_SERVER_URL").ok())
+        .unwrap_or_else(|| "http://192.168.130.34:1338".to_string())
+}
+
 fn hostname_fallback() -> Option<String> {
     // fallback to HOSTNAME environment variable if not set
     if let Ok(hostname) = std::env::var("HOSTNAME")
@@ -611,34 +729,7 @@ fn parse_labels(raw: &str) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn check_cert_timeout(enrollment: &StoredEnrollment) {
-    // check if the client certificate has expired
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let expires_at = enrollment.metadata.client_cert_expires_at;
-    if now >= expires_at {
-        eprintln!(
-            "WARNING: client certificate expired at unix={expires_at}; request a new enrollment token and re-enroll"
-        );
-        return;
-    }
-
-    let warning_window = std::env::var("CCP_CERT_WARNING_WINDOW_SECONDS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(0);
-    if warning_window == 0 {
-        return;
-    }
-    let remaining = expires_at.saturating_sub(now);
-    if remaining <= warning_window {
-        eprintln!(
-            "WARNING: client certificate expires soon at unix={expires_at}; request a new enrollment token before it expires"
-        );
-    }
-}
+pub(crate) fn check_cert_timeout(_enrollment: &StoredEnrollment) {}
 
 fn print_json(body: &str) -> anyhow::Result<()> {
     let value: serde_json::Value =

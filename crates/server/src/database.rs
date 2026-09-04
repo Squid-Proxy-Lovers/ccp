@@ -644,6 +644,18 @@ fn persist_snapshot_transaction(
         }
     }
 
+    transaction
+        .execute(
+            "DELETE FROM agent_statuses
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM shelves
+                 WHERE shelves.session_id = agent_statuses.session_id
+                   AND shelves.shelf_name = agent_statuses.team
+             )",
+            [],
+        )
+        .context("failed to remove statuses for deleted shelves")?;
+
     for (token, grant) in &snapshot.auth_tokens {
         transaction
             .execute(

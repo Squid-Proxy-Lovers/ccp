@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 /// Wire protocol version. Bump this when the ClientRequest/ServerResponse
 /// enums change in a backward-incompatible way.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 // ── Offline transfer ──────────────────────────────────────────────────────────
 
@@ -75,6 +75,27 @@ pub struct SessionMetadata {
     pub labels: Vec<String>,
     pub visibility: String,
     pub purpose: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionStats {
+    pub session: SessionMetadata,
+    pub shelves: usize,
+    pub books: usize,
+    pub entries: usize,
+    pub is_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstructionRecord {
+    pub content: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MasterInstructions {
+    pub global: InstructionRecord,
+    pub session: InstructionRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -226,6 +247,23 @@ pub struct RevokeCertResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentStatus {
+    pub team: String,
+    pub agent_name: String,
+    pub status: String,
+    pub worker_id: String,
+    pub updated_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClearStatusResult {
+    pub team: String,
+    pub agent_name: String,
+    pub cleared: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SearchContextMatch {
     pub name: String,
     pub description: String,
@@ -304,6 +342,19 @@ pub struct ServerVersionInfo {
 pub enum ClientRequest {
     Ping,
     Handshake(VersionInfo),
+    /// Discover every session hosted by this server.
+    ListSessions,
+    /// Create a session on this server. Plaintext mode has no remote ACL.
+    CreateSession {
+        session_name: String,
+    },
+    /// Select the sessions this connection may operate on.
+    Subscribe {
+        session_ids: Vec<i64>,
+    },
+    GetMasterInstructions {
+        session_id: i64,
+    },
     List {
         session_id: i64,
     },
@@ -404,6 +455,26 @@ pub enum ClientRequest {
         book_name: Option<String>,
         at_timestamp: String,
     },
+    SetStatus {
+        session_id: i64,
+        team: String,
+        agent_name: String,
+        status: String,
+    },
+    ClearStatus {
+        session_id: i64,
+        team: String,
+        agent_name: String,
+    },
+    ListTeamStatus {
+        session_id: i64,
+        team: String,
+    },
+    SearchTeamStatus {
+        session_id: i64,
+        team: String,
+        query: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -425,6 +496,10 @@ pub enum ServerResponse {
     Pong,
     HandshakeOk(ServerVersionInfo),
     HandshakeRejected(ServerVersionInfo),
+    Sessions(Vec<SessionMetadata>),
+    SessionCreated(SessionMetadata),
+    Subscribed(Vec<SessionMetadata>),
+    MasterInstructions(MasterInstructions),
     EntrySummaries(Vec<EntrySummary>),
     ShelfSummaries(Vec<ShelfSummary>),
     BookSummaries(Vec<BookSummary>),
@@ -447,6 +522,9 @@ pub enum ServerResponse {
     Brief(SessionBrief),
     EntryAtTime(MessageEntry),
     ShelfDeleted(DeleteShelfResult),
+    StatusSet(AgentStatus),
+    StatusCleared(ClearStatusResult),
+    TeamStatuses(Vec<AgentStatus>),
     Error(ErrorResponse),
 }
 

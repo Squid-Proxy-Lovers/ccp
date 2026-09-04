@@ -1,0 +1,54 @@
+name: Client artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  client:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-13
+            artifact: ccp-client-darwin-x86_64
+            source: target/release/client
+          - runner: macos-14
+            artifact: ccp-client-darwin-aarch64
+            source: target/release/client
+          - runner: ubuntu-24.04
+            artifact: ccp-client-linux-x86_64
+            source: target/release/client
+          - runner: ubuntu-24.04-arm
+            artifact: ccp-client-linux-aarch64
+            source: target/release/client
+          - runner: windows-2025
+            artifact: ccp-client-windows-x86_64.exe
+            source: target/release/client.exe
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release -p client
+      - shell: bash
+        run: cp '${{ matrix.source }}' '${{ matrix.artifact }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  mcp:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build
+      - run: python -m build --sdist --outdir downloads mcp
+      - shell: bash
+        run: cp downloads/ccp_mcp_server-*.tar.gz downloads/ccp-mcp.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ccp-mcp.tar.gz
+          path: downloads/ccp-mcp.tar.gz

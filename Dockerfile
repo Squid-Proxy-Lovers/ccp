@@ -35,11 +35,12 @@ COPY docker/server-entrypoint.sh /usr/local/bin/ccp-server-entrypoint
 RUN chmod +x /usr/local/bin/ccp-server-entrypoint
 
 ENV CCP_SERVER_DATA_DIR=/var/lib/ccp/server
+ENV CCP_DOWNLOAD_DIR=/var/lib/ccp/downloads
 
 USER ccp
 WORKDIR /var/lib/ccp
 
 VOLUME ["/var/lib/ccp/server"]
-EXPOSE 1337 1338
+EXPOSE 1338
 
 ENTRYPOINT ["/usr/local/bin/ccp-server-entrypoint"]

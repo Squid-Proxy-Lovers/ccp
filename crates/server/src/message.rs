@@ -31,6 +31,11 @@ pub async fn handle_message_request(
     request: ClientRequest,
 ) -> ServerResponse {
     match request {
+        ClientRequest::ListSessions
+        | ClientRequest::CreateSession { .. }
+        | ClientRequest::Subscribe { .. } => {
+            bad_request("session discovery and subscription are handled by the connection layer")
+        }
         ClientRequest::Ping => match state.ensure_ping_access(auth_context).await {
             Ok(()) => ServerResponse::Pong,
             Err(_) => map_error(CcpError::Forbidden),
@@ -41,6 +46,12 @@ pub async fn handle_message_request(
                 ServerResponse::HandshakeOk(build_version_info(true))
             } else {
                 ServerResponse::HandshakeRejected(build_version_info(false))
+            }
+        }
+        ClientRequest::GetMasterInstructions { session_id } => {
+            match state.master_instructions(session_id).await {
+                Ok(instructions) => ServerResponse::MasterInstructions(instructions),
+                Err(error) => map_error(error),
             }
         }
         ClientRequest::List { session_id } => {
@@ -380,6 +391,49 @@ pub async fn handle_message_request(
                 Err(error) => map_error(error),
             }
         }
+        ClientRequest::SetStatus {
+            session_id,
+            team,
+            agent_name,
+            status,
+        } => match state
+            .set_status(session_id, &team, &agent_name, &status, auth_context)
+            .await
+        {
+            Ok(status) => ServerResponse::StatusSet(status),
+            Err(error) => map_error(error),
+        },
+        ClientRequest::ClearStatus {
+            session_id,
+            team,
+            agent_name,
+        } => match state
+            .clear_status(session_id, &team, &agent_name, auth_context)
+            .await
+        {
+            Ok(result) => ServerResponse::StatusCleared(result),
+            Err(error) => map_error(error),
+        },
+        ClientRequest::ListTeamStatus { session_id, team } => {
+            match state
+                .list_team_status(session_id, &team, auth_context)
+                .await
+            {
+                Ok(statuses) => ServerResponse::TeamStatuses(statuses),
+                Err(error) => map_error(error),
+            }
+        }
+        ClientRequest::SearchTeamStatus {
+            session_id,
+            team,
+            query,
+        } => match state
+            .search_team_status(session_id, &team, &query, auth_context)
+            .await
+        {
+            Ok(statuses) => ServerResponse::TeamStatuses(statuses),
+            Err(error) => map_error(error),
+        },
     }
 }
 
@@ -418,6 +472,7 @@ impl From<anyhow::Error> for CcpError {
             || root.contains("positive")
             || root.contains("already exists")
             || root.contains("must be")
+            || root.contains("must not exceed")
             || root.contains("invalid")
         {
             CcpError::BadRequest(error.to_string())

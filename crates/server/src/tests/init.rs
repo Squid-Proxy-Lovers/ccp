@@ -281,3 +281,89 @@ fn health_check_includes_version_info() {
     }
     let _ = std::fs::remove_dir_all(&data_dir);
 }
+
+#[test]
+fn agent_status_ttl_defaults_and_rejects_invalid_values() {
+    let _env_guard = test_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    for invalid in ["0", "not-a-number"] {
+        unsafe { std::env::set_var(AGENT_STATUS_TTL_SECONDS_ENV, invalid) };
+        assert_eq!(agent_status_ttl_seconds(), 10_800);
+    }
+    unsafe { std::env::set_var(AGENT_STATUS_TTL_SECONDS_ENV, "7200") };
+    assert_eq!(agent_status_ttl_seconds(), 7200);
+    unsafe { std::env::remove_var(AGENT_STATUS_TTL_SECONDS_ENV) };
+}
+
+#[test]
+fn schema_v3_creates_agent_status_storage_and_index() {
+    let db_path = temp_db_path("agent-status-schema");
+    init_sqlite(&db_path).expect("schema should initialize");
+    let connection = Connection::open(&db_path).expect("sqlite should open");
+    let table_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_statuses'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table lookup should work");
+    let index_count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_agent_statuses_team_expiry'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("index lookup should work");
+    assert_eq!(table_count, 1);
+    assert_eq!(index_count, 1);
+    fs::remove_file(db_path).expect("temp db should be removed");
+}
+
+#[test]
+fn schema_v2_upgrade_preserves_existing_sessions_and_adds_status_storage() {
+    let db_path = temp_db_path("agent-status-v2-upgrade");
+    init_sqlite(&db_path).expect("baseline schema should initialize");
+    let connection = Connection::open(&db_path).expect("sqlite should open");
+    connection
+        .execute(
+            "INSERT INTO sessions (name, description) VALUES ('existing-session', 'keep me')",
+            [],
+        )
+        .expect("legacy session should insert");
+    connection
+        .execute_batch(
+            "DROP TABLE agent_statuses;
+             DELETE FROM schema_version;
+             INSERT INTO schema_version (version) VALUES (2);",
+        )
+        .expect("database should be staged as schema v2");
+    drop(connection);
+
+    init_sqlite(&db_path).expect("v2 database should upgrade");
+    let connection = Connection::open(&db_path).expect("upgraded sqlite should open");
+    let description: String = connection
+        .query_row(
+            "SELECT description FROM sessions WHERE name = 'existing-session'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("existing session should survive migration");
+    let version: u32 = connection
+        .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+            row.get(0)
+        })
+        .expect("schema version should query");
+    let status_table: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'agent_statuses'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("status table should exist after upgrade");
+    assert_eq!(description, "keep me");
+    assert_eq!(version, SCHEMA_VERSION);
+    assert_eq!(status_table, 1);
+
+    fs::remove_file(db_path).expect("temp db should be removed");
+}
