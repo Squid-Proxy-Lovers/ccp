@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 mod commands;
+mod enrollment;
 mod enrollment_structs;
 mod storage;
 mod transport;
@@ -14,8 +15,8 @@ pub use protocol::{
     AddBookResult, AddShelfResult, AppendMetadata, AppendResult, BookSummary, BundleEntry,
     ClientRequest, ConflictPolicy, DeleteResult, DeletedEntrySummary, EntrySummary, ErrorCode,
     ErrorResponse, ImportBundleResult, MessageEntry, MessageHistoryEntry, RestoreResult,
-    SearchContextMatch, ServerResponse, ShelfSummary, TransferBundle, TransferScope,
-    TransferSelector,
+    RevokeCertResult, SearchContextMatch, ServerResponse, ShelfSummary, TransferBundle,
+    TransferScope, TransferSelector,
 };
 
 pub use enrollment_structs::{EnrollmentMetadata, SessionSummary, StoredEnrollment};
@@ -71,20 +72,8 @@ impl CcpClient {
         Self
     }
 
-    pub async fn subscribe(
-        &self,
-        server_url: &str,
-        session_selector: &str,
-    ) -> anyhow::Result<StoredEnrollment> {
-        let sessions = transport_helpers::list_remote_sessions(server_url).await?;
-        let session = sessions
-            .iter()
-            .find(|candidate| {
-                candidate.session_name == session_selector
-                    || candidate.session_id.to_string() == session_selector
-            })
-            .with_context(|| format!("open topic '{session_selector}' was not found"))?;
-        storage::save_subscription(server_url, session)
+    pub async fn enroll(&self, redeem_url: &str, token: &str) -> anyhow::Result<StoredEnrollment> {
+        enrollment::enroll_and_save(redeem_url, token).await
     }
 
     pub fn sessions(&self) -> anyhow::Result<Vec<SessionSummary>> {
@@ -412,9 +401,28 @@ impl SessionClient {
         .with_context(|| format!("failed to parse {}", bundle_path.display()))?;
         self.import_bundle(bundle, policy).await
     }
+
+    pub async fn revoke_client_cert(
+        &self,
+        client_common_name: &str,
+    ) -> anyhow::Result<RevokeCertResult> {
+        match perform_session_request(
+            &self.enrollment,
+            ClientRequest::RevokeClientCert {
+                session_id: self.enrollment.metadata.session_id,
+                client_common_name: client_common_name.to_string(),
+            },
+        )
+        .await?
+        {
+            ServerResponse::CertRevoked(result) => Ok(result),
+            other => unexpected_response("revoke_client_cert", other),
+        }
+    }
 }
 
 pub async fn run_cli() -> anyhow::Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
     commands::run().await
 }
 

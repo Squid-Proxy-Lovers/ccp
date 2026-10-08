@@ -12,10 +12,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 use once_cell::sync::Lazy;
 use protocol::{
-    AgentStatus, AppendMetadata, AppendResult, ClearStatusResult, ClientRequest, DeleteResult,
-    DeletedEntrySummary, EntrySummary, ErrorCode, ErrorResponse, MessageEntry, MessageHistoryEntry,
-    PROTOCOL_VERSION, RestoreResult, SearchContextMatch, ServerResponse, VersionInfo, decode,
-    encode,
+    AppendMetadata, AppendResult, ClientRequest, DeleteResult, DeletedEntrySummary, EntrySummary,
+    ErrorCode, ErrorResponse, MessageEntry, MessageHistoryEntry, RestoreResult, SearchContextMatch,
+    ServerResponse, decode, encode,
 };
 use rcgen::{CertificateParams, DnType, KeyPair};
 use reqwest::StatusCode;
@@ -331,7 +330,7 @@ impl Drop for TestServer {
 }
 
 impl EnrolledClient {
-    fn server_address(&self) -> anyhow::Result<String> {
+    pub async fn connect(&self) -> anyhow::Result<ProtocolConnection> {
         let port = self
             .mtls_endpoint
             .rsplit(':')
@@ -339,28 +338,11 @@ impl EnrolledClient {
             .context("missing mTLS port")?
             .parse::<u16>()
             .context("invalid mTLS port")?;
-        Ok(format!("127.0.0.1:{port}"))
-    }
-
-    pub async fn connect(&self) -> anyhow::Result<ProtocolConnection> {
-        let address = self.server_address()?;
+        let address = format!("127.0.0.1:{port}");
 
         for attempt in 0..=CONNECT_MAX_RETRIES {
             match self.connect_once(&address).await {
-                Ok(mut connection) => {
-                    let response = connection
-                        .request(ClientRequest::Handshake(VersionInfo {
-                            protocol_version: PROTOCOL_VERSION,
-                            client_version: "ccp-test-harness".to_string(),
-                        }))
-                        .await?;
-                    match response {
-                        ServerResponse::HandshakeOk(info) if info.compatible => {
-                            return Ok(connection);
-                        }
-                        other => return Err(extract_protocol_error(other)),
-                    }
-                }
+                Ok(connection) => return Ok(connection),
                 Err(_) if attempt < CONNECT_MAX_RETRIES => {
                     sleep(Duration::from_millis(50u64 * u64::from(attempt + 1))).await;
                     continue;
@@ -377,25 +359,6 @@ impl EnrolledClient {
         }
 
         unreachable!()
-    }
-
-    pub async fn request_without_handshake(
-        &self,
-        request: ClientRequest,
-    ) -> anyhow::Result<ServerResponse> {
-        let mut connection = self.connect_once(&self.server_address()?).await?;
-        connection.request(request).await
-    }
-
-    pub async fn handshake_with_version(
-        &self,
-        protocol_version: u32,
-    ) -> anyhow::Result<ServerResponse> {
-        self.request_without_handshake(ClientRequest::Handshake(VersionInfo {
-            protocol_version,
-            client_version: "compatibility-test".to_string(),
-        }))
-        .await
     }
 
     async fn connect_once(&self, address: &str) -> anyhow::Result<ProtocolConnection> {
@@ -442,79 +405,6 @@ impl EnrolledClient {
             return Err(extract_protocol_error(response));
         };
         Ok(entries)
-    }
-
-    pub async fn set_status(
-        &self,
-        team: &str,
-        agent_name: &str,
-        status: &str,
-    ) -> anyhow::Result<AgentStatus> {
-        let mut connection = self.connect().await?;
-        let response = connection
-            .request(ClientRequest::SetStatus {
-                session_id: self.session_id,
-                team: team.to_string(),
-                agent_name: agent_name.to_string(),
-                status: status.to_string(),
-            })
-            .await?;
-        let ServerResponse::StatusSet(status) = response else {
-            return Err(extract_protocol_error(response));
-        };
-        Ok(status)
-    }
-
-    pub async fn clear_status(
-        &self,
-        team: &str,
-        agent_name: &str,
-    ) -> anyhow::Result<ClearStatusResult> {
-        let mut connection = self.connect().await?;
-        let response = connection
-            .request(ClientRequest::ClearStatus {
-                session_id: self.session_id,
-                team: team.to_string(),
-                agent_name: agent_name.to_string(),
-            })
-            .await?;
-        let ServerResponse::StatusCleared(result) = response else {
-            return Err(extract_protocol_error(response));
-        };
-        Ok(result)
-    }
-
-    pub async fn list_team_status(&self, team: &str) -> anyhow::Result<Vec<AgentStatus>> {
-        let mut connection = self.connect().await?;
-        let response = connection
-            .request(ClientRequest::ListTeamStatus {
-                session_id: self.session_id,
-                team: team.to_string(),
-            })
-            .await?;
-        let ServerResponse::TeamStatuses(statuses) = response else {
-            return Err(extract_protocol_error(response));
-        };
-        Ok(statuses)
-    }
-
-    pub async fn search_team_status(
-        &self,
-        team: &str,
-        query: &str,
-    ) -> anyhow::Result<Vec<AgentStatus>> {
-        let mut connection = self.connect().await?;
-        let response = connection
-            .request(ClientRequest::SearchTeamStatus {
-                session_id: self.session_id,
-                team: team.to_string(),
-                query: query.to_string(),
-            })
-            .await?;
-        let ServerResponse::TeamStatuses(statuses) = response else {
-            return Err(extract_protocol_error(response));
-        };
-        Ok(statuses)
     }
 
     pub async fn get(&self, name: &str) -> anyhow::Result<MessageEntry> {

@@ -28,7 +28,6 @@ pub struct EnrollmentMetadata {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub(crate) struct EnrollmentMaterial {
     pub(crate) metadata: EnrollmentMetadata,
     pub(crate) ca_pem: String,

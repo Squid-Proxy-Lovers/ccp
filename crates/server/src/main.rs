@@ -4,11 +4,12 @@
 
 use std::io::{self, Write};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 const SERVER_INPUT_FORMATS: &str = r#"Input formats:
-  server [initial-session]
-  server create-session <session>"#;
+  server <session-name>
+  server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
+  server health <session>"#;
 
 #[derive(Parser)]
 #[command(name = "server", args_conflicts_with_subcommands = true)]
@@ -21,13 +22,42 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    CreateSession(CreateSessionArgs),
+    IssueToken(IssueTokenArgs),
+    Health(HealthArgs),
 }
 
 #[derive(Args)]
-struct CreateSessionArgs {
+struct HealthArgs {
     #[arg(value_name = "session")]
     session: String,
+}
+
+#[derive(Args)]
+struct IssueTokenArgs {
+    #[arg(value_name = "session")]
+    session: String,
+    #[arg(value_name = "read|read_write|admin")]
+    access_level: AccessLevel,
+    #[arg(long, value_name = "seconds")]
+    ttl: Option<u64>,
+}
+
+#[derive(Clone, ValueEnum)]
+enum AccessLevel {
+    Read,
+    #[value(name = "read_write")]
+    ReadWrite,
+    Admin,
+}
+
+impl AccessLevel {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Read => "read",
+            Self::ReadWrite => "read_write",
+            Self::Admin => "admin",
+        }
+    }
 }
 
 #[tokio::main]
@@ -36,22 +66,41 @@ async fn main() -> anyhow::Result<()> {
 
     if let Some(command) = cli.command {
         match command {
-            Command::CreateSession(args) => {
-                server::init::initialize_plain_server(None)?;
-                let session_id = server::init::create_session(&args.session)?;
-                println!("session={} session_id={}", args.session, session_id);
+            Command::IssueToken(args) => {
+                let token = server::init::issue_enrollment_token(
+                    &args.session,
+                    args.access_level.as_str(),
+                    args.ttl,
+                )?;
+                println!("{}", serde_json::to_string_pretty(&token)?);
+                return Ok(());
+            }
+            Command::Health(args) => {
+                let health = server::init::check_server_health(&args.session)?;
+                println!("{}", serde_json::to_string_pretty(&health)?);
                 return Ok(());
             }
         }
     }
 
-    server::run_plain_server(cli.session_name.as_deref()).await
+    server::run_server(
+        cli.session_name
+            .as_deref()
+            .expect("clap should require a session name when no subcommand is present"),
+    )
+    .await
 }
 
 fn parse_cli() -> Cli {
     // simple helper to parse the cli arguments
     match Cli::try_parse() {
-        Ok(cli) => cli,
+        Ok(cli) => {
+            if cli.command.is_none() && cli.session_name.is_none() {
+                eprintln!("{SERVER_INPUT_FORMATS}");
+                std::process::exit(2);
+            }
+            cli
+        }
         Err(error) => exit_with_cli_error(error, SERVER_INPUT_FORMATS),
     }
 }
