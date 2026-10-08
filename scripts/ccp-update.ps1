@@ -1,2 +1,4 @@
 $ErrorActionPreference = "Stop"
-Invoke-Expression (Invoke-RestMethod -Uri "http://192.168.130.34:1338/setup-client.ps1")
+$ServerUrl = if ($env:CCP_SERVER_URL) { $env:CCP_SERVER_URL.TrimEnd('/') } else { "http://127.0.0.1:1338" }
+$env:CCP_SERVER_URL = $ServerUrl
+Invoke-Expression (Invoke-RestMethod -Uri "$ServerUrl/setup-client.ps1")

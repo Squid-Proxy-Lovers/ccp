@@ -1,8 +1,13 @@
 #!/bin/sh
 set -eu
 
-SERVER_URL="http://192.168.130.34:1338"
-CLIENT_KEY="ccp-client-7b6c2f915e4a8d30"
+DEFAULT_SERVER_URL="http://127.0.0.1:1338"
+SERVER_URL="${CCP_SERVER_URL:-$DEFAULT_SERVER_URL}"
+SERVER_URL="${SERVER_URL%/}"
+: "${CCP_CLIENT_KEY:?Set CCP_CLIENT_KEY to the server client key}"
+CLIENT_KEY="$CCP_CLIENT_KEY"
+export CCP_CLIENT_KEY
+export CCP_SERVER_URL="$SERVER_URL"
 INSTALL_DIR="${CCP_INSTALL_DIR:-$HOME/.local/bin}"
 
 case "$(uname -s)" in
@@ -16,12 +21,18 @@ case "$(uname -m)" in
     *) echo "Unsupported CPU architecture" >&2; exit 1 ;;
 esac
 
+command -v curl >/dev/null 2>&1 || { echo "curl is required" >&2; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
+
 mkdir -p "$INSTALL_DIR"
-curl -fsSL "$SERVER_URL/downloads/ccp-client-${os}-${arch}" -o "$INSTALL_DIR/ccp-client"
-chmod 0755 "$INSTALL_DIR/ccp-client"
-curl -fsSL "$SERVER_URL/ccp-update" -o "$INSTALL_DIR/ccp-update"
-chmod 0755 "$INSTALL_DIR/ccp-update"
-"$INSTALL_DIR/ccp-client" subscribe-all
+staging=$(mktemp -d "$INSTALL_DIR/.ccp-download.XXXXXX")
+trap 'rm -rf "$staging"' EXIT HUP INT TERM
+curl -fsSL "$SERVER_URL/downloads/ccp-client-${os}-${arch}" -o "$staging/ccp-client"
+curl -fsSL "$SERVER_URL/ccp-update" -o "$staging/ccp-update"
+chmod 0755 "$staging/ccp-client" "$staging/ccp-update"
+mv "$staging/ccp-client" "$INSTALL_DIR/ccp-client"
+mv "$staging/ccp-update" "$INSTALL_DIR/ccp-update"
+"$INSTALL_DIR/ccp-client" subscribe-all --server "$SERVER_URL"
 
 MCP_VENV="$HOME/.ccp-client/mcp-venv"
 python3 -m venv "$MCP_VENV"
@@ -34,6 +45,7 @@ if command -v codex >/dev/null 2>&1; then
     codex mcp add ccp \
         --env "CCP_SERVER_URL=$SERVER_URL" \
         --env "CCP_CLIENT_KEY=$CLIENT_KEY" \
+        --env "CCP_CLIENT_BIN=$INSTALL_DIR/ccp-client" \
         -- "$MCP_CMD"
     echo "Configured Codex MCP."
 fi
@@ -43,6 +55,7 @@ if command -v claude >/dev/null 2>&1; then
     claude mcp add ccp --scope user \
         --env "CCP_SERVER_URL=$SERVER_URL" \
         --env "CCP_CLIENT_KEY=$CLIENT_KEY" \
+        --env "CCP_CLIENT_BIN=$INSTALL_DIR/ccp-client" \
         -- "$MCP_CMD"
     echo "Configured Claude Code MCP."
 fi

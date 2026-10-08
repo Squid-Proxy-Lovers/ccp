@@ -1,3 +1,10 @@
 #!/bin/sh
 set -eu
-curl -fsSL http://192.168.130.34:1338/setup-client.sh | sh
+DEFAULT_SERVER_URL="http://127.0.0.1:1338"
+SERVER_URL="${CCP_SERVER_URL:-$DEFAULT_SERVER_URL}"
+SERVER_URL="${SERVER_URL%/}"
+export CCP_SERVER_URL="$SERVER_URL"
+setup=$(mktemp)
+trap 'rm -f "$setup"' EXIT HUP INT TERM
+curl -fsSL "$SERVER_URL/setup-client.sh" -o "$setup"
+sh "$setup"

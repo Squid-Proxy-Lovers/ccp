@@ -5,22 +5,24 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ccp-server:43156f35425a
+    image: ccp-server:local
     container_name: ccp-server
     restart: unless-stopped
     init: true
     environment:
       CCP_SESSION_NAME: sdcl
-      CCP_AUTH_PORT: "1337"
-      CCP_MTLS_PORT: "1338"
-      CCP_ADVERTISE_HOST: 192.168.130.5
-      CCP_AUTH_BASE_URL: http://127.0.0.1:1337
-      CCP_AUTO_ISSUE_INITIAL_TOKENS: "0"
+      CCP_HTTP_PORT: "1338"
+      CCP_HTTP_LISTENER_ADDR: 0.0.0.0:1338
+      CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-192.168.130.5}
+      CCP_HTTP_BASE_URL: ${CCP_HTTP_BASE_URL:-http://192.168.130.5:1338}
+      CCP_CLIENT_KEY: ${CCP_CLIENT_KEY:?Set CCP_CLIENT_KEY}
+      CCP_ADMIN_KEY: ${CCP_ADMIN_KEY:?Set CCP_ADMIN_KEY}
+      CCP_DOWNLOAD_DIR: /var/lib/ccp/downloads
     ports:
-      - "127.0.0.1:1337:1337"
-      - "192.168.130.5:1338:1338"
+      - "${CCP_PUBLISH_HOST:-192.168.130.5}:1338:1338"
     volumes:
       - ccp-server-data:/var/lib/ccp/server
+      - ./downloads:/var/lib/ccp/downloads:ro
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777,noexec,nosuid,nodev
@@ -33,7 +35,7 @@ services:
     pids_limit: 512
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD-SHELL", "server health sdcl >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1338/health >/dev/null"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -10,10 +10,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - runner: macos-13
+          - runner: macos-15-intel
             artifact: ccp-client-darwin-x86_64
             source: target/release/client
-          - runner: macos-14
+          - runner: macos-15
             artifact: ccp-client-darwin-aarch64
             source: target/release/client
           - runner: ubuntu-24.04
@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo build --release -p client
+      - run: cargo build --locked --release -p client
       - shell: bash
         run: cp '${{ matrix.source }}' '${{ matrix.artifact }}'
       - uses: actions/upload-artifact@v4
@@ -45,9 +45,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install build
-      - run: python -m build --sdist --outdir downloads mcp
+      - run: python -m build --sdist --outdir dist mcp
       - shell: bash
-        run: cp downloads/ccp_mcp_server-*.tar.gz downloads/ccp-mcp.tar.gz
+        run: |
+          mkdir -p downloads
+          cp dist/ccp_mcp_server-*.tar.gz downloads/ccp-mcp.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: ccp-mcp.tar.gz

@@ -244,15 +244,11 @@ dependencies = [
  "anyhow",
  "once_cell",
  "protocol",
- "rcgen",
  "reqwest",
- "rusqlite",
- "rustls",
  "serde",
  "serde_json",
  "server",
  "tokio",
- "tokio-rustls",
  "uuid",
 ]
 

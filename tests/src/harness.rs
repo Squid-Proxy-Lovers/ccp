@@ -5,7 +5,7 @@
 use std::env;
 use std::fs;
 use std::net::TcpListener as StdTcpListener;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -14,61 +14,48 @@ use once_cell::sync::Lazy;
 use protocol::{
     AgentStatus, AppendMetadata, AppendResult, ClearStatusResult, ClientRequest, DeleteResult,
     DeletedEntrySummary, EntrySummary, ErrorCode, ErrorResponse, MessageEntry, MessageHistoryEntry,
-    PROTOCOL_VERSION, RestoreResult, SearchContextMatch, ServerResponse, VersionInfo, decode,
-    encode,
+    PROTOCOL_VERSION, RestoreResult, SearchContextMatch, ServerResponse, SessionMetadata,
+    VersionInfo,
 };
-use rcgen::{CertificateParams, DnType, KeyPair};
 use reqwest::StatusCode;
-use rusqlite::Connection;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName, pem::PemObject};
-use rustls::{ClientConfig, RootCertStore};
-use serde::Deserialize;
-use server::init::{
-    AUTH_LISTENER_ADDR_ENV, AUTH_SERVER_BASE_URL_ENV, MTLS_LISTENER_ADDR_ENV,
-    MTLS_SERVER_BASE_URL_ENV, SERVER_DATA_DIR_ENV,
-};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::Semaphore;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, timeout};
-use tokio_rustls::{TlsConnector, client::TlsStream};
+use tokio::time::sleep;
 use uuid::Uuid;
 
 static TEST_ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-static CRYPTO_PROVIDER_READY: Lazy<()> = Lazy::new(|| {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-});
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const TLS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const CONNECT_MAX_RETRIES: u32 = 3;
 const CONNECT_SETUP_CONCURRENCY: usize = 128;
 
 pub struct TestServer {
     _guard: MutexGuard<'static, ()>,
+    saved_env: Vec<(&'static str, Option<std::ffi::OsString>)>,
     data_dir: PathBuf,
-    server_task: JoinHandle<anyhow::Result<()>>,
+    server_task: Option<JoinHandle<anyhow::Result<()>>>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     pub session_name: String,
     pub session_id: i64,
-    pub auth_redeem_url: String,
-    pub mtls_endpoint: String,
+    pub base_url: String,
+    pub client_key: String,
+    pub admin_key: String,
     http_client: reqwest::Client,
 }
 
 #[derive(Clone)]
-pub struct EnrolledClient {
+pub struct SubscribedClient {
     pub session_name: String,
     pub session_id: i64,
-    pub access: String,
-    pub client_cn: String,
-    pub mtls_endpoint: String,
-    ca_pem: String,
-    client_cert_pem: String,
-    client_key_pem: String,
+    base_url: String,
+    client_key: String,
+    http_client: reqwest::Client,
 }
 
+/// A reusable HTTP pool. Requests remain independent JSON envelopes; there is
+/// no session handshake or certificate enrollment on the current transport.
 pub struct ProtocolConnection {
-    stream: TlsStream<TcpStream>,
+    base_url: String,
+    client_key: String,
+    subscribed_session_ids: Vec<i64>,
+    http_client: reqwest::Client,
 }
 
 #[derive(Clone)]
@@ -110,325 +97,181 @@ pub struct LoadResult {
     pub p99_ms: f64,
 }
 
-struct EnrollmentMaterial {
-    session_name: String,
-    session_id: i64,
-    access: String,
-    client_cn: String,
-    mtls_endpoint: String,
-    ca_pem: String,
-    client_cert_pem: String,
-    client_key_pem: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthRedeemResponse {
-    session: AuthSessionMetadata,
-    access: String,
-    client_common_name: String,
-    mtls_endpoint: String,
-    ca_cert_pem: String,
-    client_cert_pem: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AuthSessionMetadata {
-    #[serde(alias = "name")]
-    session_name: String,
-    #[serde(alias = "id")]
-    session_id: i64,
-}
-
 impl TestServer {
     pub async fn start() -> anyhow::Result<Self> {
-        Lazy::force(&CRYPTO_PROVIDER_READY);
+        Self::start_named(&format!("session-{}", Uuid::new_v4())).await
+    }
+
+    pub async fn start_named(session_name: &str) -> anyhow::Result<Self> {
         let guard = TEST_ENV_LOCK
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let auth_port = allocate_port()?;
-        let mtls_port = allocate_port()?;
-        let auth_addr = format!("127.0.0.1:{auth_port}");
-        let mtls_addr = format!("127.0.0.1:{mtls_port}");
-        let data_dir = std::env::temp_dir().join(format!("ccp-e2e-{}", Uuid::new_v4()));
-        let session_name = format!("session-{}", Uuid::new_v4());
-
-        set_server_env(&data_dir, &auth_addr, &mtls_addr);
-
-        let server_task = tokio::spawn({
-            let session_name = session_name.clone();
-            async move { server::run_server(&session_name).await }
-        });
-
-        wait_for_listener(&auth_addr).await?;
-        let session_id = query_session_id(&data_dir.join("ccp.sqlite3"), &session_name)?;
-
-        Ok(Self {
+            .unwrap_or_else(|error| error.into_inner());
+        let listener = StdTcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        drop(listener);
+        let base_url = format!("http://{address}");
+        let data_dir = env::temp_dir().join(format!("ccp-http-test-{}", Uuid::new_v4()));
+        let client_key = Uuid::new_v4().to_string();
+        let admin_key = Uuid::new_v4().to_string();
+        let values = [
+            ("CCP_SERVER_DATA_DIR", data_dir.as_os_str().to_owned()),
+            ("CCP_HTTP_LISTENER_ADDR", address.to_string().into()),
+            ("CCP_HTTP_BASE_URL", base_url.clone().into()),
+            ("CCP_CLIENT_KEY", client_key.clone().into()),
+            ("CCP_ADMIN_KEY", admin_key.clone().into()),
+        ];
+        let saved_env = values
+            .iter()
+            .map(|(key, _)| (*key, env::var_os(key)))
+            .collect();
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .build()?;
+        // Construct the cleanup guard before mutating environment or starting
+        // the task so failed startup restores the caller's configuration too.
+        let mut server = Self {
             _guard: guard,
+            saved_env,
             data_dir,
-            server_task,
-            session_name,
-            session_id,
-            auth_redeem_url: server::init::auth_redeem_url(),
-            mtls_endpoint: format!("https://localhost:{mtls_port}"),
-            http_client: reqwest::Client::new(),
-        })
-    }
-
-    pub async fn enroll_read(&self) -> anyhow::Result<EnrolledClient> {
-        let issued_token = self.issue_token("read")?;
-        self.redeem_token(&issued_token.token).await
-    }
-
-    pub async fn enroll_read_write(&self) -> anyhow::Result<EnrolledClient> {
-        let issued_token = self.issue_token("read_write")?;
-        self.redeem_token(&issued_token.token).await
-    }
-
-    pub async fn unauthenticated_list_status(
-        &self,
-    ) -> anyhow::Result<Result<ServerResponse, anyhow::Error>> {
-        let port = self
-            .mtls_endpoint
-            .rsplit(':')
-            .next()
-            .context("missing mTLS port")?
-            .parse::<u16>()
-            .context("invalid mTLS port")?;
-        let address = format!("127.0.0.1:{port}");
-        let ca_pem = fs::read(self.data_dir.join("ccp_ca_cert.pem"))
-            .context("failed to read CA certificate")?;
-
-        let mut root_store = RootCertStore::empty();
-        for cert in CertificateDer::pem_slice_iter(&ca_pem) {
-            root_store
-                .add(cert.context("failed to parse CA certificate")?)
-                .context("failed to add CA certificate to root store")?;
+            server_task: None,
+            shutdown: None,
+            session_name: session_name.to_string(),
+            session_id: 0,
+            base_url,
+            client_key,
+            admin_key,
+            http_client,
+        };
+        for (key, value) in values {
+            unsafe {
+                env::set_var(key, value);
+            }
         }
-
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-        let connector = TlsConnector::from(std::sync::Arc::new(config));
-        let stream = TcpStream::connect(&address)
+        let name = server.session_name.clone();
+        let (shutdown, receiver) = tokio::sync::oneshot::channel();
+        server.shutdown = Some(shutdown);
+        server.server_task = Some(tokio::spawn(async move {
+            server::run_plain_server_with_shutdown(Some(&name), async {
+                let _ = receiver.await;
+            })
             .await
-            .with_context(|| format!("failed to connect to {address}"))?;
-        let server_name =
-            ServerName::try_from("localhost".to_string()).context("invalid server name")?;
-        let tls_stream = connector.connect(server_name, stream).await;
-        match tls_stream {
-            Ok(stream) => {
-                let mut connection = ProtocolConnection { stream };
-                Ok(connection
-                    .request(ClientRequest::List {
-                        session_id: self.session_id,
-                    })
-                    .await)
-            }
-            Err(error) => Ok(Err(
-                anyhow::Error::new(error).context("TLS handshake failed")
-            )),
-        }
-    }
-
-    pub fn issue_token(
-        &self,
-        access_level: &str,
-    ) -> anyhow::Result<server::init::IssuedEnrollmentToken> {
-        server::init::issue_enrollment_token(&self.session_name, access_level, None)
-    }
-
-    pub async fn redeem_token(&self, token: &str) -> anyhow::Result<EnrolledClient> {
-        let client_key =
-            KeyPair::generate().context("failed to generate enrollment client keypair")?;
-        let mut client_params =
-            CertificateParams::new(Vec::<String>::new()).context("failed to build CSR params")?;
-        client_params.distinguished_name.push(
-            DnType::CommonName,
-            format!("test-client-{}", Uuid::new_v4()),
-        );
-        let csr_pem = client_params
-            .serialize_request(&client_key)
-            .context("failed to serialize enrollment CSR")?
-            .pem()
-            .context("failed to serialize CSR to PEM")?;
-
-        const MAX_RETRIES: u32 = 3;
-        for attempt in 0..=MAX_RETRIES {
-            let result = self
+        }));
+        for _ in 0..100 {
+            if let Ok(response) = server
                 .http_client
-                .post(&self.auth_redeem_url)
-                .json(&serde_json::json!({
-                    "token": token,
-                    "csr_pem": csr_pem,
-                }))
+                .get(format!("{}/health", server.base_url))
                 .send()
-                .await;
+                .await
+                && response.status().is_success()
+                && response.json::<serde_json::Value>().await?["status"] == "ok"
+            {
+                let sessions: Vec<SessionMetadata> = server
+                    .http_client
+                    .get(format!("{}/v1/sessions", server.base_url))
+                    .header("X-CCP-Client-Key", &server.client_key)
+                    .send()
+                    .await?
+                    .error_for_status()?
+                    .json()
+                    .await?;
+                server.session_id = sessions
+                    .into_iter()
+                    .find(|session| session.session_name == server.session_name)
+                    .context("initial session missing from discovery")?
+                    .session_id;
+                return Ok(server);
+            }
+            if server
+                .server_task
+                .as_ref()
+                .is_some_and(|task| task.is_finished())
+            {
+                let result = server.server_task.take().unwrap().await?;
+                result?;
+                bail!("HTTP server stopped before becoming ready");
+            }
+            sleep(Duration::from_millis(50)).await;
+        }
+        server.stop().await?;
+        bail!("HTTP server did not become ready")
+    }
 
-            let response = match result {
-                Ok(r) => r,
-                Err(e) => {
-                    if attempt < MAX_RETRIES {
-                        sleep(Duration::from_millis(50u64 * u64::from(attempt + 1))).await;
-                        continue;
-                    }
-                    anyhow::bail!(
-                        "failed to redeem auth token after {} attempts: {}",
-                        MAX_RETRIES + 1,
-                        e
-                    );
-                }
-            };
-
-            let response = match response.error_for_status() {
-                Ok(r) => r,
-                Err(e) => {
-                    if attempt < MAX_RETRIES {
-                        sleep(Duration::from_millis(50u64 * u64::from(attempt + 1))).await;
-                        continue;
-                    }
-                    return Err(
-                        anyhow::Error::new(e).context("auth redeem returned an error status")
-                    );
-                }
-            };
-
-            match response.json::<AuthRedeemResponse>().await {
-                Ok(body) => {
-                    let material = parse_enrollment_response(body, client_key.serialize_pem());
-                    return Ok(EnrolledClient {
-                        session_name: material.session_name,
-                        session_id: material.session_id,
-                        access: material.access,
-                        client_cn: material.client_cn,
-                        mtls_endpoint: material.mtls_endpoint,
-                        ca_pem: material.ca_pem,
-                        client_cert_pem: material.client_cert_pem,
-                        client_key_pem: material.client_key_pem,
-                    });
-                }
-                Err(e) => {
-                    if attempt < MAX_RETRIES {
-                        sleep(Duration::from_millis(50u64 * u64::from(attempt + 1))).await;
-                        continue;
-                    }
-                    return Err(
-                        anyhow::Error::new(e).context("failed to decode auth redeem JSON response")
-                    );
+    /// Finish the server's journal and snapshot before restoring process env.
+    pub async fn stop(mut self) -> anyhow::Result<()> {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(mut task) = self.server_task.take() {
+            match tokio::time::timeout(Duration::from_secs(10), &mut task).await {
+                Ok(result) => result??,
+                Err(_) => {
+                    task.abort();
+                    let _ = task.await;
+                    bail!("HTTP server shutdown timed out");
                 }
             }
         }
+        Ok(())
+    }
 
-        unreachable!()
+    pub async fn subscribe(&self) -> anyhow::Result<SubscribedClient> {
+        let metadata: SessionMetadata = self
+            .http_client
+            .post(format!("{}/v1/subscribe", self.base_url))
+            .header("X-CCP-Client-Key", &self.client_key)
+            .json(&serde_json::json!({ "session": self.session_name }))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        Ok(SubscribedClient {
+            session_name: metadata.session_name,
+            session_id: metadata.session_id,
+            base_url: self.base_url.clone(),
+            client_key: self.client_key.clone(),
+            http_client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(10))
+                .build()?,
+        })
     }
 }
 
 impl Drop for TestServer {
     fn drop(&mut self) {
-        self.server_task.abort();
-        clear_server_env();
+        if let Some(task) = &self.server_task {
+            task.abort();
+        }
+        for (key, value) in &self.saved_env {
+            unsafe {
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+        }
         let _ = fs::remove_dir_all(&self.data_dir);
     }
 }
 
-impl EnrolledClient {
-    fn server_address(&self) -> anyhow::Result<String> {
-        let port = self
-            .mtls_endpoint
-            .rsplit(':')
-            .next()
-            .context("missing mTLS port")?
-            .parse::<u16>()
-            .context("invalid mTLS port")?;
-        Ok(format!("127.0.0.1:{port}"))
-    }
-
+impl SubscribedClient {
     pub async fn connect(&self) -> anyhow::Result<ProtocolConnection> {
-        let address = self.server_address()?;
-
-        for attempt in 0..=CONNECT_MAX_RETRIES {
-            match self.connect_once(&address).await {
-                Ok(mut connection) => {
-                    let response = connection
-                        .request(ClientRequest::Handshake(VersionInfo {
-                            protocol_version: PROTOCOL_VERSION,
-                            client_version: "ccp-test-harness".to_string(),
-                        }))
-                        .await?;
-                    match response {
-                        ServerResponse::HandshakeOk(info) if info.compatible => {
-                            return Ok(connection);
-                        }
-                        other => return Err(extract_protocol_error(other)),
-                    }
-                }
-                Err(_) if attempt < CONNECT_MAX_RETRIES => {
-                    sleep(Duration::from_millis(50u64 * u64::from(attempt + 1))).await;
-                    continue;
-                }
-                Err(error) => {
-                    return Err(error).with_context(|| {
-                        format!(
-                            "failed to establish mTLS connection to {address} after {} attempts",
-                            CONNECT_MAX_RETRIES + 1
-                        )
-                    });
-                }
-            }
+        let mut connection = ProtocolConnection {
+            base_url: self.base_url.clone(),
+            client_key: self.client_key.clone(),
+            subscribed_session_ids: vec![self.session_id],
+            http_client: self.http_client.clone(),
+        };
+        match connection
+            .request(ClientRequest::Handshake(VersionInfo {
+                protocol_version: PROTOCOL_VERSION,
+                client_version: "ccp-http-test".to_string(),
+            }))
+            .await?
+        {
+            ServerResponse::HandshakeOk(info) if info.compatible => Ok(connection),
+            other => Err(extract_protocol_error(other)),
         }
-
-        unreachable!()
-    }
-
-    pub async fn request_without_handshake(
-        &self,
-        request: ClientRequest,
-    ) -> anyhow::Result<ServerResponse> {
-        let mut connection = self.connect_once(&self.server_address()?).await?;
-        connection.request(request).await
-    }
-
-    pub async fn handshake_with_version(
-        &self,
-        protocol_version: u32,
-    ) -> anyhow::Result<ServerResponse> {
-        self.request_without_handshake(ClientRequest::Handshake(VersionInfo {
-            protocol_version,
-            client_version: "compatibility-test".to_string(),
-        }))
-        .await
-    }
-
-    async fn connect_once(&self, address: &str) -> anyhow::Result<ProtocolConnection> {
-        let mut root_store = RootCertStore::empty();
-        for cert in CertificateDer::pem_slice_iter(self.ca_pem.as_bytes()) {
-            root_store
-                .add(cert.context("failed to parse CA certificate")?)
-                .context("failed to add CA certificate to root store")?;
-        }
-
-        let cert_chain = CertificateDer::pem_slice_iter(self.client_cert_pem.as_bytes())
-            .collect::<Result<Vec<_>, _>>()
-            .context("failed to parse client certificate chain")?;
-        let private_key = PrivateKeyDer::from_pem_slice(self.client_key_pem.as_bytes())
-            .context("failed to parse client private key")?;
-
-        let config = ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_client_auth_cert(cert_chain, private_key)
-            .context("failed to build rustls client config")?;
-        let connector = TlsConnector::from(std::sync::Arc::new(config));
-        let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
-            .await
-            .context("TCP connect timed out")?
-            .with_context(|| format!("failed to connect to {address}"))?;
-        stream.set_nodelay(true).ok();
-        let server_name =
-            ServerName::try_from("localhost".to_string()).context("invalid server name")?;
-        let stream = timeout(TLS_CONNECT_TIMEOUT, connector.connect(server_name, stream))
-            .await
-            .context("mTLS handshake timed out")?
-            .context("mTLS handshake failed")?;
-        Ok(ProtocolConnection { stream })
     }
 
     pub async fn list(&self) -> anyhow::Result<Vec<EntrySummary>> {
@@ -858,19 +701,48 @@ impl EnrolledClient {
 
 impl ProtocolConnection {
     pub async fn request(&mut self, request: ClientRequest) -> anyhow::Result<ServerResponse> {
-        write_frame(&mut self.stream, &request).await?;
-        read_frame(&mut self.stream)
-            .await?
-            .context("server closed the TLS session before responding")
+        let response = self
+            .http_client
+            .post(format!("{}/v1/request", self.base_url))
+            .header("X-CCP-Client-Key", &self.client_key)
+            .json(&serde_json::json!({
+                "subscribed_session_ids": self.subscribed_session_ids, "request": request,
+            }))
+            .send()
+            .await
+            .context("HTTP request failed")?;
+        let status = response.status();
+        let body = response.text().await?;
+        serde_json::from_str(&body)
+            .with_context(|| format!("invalid HTTP response ({status}): {body}"))
     }
 }
 
 pub async fn run_persistent_load(
-    clients: Vec<EnrolledClient>,
+    clients: Vec<SubscribedClient>,
     requests_per_client: usize,
     operation: LoadOperation,
 ) -> anyhow::Result<LoadResult> {
-    let total_requests = clients.len() * requests_per_client;
+    if clients.is_empty() || requests_per_client == 0 {
+        bail!("load requires clients and requests");
+    }
+    match &operation {
+        LoadOperation::Get { entry_names }
+        | LoadOperation::DeleteRestore { entry_names }
+        | LoadOperation::Mixed { entry_names, .. }
+            if entry_names.is_empty() =>
+        {
+            bail!("load operation requires seed entries");
+        }
+        LoadOperation::DeleteRestore { entry_names } if entry_names.len() < clients.len() => {
+            bail!("delete/restore load requires a distinct entry per client");
+        }
+        _ => {}
+    }
+    let total_requests = clients
+        .len()
+        .checked_mul(requests_per_client)
+        .context("load request count overflow")?;
     let established_connections = establish_persistent_connections(clients).await?;
     let mut join_set = tokio::task::JoinSet::new();
 
@@ -987,17 +859,26 @@ pub async fn run_persistent_load(
                         },
                     },
                 };
+                let expected = match &request {
+                    ClientRequest::List { .. } | ClientRequest::SearchEntries { .. } => "summaries",
+                    ClientRequest::Get { .. } => "entry",
+                    ClientRequest::SearchContext { .. } => "context",
+                    ClientRequest::Append { .. } => "append",
+                    ClientRequest::Delete { .. } => "delete",
+                    ClientRequest::RestoreDeleted { .. } => "restore",
+                    _ => bail!("unsupported load request"),
+                };
                 let response = connection.request(request).await?;
-                match response {
-                    ServerResponse::EntrySummaries(_)
-                    | ServerResponse::AppendResult(_)
-                    | ServerResponse::Entry(_)
-                    | ServerResponse::SearchContextResults(_)
-                    | ServerResponse::Restored(_) => {}
-                    ServerResponse::Deleted(result) => {
+                match (expected, response) {
+                    ("summaries", ServerResponse::EntrySummaries(_))
+                    | ("append", ServerResponse::AppendResult(_))
+                    | ("entry", ServerResponse::Entry(_))
+                    | ("context", ServerResponse::SearchContextResults(_))
+                    | ("restore", ServerResponse::Restored(_)) => {}
+                    ("delete", ServerResponse::Deleted(result)) => {
                         archived_entry_key = Some(result.entry_key);
                     }
-                    other => return Err(extract_protocol_error(other)),
+                    (_, other) => return Err(extract_protocol_error(other)),
                 }
                 latencies.push(request_started.elapsed());
             }
@@ -1014,8 +895,8 @@ pub async fn run_persistent_load(
 }
 
 async fn establish_persistent_connections(
-    clients: Vec<EnrolledClient>,
-) -> anyhow::Result<Vec<(usize, EnrolledClient, ProtocolConnection)>> {
+    clients: Vec<SubscribedClient>,
+) -> anyhow::Result<Vec<(usize, SubscribedClient, ProtocolConnection)>> {
     let total_clients = clients.len();
     let connect_limit = std::sync::Arc::new(Semaphore::new(
         CONNECT_SETUP_CONCURRENCY.min(total_clients.max(1)),
@@ -1025,7 +906,7 @@ async fn establish_persistent_connections(
     for (client_index, client) in clients.into_iter().enumerate() {
         let connect_limit = std::sync::Arc::clone(&connect_limit);
         join_set.spawn(async move {
-            // Avoid a localhost TCP/TLS thundering herd before the benchmarked request phase.
+            // Avoid a localhost HTTP connection thundering herd before the benchmarked request phase.
             let _permit = connect_limit
                 .acquire_owned()
                 .await
@@ -1101,118 +982,4 @@ fn extract_protocol_error(response: ServerResponse) -> anyhow::Error {
         }
         other => anyhow::anyhow!("unexpected protocol response: {other:?}"),
     }
-}
-
-fn allocate_port() -> anyhow::Result<u16> {
-    let listener = StdTcpListener::bind("127.0.0.1:0").context("failed to allocate a port")?;
-    Ok(listener.local_addr()?.port())
-}
-
-fn set_server_env(data_dir: &Path, auth_addr: &str, mtls_addr: &str) {
-    let auth_base_url = format!("http://{auth_addr}");
-    let mtls_port = mtls_addr.rsplit(':').next().unwrap_or("");
-    let mtls_base_url = format!("https://localhost:{mtls_port}");
-    // Tests serialize access to the process environment via TEST_ENV_LOCK.
-    unsafe {
-        env::set_var(SERVER_DATA_DIR_ENV, data_dir);
-        env::set_var(AUTH_LISTENER_ADDR_ENV, auth_addr);
-        env::set_var(MTLS_LISTENER_ADDR_ENV, mtls_addr);
-        env::set_var(AUTH_SERVER_BASE_URL_ENV, auth_base_url);
-        env::set_var(MTLS_SERVER_BASE_URL_ENV, mtls_base_url);
-    }
-}
-
-fn clear_server_env() {
-    unsafe {
-        env::remove_var(SERVER_DATA_DIR_ENV);
-        env::remove_var(AUTH_LISTENER_ADDR_ENV);
-        env::remove_var(MTLS_LISTENER_ADDR_ENV);
-        env::remove_var(AUTH_SERVER_BASE_URL_ENV);
-        env::remove_var(MTLS_SERVER_BASE_URL_ENV);
-    }
-}
-
-async fn wait_for_listener(addr: &str) -> anyhow::Result<()> {
-    for _ in 0..100 {
-        if let Ok(mut stream) = TcpStream::connect(addr).await {
-            let probe = format!("GET /ready HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n");
-            if stream.write_all(probe.as_bytes()).await.is_ok() {
-                return Ok(());
-            }
-        }
-        sleep(Duration::from_millis(50)).await;
-    }
-    bail!("timed out waiting for listener at {addr}");
-}
-
-fn query_session_id(db_path: &Path, session_name: &str) -> anyhow::Result<i64> {
-    let connection = Connection::open(db_path)
-        .with_context(|| format!("failed to open {}", db_path.display()))?;
-    connection
-        .query_row(
-            "SELECT id FROM sessions WHERE name = ?1",
-            [session_name],
-            |row| row.get(0),
-        )
-        .with_context(|| format!("failed to load session id for {session_name}"))
-}
-
-fn parse_enrollment_response(
-    response: AuthRedeemResponse,
-    client_key_pem: String,
-) -> EnrollmentMaterial {
-    EnrollmentMaterial {
-        session_name: response.session.session_name,
-        session_id: response.session.session_id,
-        access: response.access,
-        client_cn: response.client_common_name,
-        mtls_endpoint: response.mtls_endpoint,
-        ca_pem: response.ca_cert_pem,
-        client_cert_pem: response.client_cert_pem,
-        client_key_pem,
-    }
-}
-
-async fn read_frame<T, R>(reader: &mut R) -> anyhow::Result<Option<T>>
-where
-    T: serde::de::DeserializeOwned,
-    R: AsyncRead + Unpin,
-{
-    let mut header = [0u8; 4];
-    match reader.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error).context("failed to read frame header"),
-    }
-
-    let frame_len = u32::from_be_bytes(header) as usize;
-    if frame_len == 0 {
-        bail!("empty frames are not allowed");
-    }
-
-    let mut payload = vec![0u8; frame_len];
-    reader
-        .read_exact(&mut payload)
-        .await
-        .context("failed to read frame payload")?;
-    decode(&payload).context("failed to decode frame").map(Some)
-}
-
-async fn write_frame<T, W>(writer: &mut W, value: &T) -> anyhow::Result<()>
-where
-    T: serde::Serialize,
-    W: AsyncWrite + Unpin,
-{
-    let payload = encode(value).context("failed to encode frame")?;
-    let frame_len = u32::try_from(payload.len()).context("encoded frame is too large")?;
-    writer
-        .write_all(&frame_len.to_be_bytes())
-        .await
-        .context("failed to write frame header")?;
-    writer
-        .write_all(&payload)
-        .await
-        .context("failed to write frame payload")?;
-    writer.flush().await.context("failed to flush frame")?;
-    Ok(())
 }

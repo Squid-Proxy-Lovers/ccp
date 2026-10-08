@@ -26,11 +26,13 @@
 
 When you have multiple agents working together they need somewhere to share context. One agent finds something, another agent needs to know about it. Right now most setups either pipe everything through the orchestrator or dump state into shared files. Both fall apart once you have more than a couple agents or need any kind of access control.
 
-CCP is a dedicated coordination layer. One server hosts multiple isolated sessions over a plaintext HTTP endpoint. Clients subscribe only to the sessions they want to use. Everything is persisted and searchable, so agents can pick up where others left off.
+CCP is a dedicated coordination layer. One server hosts multiple isolated sessions over a plaintext HTTP endpoint. Clients subscribe only to the sessions they want to use. Entries are journaled and searchable, and graceful shutdown persists the complete state so agents can pick up where others left off.
 
-This is useful if you're building multi-agent workflows where agents need to coordinate without going through a single bottleneck. Research agents can dump findings into shared entries. Planning agents can read those findings and write plans. Review agents can search across everything and flag issues. Each one operates independently with its own connection and permissions. See [use cases](#use-cases) for real examples.
+This is useful if you're building multi-agent workflows where agents need to coordinate without going through a single bottleneck. Research agents can dump findings into shared entries. Planning agents can read those findings and write plans. Review agents can search across everything and flag issues. Each agent operates independently; the current HTTP transport shares a worker identity and records optional agent attribution. See [use cases](#use-cases) for real examples.
 
 ## Install
+
+This draft targets `0.2.0` and introduces the HTTP protocol. Build from this checkout to test it; existing `0.1.x` releases on main use the older transport.
 
 ```bash
 # Server + client (downloads prebuilt binaries)
@@ -67,14 +69,19 @@ Run `make help` for the available local build, lint, formatting, and Docker targ
 Start a server with an optional initial session:
 
 ```bash
+export CCP_ADMIN_KEY="<configured-admin-key>"
+export CCP_CLIENT_KEY="<configured-client-key>"
 ccp-server my-session
 ```
 
 Create more sessions while the server is running. Client setup automatically connects every open topic:
 
 ```bash
-ccp-manage add second-session
-ccp-client subscribe-all
+export CCP_SERVER_URL=http://127.0.0.1:1338
+curl -fsS -X POST "$CCP_SERVER_URL/v1/admin/sessions" \
+  -H "X-CCP-Admin-Key: $CCP_ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"session_name":"second-session"}'
+ccp-client subscribe-all --server "$CCP_SERVER_URL"
 ```
 
 Create some structure and write data:
@@ -105,9 +112,9 @@ ccp-client append my-session day1 --shelf notes --book standup "follow-up: resol
 
 ## How subscriptions work
 
-The server exposes one plaintext HTTP endpoint at `http://192.168.130.34:1338`. It can host any number of sessions in one database. The management script creates/deletes sessions, while `subscribe` saves a chosen server/session pair locally. Every request carries its subscribed session IDs, and the server rejects requests outside that selection.
+The server defaults to the loopback plaintext HTTP endpoint `http://127.0.0.1:1338`; configure `CCP_HTTP_LISTENER_ADDR` and `CCP_HTTP_BASE_URL` for other deployments. It can host any number of sessions in one database. The management script creates/deletes sessions, while `subscribe` saves a chosen server/session pair locally. Every request carries its selected session IDs. This is request-local selection, rather than a persistent server subscription or a per-agent authorization role. Session IDs are never reused after deletion; subscriptions are stored by server and session identity. Qualify ambiguous selectors as `session@http://host:1338`.
 
-There are no tokens, certificates, TLS, or access-control roles. Bind to loopback or protect the service at the network layer if it should not be public.
+The active transport does not use certificate enrollment, TLS, or certificate access roles. Configure client/admin keys explicitly; public topics accept ordinary requests without a client key, private requests require `X-CCP-Client-Key`, and management requires `X-CCP-Admin-Key`. See [server configuration](docs/server.md) for deployment and upgrade requirements.
 
 ## Docker
 
@@ -125,7 +132,7 @@ Create and subscribe to another session:
 
 ```bash
 ccp-manage add another-session
-ccp-client subscribe --server http://192.168.130.34:1338 another-session
+ccp-client subscribe --server http://127.0.0.1:1338 another-session
 ```
 
 Override the session or advertised host:
@@ -146,6 +153,7 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 
 ### Read operations
 
+- `ccp-client health <session>` check the selected server
 - `ccp-client remote-sessions --server <http-url>` discover open topics
 - `ccp-client subscribe --server <http-url> <session>` subscribe by name or id
 - `ccp-client sessions` list saved subscriptions
@@ -158,7 +166,7 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 - `ccp-client search-shelves <session> <query>`
 - `ccp-client search-books <session> <query>`
 - `ccp-client search-context <session> <query>` full-text in entry content
-- `ccp-client search-deleted <session> <query>` archived deleted entries
+- `ccp-client search-deleted <session> [query]` filter archived entries, or list all with no query
 - `ccp-client team-status <session> --team <shelf>` list active work in a challenge team
 - `ccp-client search-team-status <session> --team <shelf> <query>` search agent names and work in a team
 - `ccp-client brief-me <session>` session overview in one call (structure, recent entries, labels)
@@ -188,20 +196,27 @@ After installing, `ccp-client` and `ccp-server` are available in your PATH.
 
 ```bash
 # macOS and Linux
-curl -fsSL http://192.168.130.34:1338/setup-client.sh | sh
+export CCP_SERVER_URL=http://127.0.0.1:1338
+export CCP_CLIENT_KEY="<configured-client-key>"
+curl -fsS "$CCP_SERVER_URL/setup-client.sh" -o /tmp/ccp-setup.sh
+sh /tmp/ccp-setup.sh
 
 # Windows PowerShell
-irm http://192.168.130.34:1338/setup-client.ps1 | iex
+$env:CCP_SERVER_URL = "http://127.0.0.1:1338"
+$env:CCP_CLIENT_KEY = "<configured-client-key>"
+irm "$env:CCP_SERVER_URL/setup-client.ps1" | iex
 ```
 
-The installers download the platform client, install the MCP bridge, embed the client endpoint/key, and configure Codex and Claude Code when their CLIs are present.
+The installers download the platform client, install the MCP bridge, and pass the configured endpoint/key and installed client path to Codex and Claude Code when their CLIs are present. Hosted scripts contain the advertised URL, and never embed configured server credentials. Keep the client key configured for subsequent CLI commands against private sessions.
 
 ### Management
 
 The management script exposes only `add`, `delete`, and `stats`:
 
 ```bash
-curl -fsSL http://192.168.130.34:1338/ccp-manage -o ccp-manage
+export CCP_SERVER_URL=http://127.0.0.1:1338
+export CCP_ADMIN_KEY="<configured-admin-key>"
+curl -fsS "$CCP_SERVER_URL/ccp-manage" -o ccp-manage
 chmod +x ccp-manage
 ./ccp-manage add topic-name
 ./ccp-manage stats topic-name
@@ -233,7 +248,7 @@ Entries are the core unit. Each entry lives at a unique path: shelf/book/name. C
 
 ## Access and management
 
-Open topics are discoverable and subscribable by agents. The client setup embeds the shared HTTP API key. A separate admin key exists only in the management scripts, whose API surface is limited to add session, delete session, and session stats.
+Open topics are discoverable and subscribable by agents. Client setup forwards the configured shared key to the local MCP host. Management scripts require the admin key from the caller; the admin API also supports activity, statistics, and global/session instruction boards. The dashboard is served at `/admin`.
 
 ## Droplets
 
@@ -287,7 +302,7 @@ We pointed three agents at a codebase: one for security audit, one for architect
 
 ### Persistent research across sessions
 
-An agent spent two hours mapping out an API surface and wrote everything to CCP. Three days later we enrolled a new agent into the same session. It searched the old entries, found the endpoint map, and picked up where the first one left off. The data persists across server restarts so there wasn't a need for re-prompting and no context window issues.
+An agent spent two hours mapping out an API surface and wrote everything to CCP. Three days later we subscribed a new agent into the same session. It searched the old entries, found the endpoint map, and picked up where the first one left off. The data persists across server restarts so there wasn't a need for re-prompting and no context window issues.
 
 ### Two agents, one feature
 

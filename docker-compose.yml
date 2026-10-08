@@ -3,13 +3,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: cephalopod-coordination-protocol-server:latest
+    image: ${CCP_IMAGE:-cephalopod-coordination-protocol-server:latest}
     container_name: ccp-server
     restart: unless-stopped
     environment:
       CCP_SESSION_NAME: ${CCP_SESSION_NAME:-my-session}
       CCP_HTTP_PORT: ${CCP_HTTP_PORT:-1338}
-      CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-192.168.130.34}
+      CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-127.0.0.1}
+      CCP_HTTP_LISTENER_ADDR: ${CCP_HTTP_LISTENER_ADDR:-0.0.0.0:${CCP_HTTP_PORT:-1338}}
+      CCP_HTTP_BASE_URL: ${CCP_HTTP_BASE_URL:-http://${CCP_ADVERTISE_HOST:-127.0.0.1}:${CCP_HTTP_PORT:-1338}}
       CCP_CLIENT_KEY: ${CCP_CLIENT_KEY:-ccp-client-7b6c2f915e4a8d30}
       CCP_ADMIN_KEY: ${CCP_ADMIN_KEY:-ccp-admin-f1a847d36c509e2b}
       CCP_DOWNLOAD_DIR: /var/lib/ccp/downloads

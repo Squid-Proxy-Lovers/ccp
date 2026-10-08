@@ -1,8 +1,10 @@
 #!/bin/sh
 set -eu
 
-SERVER_URL="http://192.168.130.34:1338"
-ADMIN_KEY="ccp-admin-f1a847d36c509e2b"
+DEFAULT_SERVER_URL="http://127.0.0.1:1338"
+SERVER_URL="${CCP_SERVER_URL:-$DEFAULT_SERVER_URL}"
+SERVER_URL="${SERVER_URL%/}"
+
 
 usage() {
     echo "Usage: ccp-manage add <session> | delete <session> | stats <session>" >&2
@@ -17,27 +19,31 @@ if [ "$#" -eq 0 ]; then
     exit 0
 fi
 [ "$#" -eq 2 ] || usage
+: "${CCP_ADMIN_KEY:?Set CCP_ADMIN_KEY to the server admin key}"
+ADMIN_KEY="$CCP_ADMIN_KEY"
 command_name="$1"
 session="$2"
+command -v python3 >/dev/null 2>&1 || { echo "python3 is required" >&2; exit 1; }
+encoded=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$session")
 
 case "$command_name" in
     add)
-        escaped=$(printf '%s' "$session" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        payload=$(python3 -c 'import json, sys; print(json.dumps({"session_name": sys.argv[1]}))' "$session")
         curl -fsS -X POST \
             -H "Content-Type: application/json" \
             -H "X-CCP-Admin-Key: $ADMIN_KEY" \
-            -d "{\"session_name\":\"$escaped\"}" \
+            --data "$payload" \
             "$SERVER_URL/v1/admin/sessions"
         ;;
     delete)
         curl -fsS -X DELETE \
             -H "X-CCP-Admin-Key: $ADMIN_KEY" \
-            "$SERVER_URL/v1/admin/sessions/$session"
+            "$SERVER_URL/v1/admin/sessions/$encoded"
         ;;
     stats)
         curl -fsS \
             -H "X-CCP-Admin-Key: $ADMIN_KEY" \
-            "$SERVER_URL/v1/admin/sessions/$session/stats"
+            "$SERVER_URL/v1/admin/sessions/$encoded/stats"
         ;;
     *) usage ;;
 esac

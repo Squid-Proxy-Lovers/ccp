@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS builder
+FROM rust:1.88.0-bookworm AS builder
 
 WORKDIR /app
 
@@ -19,12 +19,12 @@ RUN mkdir -p /app/crates/client/src && echo "" > /app/crates/client/src/lib.rs &
 COPY tests/Cargo.toml /app/tests/Cargo.toml
 RUN mkdir -p /app/tests/src && echo "" > /app/tests/src/lib.rs
 
-RUN cargo build --release -p server
+RUN cargo build --locked --release -p server
 
 FROM debian:bookworm-slim AS runtime
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system ccp \
     && useradd --system --gid ccp --create-home --home-dir /var/lib/ccp ccp \

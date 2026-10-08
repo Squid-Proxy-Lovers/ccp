@@ -6,7 +6,7 @@
 # Copyright (C) 2026 Squid Proxy Lovers
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-set -uo pipefail
+set -euo pipefail
 
 REPO="squid-proxy-lovers/ccp"
 REPO_RAW="https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main"
@@ -15,6 +15,11 @@ INSTALL_DIR="${HOME}/.local/bin"
 SESSION_NAME="my-session"
 MODE="both"
 FROM_SOURCE=false
+INSTALL_TMP_DIR=""
+cleanup_install() {
+    if [ -n "$INSTALL_TMP_DIR" ]; then rm -rf "$INSTALL_TMP_DIR"; fi
+}
+trap cleanup_install EXIT
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -36,24 +41,24 @@ step()  { echo -e "${BOLD}${CYAN}>>>${RESET} $1"; }
 banner() {
     echo ""
     echo -e "${MAGENTA}${BOLD}"
-    cat <<'SQUID'                                                                                                                        
-                                        ██████████                                      
-                                    ████░░░░░░░░░░████                                  
-                                  ██░░░░░░░░░░░░░░░░░░██                                
-                                ██░░░░░░░░░░░░░░░░░░░░░░██                              
-                                ██░░░░░░░░░░░░░░░░░░░░░░██                              
-                              ██░░░░░░░░░░░░░░░░░░░░░░░░░░██                            
-                              ██░░        ░░░░░░        ░░██                            
-                              ██░░          ░░          ░░██                            
-                              ██░░    ████  ░░  ████    ░░██                            
-                              ██░░    ██████████████    ░░██                            
-                                ██░░  ░░██░░░░░░██░░  ░░██                              
-                              ██░░██░░██░░██████░░██░░██░░██                            
-                            ██░░░░██████░░██████░░██████░░░░██                          
-                            ██░░██░░░░████░░░░░░████░░░░██░░██                          
-                              ████░░░░██░░██████░░██░░░░░░██                            
-                              ██░░░░████░░░░██░░░░████░░░░██                            
-                                ██████░░░░██  ██░░░░██████                              
+    cat <<'SQUID'
+                                        ██████████
+                                    ████░░░░░░░░░░████
+                                  ██░░░░░░░░░░░░░░░░░░██
+                                ██░░░░░░░░░░░░░░░░░░░░░░██
+                                ██░░░░░░░░░░░░░░░░░░░░░░██
+                              ██░░░░░░░░░░░░░░░░░░░░░░░░░░██
+                              ██░░        ░░░░░░        ░░██
+                              ██░░          ░░          ░░██
+                              ██░░    ████  ░░  ████    ░░██
+                              ██░░    ██████████████    ░░██
+                                ██░░  ░░██░░░░░░██░░  ░░██
+                              ██░░██░░██░░██████░░██░░██░░██
+                            ██░░░░██████░░██████░░██████░░░░██
+                            ██░░██░░░░████░░░░░░████░░░░██░░██
+                              ████░░░░██░░██████░░██░░░░░░██
+                              ██░░░░████░░░░██░░░░████░░░░██
+                                ██████░░░░██  ██░░░░██████
                                       ████      ████
 
                     ╔════════════════════════════════════════════════╗
@@ -69,8 +74,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --client)      MODE="client"; shift ;;
         --docker)      MODE="docker"; shift ;;
-        --install-dir) INSTALL_DIR="$2"; shift 2 ;;
-        --session)     SESSION_NAME="$2"; shift 2 ;;
+        --install-dir) [[ $# -ge 2 && -n "$2" ]] || { err "--install-dir needs a path"; exit 64; }; INSTALL_DIR="$2"; shift 2 ;;
+        --session)     [[ $# -ge 2 && -n "$2" ]] || { err "--session needs a name"; exit 64; }; SESSION_NAME="$2"; shift 2 ;;
         --from-source) FROM_SOURCE=true; shift ;;
         -h|--help)
             cat <<EOF
@@ -121,16 +126,20 @@ download_binary() {
 
     step "Downloading ${BOLD}$name${RESET}${CYAN} for $platform${RESET}"
     local ok=false
+    local temporary
+    temporary="$(mktemp "${dest}.download.XXXXXX")"
     if command -v curl &>/dev/null; then
-        curl -fsSL "$url" -o "$dest" && ok=true
+        curl -fsSL "$url" -o "$temporary" && ok=true
     elif command -v wget &>/dev/null; then
-        wget -q "$url" -O "$dest" && ok=true
+        wget -q "$url" -O "$temporary" && ok=true
     else
+        rm -f "$temporary"
         err "Need curl or wget to download binaries."
         exit 1
     fi
 
     if [ "$ok" = false ]; then
+        rm -f "$temporary"
         echo ""
         err "Download failed. No release binaries found for ${BOLD}$platform${RESET}."
         warn "This usually means there's no published release yet."
@@ -139,7 +148,8 @@ download_binary() {
         echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
         exit 1
     fi
-    chmod +x "$dest"
+    chmod +x "$temporary"
+    mv "$temporary" "$dest"
 }
 
 build_from_source() {
@@ -152,7 +162,8 @@ build_from_source() {
     local build_dir="$REPO_ROOT"
 
     if [ -z "$build_dir" ] || [ ! -f "$build_dir/Cargo.toml" ]; then
-        build_dir="$(mktemp -d)"
+        INSTALL_TMP_DIR="$(mktemp -d)"
+        build_dir="$INSTALL_TMP_DIR/repo"
         step "Cloning repo..."
         if ! git clone --depth 1 "https://github.com/${REPO}.git" "$build_dir" 2>&1; then
             err "Clone failed. Run this from inside the repo instead."
@@ -161,7 +172,7 @@ build_from_source() {
     fi
 
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release); then
+    if ! (cd "$build_dir" && cargo build --locked --release -p client -p server); then
         err "Build failed."
         exit 1
     fi
@@ -177,7 +188,8 @@ build_from_source() {
     fi
 
     if [ "$build_dir" != "$REPO_ROOT" ]; then
-        rm -rf "$build_dir"
+        cleanup_install
+        INSTALL_TMP_DIR=""
     fi
 }
 
@@ -185,7 +197,7 @@ ensure_path() {
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
         echo ""
         warn "Add to your shell profile:"
-        echo -e "  ${DIM}export PATH=\"$INSTALL_DIR:\$PATH\"${RESET}"
+        printf '  export PATH=%q:"$PATH"\n' "$INSTALL_DIR"
     fi
 }
 
@@ -195,143 +207,95 @@ install_mcp_bridge() {
         return
     fi
 
-    local mcp_home="$HOME/.ccp-mcp"
-    local venv_dir="$mcp_home/venv"
+    local venv_dir="$HOME/.ccp-mcp/venv"
     local mcp_src
-
-    # find the mcp package — either in the repo or clone it
     if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/mcp" ]; then
         mcp_src="$REPO_ROOT/mcp"
     else
-        mcp_src="$mcp_home/src"
-        if [ ! -d "$mcp_src" ]; then
-            step "Downloading MCP bridge..."
-            mkdir -p "$mcp_home"
-            git clone --depth 1 "https://github.com/${REPO}.git" "$mcp_home/repo" 2>/dev/null || {
-                warn "Could not download MCP bridge. Install from the repo manually."
-                return
-            }
-            mv "$mcp_home/repo/mcp" "$mcp_src"
-            rm -rf "$mcp_home/repo"
-        fi
+        INSTALL_TMP_DIR="$(mktemp -d)"
+        step "Downloading current MCP bridge source..."
+        git clone --depth 1 "https://github.com/${REPO}.git" "$INSTALL_TMP_DIR/repo"
+        mcp_src="$INSTALL_TMP_DIR/repo/mcp"
     fi
-
     step "Installing MCP bridge..."
-    if [ ! -d "$venv_dir" ]; then
-        python3 -m venv "$venv_dir"
-    fi
-    "$venv_dir/bin/pip" install --quiet --upgrade pip
-    "$venv_dir/bin/pip" install --quiet -e "$mcp_src"
+    python3 -m venv "$venv_dir"
+    "$venv_dir/bin/python" -m pip install --quiet --upgrade "$mcp_src"
+    "$venv_dir/bin/python" -c 'from ccp_mcp_server.server import master_instructions'
+    cleanup_install
+    INSTALL_TMP_DIR=""
     ok "MCP bridge installed in $venv_dir"
 }
 
 configure_mcp() {
-    local client_bin="$INSTALL_DIR/ccp-client"
-    local venv_dir="$HOME/.ccp-mcp/venv"
-    local mcp_cmd="$venv_dir/bin/ccp-mcp-server"
-
-    if [ ! -f "$mcp_cmd" ]; then
-        warn "MCP bridge not found at $mcp_cmd — skipping config"
-        return
-    fi
-
-    local mcp_env
-    mcp_env="{\"CCP_CLIENT_BIN\": \"$client_bin\"}"
-    # only include server binary if it's installed (full install mode)
-    if [ -f "$INSTALL_DIR/ccp-server" ]; then
-        mcp_env="{\"CCP_CLIENT_BIN\": \"$client_bin\", \"CCP_SERVER_BIN\": \"$INSTALL_DIR/ccp-server\"}"
-    fi
-
-    local mcp_block
-    mcp_block=$(cat <<MCPEOF
-{
-  "ccp": {
-    "command": "$mcp_cmd",
-    "env": $mcp_env
-  }
-}
-MCPEOF
-)
-
-    echo ""
+    local mcp_cmd="$HOME/.ccp-mcp/venv/bin/ccp-mcp-server"
+    [ -x "$mcp_cmd" ] || { warn "MCP bridge is unavailable; skipping configuration"; return; }
     step "Configuring MCP hosts..."
+    python3 - "$INSTALL_DIR" "$mcp_cmd" <<'PYCONFIG'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import tempfile
 
-    # Codex: ~/.codex/config.toml
-    local codex_config="$HOME/.codex/config.toml"
-    if [ -f "$codex_config" ]; then
-        if ! grep -q "mcp_servers.ccp" "$codex_config" 2>/dev/null; then
-            local codex_env="CCP_CLIENT_BIN = \"$client_bin\""
-            if [ -f "$INSTALL_DIR/ccp-server" ]; then
-                codex_env="$codex_env
-CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
-            fi
-            cat >> "$codex_config" <<TOMLEOF
+install_dir = Path(sys.argv[1]).expanduser().resolve()
+mcp_command = sys.argv[2]
+config_env = {"CCP_CLIENT_BIN": str(install_dir / "ccp-client")}
+if (install_dir / "ccp-server").is_file():
+    config_env["CCP_SERVER_BIN"] = str(install_dir / "ccp-server")
+for name in ("CCP_SERVER_URL", "CCP_CLIENT_KEY"):
+    if name in os.environ:
+        config_env[name] = os.environ[name]
+config = {"command": mcp_command, "env": config_env}
+home = Path.home()
+configured = False
 
-[mcp_servers.ccp]
-command = "$mcp_cmd"
+# Pass paths and values as data, including quotes, backslashes, and newlines.
+# Atomic JSON replacement preserves existing config entries and permissions.
+def write_json(path):
+    existing = json.loads(path.read_text()) if path.exists() else {}
+    entry = existing.setdefault("mcpServers", {}).setdefault("ccp", {})
+    entry["command"] = mcp_command
+    entry.setdefault("env", {}).update(config_env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    permissions = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600
+    descriptor, temporary = tempfile.mkstemp(dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w") as stream:
+            json.dump(existing, stream, indent=2)
+            stream.write("\n")
+        os.chmod(temporary, permissions)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f"Configured {path}")
 
-[mcp_servers.ccp.env]
-$codex_env
-TOMLEOF
-            ok "Added to $codex_config"
-        else
-            ok "$codex_config already configured"
-        fi
-    fi
-
-    # Claude: ~/.claude.json
-    local claude_config="$HOME/.claude.json"
-    if [ -f "$claude_config" ]; then
-        if ! python3 -c "import json; cfg=json.load(open('$claude_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
-            local tmp
-            tmp="$(mktemp)"
-            python3 -c "
-import json, os
-with open('$claude_config') as f:
-    cfg = json.load(f)
-env = {'CCP_CLIENT_BIN': '$client_bin'}
-if os.path.isfile('$INSTALL_DIR/ccp-server'):
-    env['CCP_SERVER_BIN'] = '$INSTALL_DIR/ccp-server'
-cfg.setdefault('mcpServers', {})['ccp'] = {'command': '$mcp_cmd', 'env': env}
-with open('$tmp', 'w') as f:
-    json.dump(cfg, f, indent=2)
-" 2>/dev/null && mv "$tmp" "$claude_config" && ok "Added to $claude_config" || warn "Could not update $claude_config"
-        else
-            ok "$claude_config already configured"
-        fi
-    fi
-
-    # Cursor: ~/.cursor/mcp.json
-    local cursor_config="$HOME/.cursor/mcp.json"
-    if [ -d "$HOME/.cursor" ] || [ -d "$HOME/Library/Application Support/Cursor" ]; then
-        mkdir -p "$HOME/.cursor"
-        if [ ! -f "$cursor_config" ]; then
-            echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"
-            ok "Created $cursor_config"
-        elif ! python3 -c "import json; cfg=json.load(open('$cursor_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
-            local tmp
-            tmp="$(mktemp)"
-            python3 -c "
-import json, os
-with open('$cursor_config') as f:
-    cfg = json.load(f)
-env = {'CCP_CLIENT_BIN': '$client_bin'}
-if os.path.isfile('$INSTALL_DIR/ccp-server'):
-    env['CCP_SERVER_BIN'] = '$INSTALL_DIR/ccp-server'
-cfg.setdefault('mcpServers', {})['ccp'] = {'command': '$mcp_cmd', 'env': env}
-with open('$tmp', 'w') as f:
-    json.dump(cfg, f, indent=2)
-" 2>/dev/null && mv "$tmp" "$cursor_config" && ok "Added to $cursor_config" || warn "Could not update $cursor_config"
-        else
-            ok "$cursor_config already configured"
-        fi
-    fi
-
-    if [ ! -f "$codex_config" ] && [ ! -f "$claude_config" ] && [ ! -d "$HOME/.cursor" ]; then
-        warn "No MCP host configs found. Add this to your agent's MCP config:"
-        echo ""
-        echo "$mcp_block"
-    fi
+codex_path = home / ".codex/config.toml"
+if codex_path.exists():
+    text = codex_path.read_text()
+    if "[mcp_servers.ccp]" not in text:
+        with codex_path.open("a") as stream:
+            stream.write("\n[mcp_servers.ccp]\ncommand = " + json.dumps(mcp_command) + "\n")
+            stream.write("\n[mcp_servers.ccp.env]\n")
+            for key, value in config_env.items():
+                stream.write(key + " = " + json.dumps(value) + "\n")
+        print(f"Configured {codex_path}")
+    else:
+        print(f"Existing CCP config retained in {codex_path}; update its env if your endpoint/key changed")
+    configured = True
+claude_path = home / ".claude.json"
+if claude_path.exists():
+    write_json(claude_path)
+    configured = True
+cursor_path = home / ".cursor/mcp.json"
+if cursor_path.parent.exists() or (home / "Library/Application Support/Cursor").exists():
+    write_json(cursor_path)
+    configured = True
+if not configured:
+    print("Add the following to your MCP host configuration:")
+    print(json.dumps({"mcpServers": {"ccp": config}}, indent=2))
+PYCONFIG
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -347,31 +311,25 @@ if [ "$MODE" = "docker" ]; then
         exit 1
     fi
 
+    if [ ! -f "$REPO_ROOT/docker-compose.yml" ]; then
+        err "Docker mode requires a repository checkout. Run install.sh from that checkout."
+        exit 1
+    fi
+    local_image="cephalopod-coordination-protocol-server:latest"
+    compose_file="$REPO_ROOT/docker-compose.yml"
     step "Pulling CCP server image..."
-    docker pull "ghcr.io/${REPO}:latest" 2>/dev/null || {
+    if docker pull "ghcr.io/${REPO}:latest"; then
+        local_image="ghcr.io/${REPO}:latest"
+    else
         warn "No prebuilt image found. Building from Dockerfile..."
-        if [ ! -f "docker-compose.yml" ]; then
-            err "Run this from the repo root, or use the default install mode instead."
-            exit 1
-        fi
-        docker compose build
-    }
-
-    step "Starting CCP server ${BOLD}(session: $SESSION_NAME)${RESET}"
-    CCP_SESSION_NAME="$SESSION_NAME" docker compose up -d
-
-    echo ""
+        CCP_IMAGE="$local_image" docker compose -f "$compose_file" build
+    fi
+    step "Starting CCP server (session: $SESSION_NAME)"
+    CCP_IMAGE="$local_image" CCP_SESSION_NAME="$SESSION_NAME" docker compose -f "$compose_file" up -d --no-build
     ok "Server running."
-    echo ""
-    info "Check logs for enrollment tokens:"
-    echo -e "  ${DIM}docker compose logs -f ccp-server${RESET}"
-    echo ""
-    info "Issue tokens:"
-    echo -e "  ${DIM}docker compose exec ccp-server server issue-token $SESSION_NAME read${RESET}"
-    echo -e "  ${DIM}docker compose exec ccp-server server issue-token $SESSION_NAME read_write${RESET}"
-    echo ""
-    info "Stop:"
-    echo -e "  ${DIM}docker compose down${RESET}"
+    info "Dashboard: ${CCP_HTTP_BASE_URL:-http://127.0.0.1:${CCP_HTTP_PORT:-1338}}/admin"
+    info "View logs: docker compose -f $compose_file logs -f ccp-server"
+    info "Stop: docker compose -f $compose_file down"
     exit 0
 fi
 
@@ -425,13 +383,13 @@ echo ""
 echo -e "${BOLD}${GREEN}Done.${RESET}"
 echo ""
 if [ "$MODE" = "client" ]; then
-    info "Enroll with a server:"
-    echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
+    info "Set CCP_CLIENT_KEY for your server, then subscribe:"
+    echo -e "  ${DIM}ccp-client subscribe-all --server <http-url>${RESET}"
 else
     info "Start a server:"
     echo -e "  ${DIM}ccp-server <session-name>${RESET}"
     echo ""
-    info "Enroll a client:"
-    echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
+    info "Set CCP_CLIENT_KEY for your server, then subscribe a client:"
+    echo -e "  ${DIM}ccp-client subscribe-all --server <http-url>${RESET}"
 fi
 echo ""
