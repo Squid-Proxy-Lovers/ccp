@@ -2,33 +2,12 @@
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
+from support import load_unit_server
 
-class _FakeFastMCP:
-    def __init__(self, *_args, **_kwargs):
-        pass
-
-    @staticmethod
-    def tool():
-        return lambda function: function
-
-    @staticmethod
-    def resource(_uri):
-        return lambda function: function
-
-
-fake_fastmcp = types.ModuleType("fastmcp")
-fake_fastmcp.FastMCP = _FakeFastMCP
-sys.modules.setdefault("fastmcp", fake_fastmcp)
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-
-from ccp_mcp_server import server  # noqa: E402
-
+server = load_unit_server()
 
 class StatusToolTests(unittest.TestCase):
     def test_set_status_invokes_exact_cli_and_attaches_warning(self):
@@ -45,11 +24,10 @@ class StatusToolTests(unittest.TestCase):
 
         run.assert_called_once_with(
             "set-status",
+            "--team=pwn",
+            "--agent=octo",
+            "--",
             "ctf",
-            "--team",
-            "pwn",
-            "--agent",
-            "octo",
             "testing parser",
         )
         attach.assert_called_once_with("ctf", payload)
@@ -64,7 +42,7 @@ class StatusToolTests(unittest.TestCase):
             self.assertIs(server.clear_status("ctf", "pwn", "octo"), payload)
 
         run.assert_called_once_with(
-            "clear-status", "ctf", "--team", "pwn", "--agent", "octo"
+            "clear-status", "--team=pwn", "--agent=octo", "--", "ctf"
         )
         attach.assert_called_once_with("ctf", payload)
 
@@ -73,7 +51,7 @@ class StatusToolTests(unittest.TestCase):
         with patch.object(server, "_run_client_json", return_value=payload) as run:
             self.assertIs(server.list_team_status("ctf", "pwn"), payload)
 
-        run.assert_called_once_with("team-status", "ctf", "--team", "pwn")
+        run.assert_called_once_with("team-status", "--team=pwn", "--", "ctf")
 
     def test_search_team_status_invokes_exact_cli(self):
         payload = [{"team": "pwn", "agent_name": "octo", "status": "parser"}]
@@ -83,7 +61,7 @@ class StatusToolTests(unittest.TestCase):
             )
 
         run.assert_called_once_with(
-            "search-team-status", "ctf", "--team", "pwn", "parser"
+            "search-team-status", "--team=pwn", "--", "ctf", "parser"
         )
 
     def test_object_tools_reject_non_object_payloads(self):

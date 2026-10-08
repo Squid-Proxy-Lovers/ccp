@@ -1,45 +1,46 @@
-# ccp-client
+# CCP client
 
-CLI client for CCP. Enrolls with a server using tokens, stores mTLS credentials locally, and runs all protocol operations from the command line.
+The CLI and Rust library discover public sessions, save local subscriptions, and send JSON requests over plaintext HTTP. Server data is not cached locally.
 
-## Install
+## Build and install
 
-```bash
+```sh
+cargo build --release -p client
 bash install.sh
 ```
 
-Or build from source:
+Cargo produces `target/release/client`; installation names the executable `ccp-client`.
 
-```bash
-cargo build --release -p client
+## Connect and use
+
+```sh
+export CCP_SERVER_URL=http://127.0.0.1:1338
+ccp-client remote-sessions
+ccp-client subscribe <session-name-or-id>
+ccp-client subscribe-all
+ccp-client sessions
+ccp-client health <session>
+ccp-client master-instructions <session>
+ccp-client list <session>
+ccp-client get <session> <name> --shelf s --book b
+ccp-client add-entry <session> --shelf s --book b <name> <description> <data>
+ccp-client append <session> <name> --shelf s --book b -- <content>
+ccp-client search-context <session> -- <query>
+ccp-client export <session> --output context.droplet
 ```
 
-## Enrolling
+Run `ccp-client --help` and individual command help for all commands. Use `--` after options when trailing content starts with a dash.
 
-You need an enrollment token from whoever runs the server.
+Discovery commands accept `--server`; otherwise they use `CCP_SERVER_URL`, then `http://127.0.0.1:1338`. Base paths are supported. URLs must use `http://` and contain no credentials, query, or fragment. Requests have a 10-second connection limit and 60-second overall limit; redirects are rejected.
 
-```bash
-ccp-client enroll \
-  --redeem-url http://<server>:1337/auth/redeem \
-  --token <token>
-```
+Subscriptions live in `~/.ccp-client/enrollments/` (override with `CCP_CLIENT_HOME`). Each record identifies a server and session ID. Existing metadata remains readable. Selection accepts a session name or ID and uses `CCP_SERVER_URL` when configured. If a selector matches distinct sessions, selection fails with an ambiguity error. An explicit selector such as `42@http://localhost:1338` selects that server regardless of the environment. `delete-session` removes matching local records; it does not delete server data, and ambiguous selectors fail without removing records.
 
-This redeems the token, gets a client certificate from the server's CA, and saves everything under `~/.ccp-client/enrollments/`.
+Public discovery and public-session requests are open. For private-session requests, configure `CCP_CLIENT_KEY` to match the server. There is no certificate enrollment in the active HTTP client. Legacy certificate-shaped metadata fields remain for local compatibility.
 
-## Usage
+## Rust library
 
-```bash
-ccp-client sessions                              # list saved sessions
-ccp-client list <session>                         # list all entries
-ccp-client get <session> <name>                   # fetch an entry
-ccp-client add-entry <session> --shelf s --book b <name> <desc> <data>
-ccp-client append <session> <name> <content>
-ccp-client search-context <session> <query>       # full-text search
-ccp-client export <session>                       # export as JSON
-```
+Depend on `client` via a path dependency, construct `CcpClient`, and call `subscribe(server_url, selector)`, `session(selector)`, or `writable_session(selector)`. `SessionClient` provides typed entry/library CRUD, searches, history, and bundle transfer. Mutations reject read-only saved subscriptions even if selected with `session`. The convenience API covers fewer operations than the CLI; the shared `protocol` crate contains the full wire types.
 
-Run `ccp-client --help` for the full list.
+`add_entry` preserves its existing return type. Use `add_entry_with_warning` to receive the optional duplicate-entry warning along with the added entry. CLI warnings go to stderr while stdout remains the entry JSON.
 
-## How it works
-
-The client connects over mTLS using the certificate it got during enrollment. Every operation is a binary-framed request/response pair using types from the `protocol` crate. Nothing is cached locally beyond credentials. All data lives on the server.
+See [the client guide](../../docs/client.md) for hosted installation and MCP setup.

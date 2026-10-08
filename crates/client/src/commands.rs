@@ -25,6 +25,7 @@ const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
   client subscribe-all
   client remote-sessions
   client sessions
+  client health <session>
   client master-instructions <session>
   client delete-session <session>
   client list <session>
@@ -33,7 +34,7 @@ const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
   client search-shelves <session> <query>
   client search-books <session> <query>
   client search-context <session> <query>
-  client search-deleted <session> <query>
+  client search-deleted <session> [query]
   client add-shelf <session> <shelf-name> <shelf-description>
   client add-book <session> --shelf <name> <book-name> <book-description>
   client add-entry <session> --shelf <name> --book <name> <entry-name> <entry-description> [--labels <a,b>] <entry-data>
@@ -54,7 +55,7 @@ const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
 <session> can be a session name or session id discovered via `client sessions`."#;
 
 #[derive(Parser)]
-#[command(name = "client")]
+#[command(name = "client", version)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -66,6 +67,7 @@ enum Command {
     SubscribeAll(ServerArgs),
     RemoteSessions(RemoteSessionsArgs),
     Sessions,
+    Health(SessionSelectorArgs),
     MasterInstructions(SessionSelectorArgs),
     DeleteSession(SessionSelectorArgs),
     List(SessionSelectorArgs),
@@ -310,17 +312,12 @@ pub(crate) async fn run() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Subscribe(args) => {
-            let server = resolved_server(args.server.as_deref());
+            let server = crate::transport_helpers::normalized_endpoint(&resolved_server(
+                args.server.as_deref(),
+            ))?;
             let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
-            let session = sessions
-                .iter()
-                .find(|candidate| {
-                    candidate.session_name == args.session
-                        || candidate.session_id.to_string() == args.session
-                })
-                .with_context(|| {
-                    format!("session '{}' is not hosted by {}", args.session, server)
-                })?;
+            let session =
+                crate::transport_helpers::select_remote_session(&sessions, &args.session)?;
             let saved = crate::storage::save_subscription(&server, session)?;
             println!(
                 "Subscribed to session '{}' (id={}) at {}",
@@ -329,7 +326,9 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         Command::SubscribeAll(args) => {
-            let server = resolved_server(args.server.as_deref());
+            let server = crate::transport_helpers::normalized_endpoint(&resolved_server(
+                args.server.as_deref(),
+            ))?;
             let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
             for session in &sessions {
                 crate::storage::save_subscription(&server, session)?;
@@ -342,13 +341,20 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         Command::RemoteSessions(args) => {
-            let server = resolved_server(args.server.as_deref());
+            let server = crate::transport_helpers::normalized_endpoint(&resolved_server(
+                args.server.as_deref(),
+            ))?;
             let sessions = crate::transport_helpers::list_remote_sessions(&server).await?;
             println!("{}", serde_json::to_string_pretty(&sessions)?);
         }
 
         // list all sessions and their details
         Command::Sessions => list_sessions()?,
+
+        Command::Health(args) => {
+            let enrollment = select_enrollment(&args.session, false)?;
+            print_json(&crate::transport_helpers::server_health(&enrollment).await?)?;
+        }
 
         Command::MasterInstructions(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
@@ -706,7 +712,7 @@ fn resolved_server(explicit: Option<&str>) -> String {
     explicit
         .map(ToString::to_string)
         .or_else(|| std::env::var("CCP_SERVER_URL").ok())
-        .unwrap_or_else(|| "http://192.168.130.34:1338".to_string())
+        .unwrap_or_else(|| "http://127.0.0.1:1338".to_string())
 }
 
 fn hostname_fallback() -> Option<String> {
@@ -746,6 +752,9 @@ fn parse_cli() -> Cli {
 }
 
 fn print_error(error: clap::Error, input_formats: &str) -> ! {
+    if !error.use_stderr() {
+        error.exit();
+    }
     let use_stderr = error.use_stderr();
     let exit_code = error.exit_code();
     let _ = error.print();
@@ -757,4 +766,36 @@ fn print_error(error: clap::Error, input_formats: &str) -> ! {
         let _ = writeln!(stdout, "\n{input_formats}");
     }
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_deleted_allows_listing_the_archive_without_a_query() {
+        assert!(Cli::try_parse_from(["client", "search-deleted", "topic"]).is_ok());
+        assert!(Cli::try_parse_from(["client", "search-deleted", "topic", "needle"]).is_ok());
+    }
+
+    #[test]
+    fn argument_terminator_preserves_dash_prefixed_status_text() {
+        let parsed = Cli::try_parse_from([
+            "client",
+            "set-status",
+            "topic",
+            "--team",
+            "review",
+            "--agent",
+            "worker",
+            "--",
+            "-- investigate logs",
+        ])
+        .unwrap();
+        let Command::SetStatus(args) = parsed.command else {
+            panic!("expected status command")
+        };
+        assert_eq!(args.status, vec!["-- investigate logs"]);
+        assert_eq!(args.team, "review");
+    }
 }

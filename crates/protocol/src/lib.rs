@@ -342,13 +342,13 @@ pub struct ServerVersionInfo {
 pub enum ClientRequest {
     Ping,
     Handshake(VersionInfo),
-    /// Discover every session hosted by this server.
+    /// Legacy discovery variant; current HTTP discovery uses GET /v1/sessions.
     ListSessions,
-    /// Create a session on this server. Plaintext mode has no remote ACL.
+    /// Legacy creation variant; current HTTP session creation uses the admin API.
     CreateSession {
         session_name: String,
     },
-    /// Select the sessions this connection may operate on.
+    /// Legacy connection variant; current HTTP requests declare selected session IDs.
     Subscribe {
         session_ids: Vec<i64>,
     },

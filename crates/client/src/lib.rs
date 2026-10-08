@@ -9,12 +9,13 @@ mod transport;
 mod transport_helpers;
 use std::path::Path;
 
+use crate::transport_helpers::error_response_to_anyhow;
 use anyhow::{Context, bail};
 pub use protocol::{
     AddBookResult, AddShelfResult, AppendMetadata, AppendResult, BookSummary, BundleEntry,
-    ClientRequest, ConflictPolicy, DeleteResult, DeletedEntrySummary, EntrySummary, ErrorCode,
-    ErrorResponse, ImportBundleResult, MessageEntry, MessageHistoryEntry, RestoreResult,
-    SearchContextMatch, ServerResponse, ShelfSummary, TransferBundle, TransferScope,
+    ClientRequest, ConflictPolicy, DeleteResult, DeletedEntrySummary, DuplicateWarning,
+    EntrySummary, ErrorCode, ErrorResponse, ImportBundleResult, MessageEntry, MessageHistoryEntry,
+    RestoreResult, SearchContextMatch, ServerResponse, ShelfSummary, TransferBundle, TransferScope,
     TransferSelector,
 };
 
@@ -50,6 +51,12 @@ pub struct AddEntryRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddEntryOutcome {
+    pub entry: MessageEntry,
+    pub duplicate_warning: Option<DuplicateWarning>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppendEntryRequest {
     pub name: String,
     pub content: String,
@@ -77,13 +84,7 @@ impl CcpClient {
         session_selector: &str,
     ) -> anyhow::Result<StoredEnrollment> {
         let sessions = transport_helpers::list_remote_sessions(server_url).await?;
-        let session = sessions
-            .iter()
-            .find(|candidate| {
-                candidate.session_name == session_selector
-                    || candidate.session_id.to_string() == session_selector
-            })
-            .with_context(|| format!("open topic '{session_selector}' was not found"))?;
+        let session = transport_helpers::select_remote_session(&sessions, session_selector)?;
         storage::save_subscription(server_url, session)
     }
 
@@ -266,6 +267,14 @@ impl SessionClient {
     }
 
     pub async fn add_entry(&self, request: AddEntryRequest) -> anyhow::Result<MessageEntry> {
+        Ok(self.add_entry_with_warning(request).await?.entry)
+    }
+
+    /// Add an entry while preserving the server's optional duplicate warning.
+    pub async fn add_entry_with_warning(
+        &self,
+        request: AddEntryRequest,
+    ) -> anyhow::Result<AddEntryOutcome> {
         match perform_session_request(
             &self.enrollment,
             ClientRequest::AddEntry {
@@ -280,7 +289,13 @@ impl SessionClient {
         )
         .await?
         {
-            ServerResponse::EntryAdded { entry, .. } => Ok(entry),
+            ServerResponse::EntryAdded {
+                entry,
+                duplicate_warning,
+            } => Ok(AddEntryOutcome {
+                entry,
+                duplicate_warning,
+            }),
             other => unexpected_response("add_entry", other),
         }
     }
@@ -430,14 +445,4 @@ async fn perform_session_request(
 
 fn unexpected_response<T>(operation: &str, response: ServerResponse) -> anyhow::Result<T> {
     bail!("unexpected server response for {operation}: {response:?}")
-}
-
-fn error_response_to_anyhow(error: ErrorResponse) -> anyhow::Result<ServerResponse> {
-    let label = match error.code {
-        ErrorCode::BadRequest => "bad request",
-        ErrorCode::Forbidden => "forbidden",
-        ErrorCode::NotFound => "not found",
-        ErrorCode::Internal => "internal error",
-    };
-    bail!("{label}: {}", error.message)
 }

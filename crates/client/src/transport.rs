@@ -18,7 +18,143 @@ pub(crate) async fn perform_request(
     enrollment: &StoredEnrollment,
     request: ClientRequest,
 ) -> anyhow::Result<ServerResponse> {
-    perform_http_request(enrollment, request).await
+    validate_enrollment_access(enrollment, &request)?;
+    let response = perform_http_request(enrollment, &request).await?;
+    validate_response(&request, &response)?;
+    Ok(response)
+}
+
+fn validate_response(request: &ClientRequest, response: &ServerResponse) -> anyhow::Result<()> {
+    if matches!(response, ServerResponse::Error(_)) {
+        return Ok(());
+    }
+    let expected = matches!(
+        (request, response),
+        (ClientRequest::Ping, ServerResponse::Pong)
+            | (
+                ClientRequest::Handshake(_),
+                ServerResponse::HandshakeOk(_) | ServerResponse::HandshakeRejected(_)
+            )
+            | (ClientRequest::ListSessions, ServerResponse::Sessions(_))
+            | (
+                ClientRequest::CreateSession { .. },
+                ServerResponse::SessionCreated(_)
+            )
+            | (
+                ClientRequest::Subscribe { .. },
+                ServerResponse::Subscribed(_)
+            )
+            | (
+                ClientRequest::GetMasterInstructions { .. },
+                ServerResponse::MasterInstructions(_)
+            )
+            | (
+                ClientRequest::List { .. } | ClientRequest::SearchEntries { .. },
+                ServerResponse::EntrySummaries(_)
+            )
+            | (ClientRequest::Get { .. }, ServerResponse::Entry(_))
+            | (
+                ClientRequest::AddShelf { .. },
+                ServerResponse::ShelfAdded(_)
+            )
+            | (ClientRequest::AddBook { .. }, ServerResponse::BookAdded(_))
+            | (
+                ClientRequest::AddEntry { .. },
+                ServerResponse::EntryAdded { .. }
+            )
+            | (
+                ClientRequest::Append { .. },
+                ServerResponse::AppendResult(_)
+            )
+            | (ClientRequest::Delete { .. }, ServerResponse::Deleted(_))
+            | (
+                ClientRequest::SearchShelves { .. },
+                ServerResponse::ShelfSummaries(_)
+            )
+            | (
+                ClientRequest::SearchBooks { .. },
+                ServerResponse::BookSummaries(_)
+            )
+            | (
+                ClientRequest::SearchContext { .. },
+                ServerResponse::SearchContextResults(_)
+            )
+            | (
+                ClientRequest::SearchDeleted { .. },
+                ServerResponse::DeletedEntries(_)
+            )
+            | (
+                ClientRequest::RestoreDeleted { .. },
+                ServerResponse::Restored(_)
+            )
+            | (ClientRequest::GetHistory { .. }, ServerResponse::History(_))
+            | (
+                ClientRequest::ExportBundle { .. },
+                ServerResponse::ExportedBundle(_)
+            )
+            | (
+                ClientRequest::ImportBundle { .. },
+                ServerResponse::ImportResult(_)
+            )
+            | (
+                ClientRequest::RevokeClientCert { .. },
+                ServerResponse::CertRevoked(_)
+            )
+            | (
+                ClientRequest::DeleteShelf { .. },
+                ServerResponse::ShelfDeleted(_)
+            )
+            | (ClientRequest::BriefMe { .. }, ServerResponse::Brief(_))
+            | (
+                ClientRequest::GetEntryAt { .. },
+                ServerResponse::EntryAtTime(_)
+            )
+            | (
+                ClientRequest::SetStatus { .. },
+                ServerResponse::StatusSet(_)
+            )
+            | (
+                ClientRequest::ClearStatus { .. },
+                ServerResponse::StatusCleared(_)
+            )
+            | (
+                ClientRequest::ListTeamStatus { .. } | ClientRequest::SearchTeamStatus { .. },
+                ServerResponse::TeamStatuses(_)
+            )
+    );
+    if !expected {
+        bail!("unexpected server response type for requested operation");
+    }
+    Ok(())
+}
+
+fn validate_enrollment_access(
+    enrollment: &StoredEnrollment,
+    request: &ClientRequest,
+) -> anyhow::Result<()> {
+    let writable = matches!(enrollment.metadata.access.as_str(), "read_write" | "admin");
+    let mutates = matches!(
+        request,
+        ClientRequest::AddShelf { .. }
+            | ClientRequest::AddBook { .. }
+            | ClientRequest::AddEntry { .. }
+            | ClientRequest::Append { .. }
+            | ClientRequest::Delete { .. }
+            | ClientRequest::RestoreDeleted { .. }
+            | ClientRequest::ImportBundle { .. }
+            | ClientRequest::RevokeClientCert { .. }
+            | ClientRequest::DeleteShelf { .. }
+            | ClientRequest::SetStatus { .. }
+            | ClientRequest::ClearStatus { .. }
+            | ClientRequest::CreateSession { .. }
+    );
+    if mutates && !writable {
+        bail!("saved subscription does not allow writes");
+    }
+    if !writable && enrollment.metadata.access != "read" {
+        bail!("saved subscription has unsupported access level");
+    }
+    Ok(())
 }
 
 pub(crate) async fn perform_get(
@@ -235,10 +371,7 @@ pub(crate) async fn perform_export(
     .await?
     {
         ServerResponse::ExportedBundle(bundle) => Ok(bundle),
-        ServerResponse::Error(error) => {
-            let _ = error_response_to_anyhow(error)?;
-            unreachable!("error_response_to_anyhow always returns Err");
-        }
+        ServerResponse::Error(error) => error_response_to_anyhow(error),
         other => bail!("unexpected server response for export: {other:?}"),
     }
 }
