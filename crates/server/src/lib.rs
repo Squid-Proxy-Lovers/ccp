@@ -40,6 +40,7 @@ struct AppState {
     client_key: String,
     admin_key: String,
     download_dir: PathBuf,
+    base_url: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -80,23 +81,50 @@ pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
 }
 
 pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<()> {
+    run_plain_server_with_shutdown(initial_session, shutdown_signal()).await
+}
+
+pub async fn run_plain_server_with_shutdown(
+    initial_session: Option<&str>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let base_url = configured_base_url()?;
+    let client_key = configured_key("CCP_CLIENT_KEY", DEFAULT_CLIENT_KEY)?;
+    let admin_key = configured_key("CCP_ADMIN_KEY", DEFAULT_ADMIN_KEY)?;
+    let listener = tokio::net::TcpListener::bind(http_listener_addr())
+        .await
+        .context("failed to bind HTTP listener")?;
     let initial_id = initialize_plain_server(initial_session)?;
-    let journal = Arc::new(JournalHandle::start(journal_path())?);
-    let ccp = Arc::new(ServerState::load_from_storage(Arc::clone(&journal)).await?);
+    let journal = match JournalHandle::start(journal_path()) {
+        Ok(journal) => Arc::new(journal),
+        Err(error) => {
+            stop_bootstrap_session(initial_id);
+            return Err(error);
+        }
+    };
+
+    let ccp = match ServerState::load_from_storage(Arc::clone(&journal)).await {
+        Ok(state) => Arc::new(state),
+        Err(error) => {
+            let _ = journal.shutdown();
+            stop_bootstrap_session(initial_id);
+            return Err(error);
+        }
+    };
     let state = AppState {
         ccp: Arc::clone(&ccp),
-        client_key: std::env::var("CCP_CLIENT_KEY")
-            .unwrap_or_else(|_| DEFAULT_CLIENT_KEY.to_string()),
-        admin_key: std::env::var("CCP_ADMIN_KEY").unwrap_or_else(|_| DEFAULT_ADMIN_KEY.to_string()),
+        client_key,
+        admin_key,
         download_dir: std::env::var_os("CCP_DOWNLOAD_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("downloads")),
+        base_url: base_url.clone(),
     };
 
     if let (Some(name), Some(id)) = (initial_session, initial_id) {
         println!("Initialized session '{name}' (id={id})");
     }
-    println!("HTTP endpoint: {}", http_server_base_url());
+    println!("HTTP endpoint: {base_url}");
 
     let app = Router::new()
         .route("/health", get(health))
@@ -129,21 +157,103 @@ pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<(
         .route("/downloads/{artifact}", get(download_artifact))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(http_listener_addr())
+    let serve_result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
         .await
-        .context("failed to bind HTTP listener")?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .context("HTTP server failed")?;
-
-    ccp.mark_sessions_stopped().await?;
-    journal.shutdown()?;
-    ccp.persist_snapshot_to_sqlite().await?;
-    journal.truncate_blocking()?;
+        .context("HTTP server failed");
+    let persist_result = async {
+        ccp.mark_sessions_stopped().await?;
+        ccp.checkpoint().await
+    }
+    .await;
+    // Always drain/stop the writer, including failed snapshot/server exits.
+    let shutdown_result = journal.shutdown();
+    serve_result?;
+    persist_result?;
+    shutdown_result?;
     Ok(())
+}
+
+fn stop_bootstrap_session(session_id: Option<i64>) {
+    if let Some(session_id) = session_id
+        && let Ok(connection) = init::open_sqlite_connection()
+    {
+        let _ = connection.execute(
+            "UPDATE sessions SET is_active=0, last_stopped_at=CURRENT_TIMESTAMP WHERE id=?1",
+            [session_id],
+        );
+    }
+}
+
+fn configured_base_url() -> anyhow::Result<String> {
+    let url = url::Url::parse(&http_server_base_url())
+        .context("CCP_HTTP_BASE_URL must be an absolute HTTP(S) URL")?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!(
+            "CCP_HTTP_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment"
+        );
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
+
+fn configured_key(name: &str, default: &str) -> anyhow::Result<String> {
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => default.to_string(),
+        Err(error) => return Err(error).with_context(|| format!("{name} must be valid UTF-8")),
+    };
+    if value.is_empty()
+        || value.trim() != value
+        || !axum::http::HeaderValue::from_str(&value).is_ok_and(|header| header.to_str().is_ok())
+    {
+        anyhow::bail!(
+            "{name} must be a nonempty valid HTTP header value without surrounding whitespace"
+        );
+    }
+    Ok(value)
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = terminate.recv() => {},
+            },
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
+
+fn render_hosted_script(script: &str, base_url: &str, powershell: bool) -> String {
+    // The placeholders are inside quoted literals. Preserve those literals even
+    // when a configured URL contains characters meaningful to the shell.
+    let escaped = if powershell {
+        base_url
+            .replace('`', "``")
+            .replace('"', "`\"")
+            .replace('$', "`$")
+    } else {
+        base_url
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    };
+    script.replace("http://127.0.0.1:1338", &escaped)
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -362,45 +472,69 @@ async fn admin_dashboard() -> impl IntoResponse {
     )
 }
 
-async fn setup_client_script() -> impl IntoResponse {
+async fn setup_client_script(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
-        include_str!("../../../scripts/setup-client.sh"),
+        render_hosted_script(
+            include_str!("../../../scripts/setup-client.sh"),
+            &state.base_url,
+            false,
+        ),
     )
 }
 
-async fn setup_client_powershell() -> impl IntoResponse {
+async fn setup_client_powershell(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        include_str!("../../../scripts/setup-client.ps1"),
+        render_hosted_script(
+            include_str!("../../../scripts/setup-client.ps1"),
+            &state.base_url,
+            true,
+        ),
     )
 }
 
-async fn management_script() -> impl IntoResponse {
+async fn management_script(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
-        include_str!("../../../scripts/ccp-manage"),
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-manage"),
+            &state.base_url,
+            false,
+        ),
     )
 }
 
-async fn management_powershell() -> impl IntoResponse {
+async fn management_powershell(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        include_str!("../../../scripts/ccp-manage.ps1"),
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-manage.ps1"),
+            &state.base_url,
+            true,
+        ),
     )
 }
 
-async fn update_script() -> impl IntoResponse {
+async fn update_script(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
-        include_str!("../../../scripts/ccp-update"),
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-update"),
+            &state.base_url,
+            false,
+        ),
     )
 }
 
-async fn update_powershell() -> impl IntoResponse {
+async fn update_powershell(State(state): State<AppState>) -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        include_str!("../../../scripts/ccp-update.ps1"),
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-update.ps1"),
+            &state.base_url,
+            true,
+        ),
     )
 }
 
@@ -489,4 +623,25 @@ fn protocol_error(status: StatusCode, code: ErrorCode, message: String) -> Respo
 
 fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({"error": message.into()}))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hosted_defaults_preserve_quoted_shell_and_powershell_literals() {
+        let url = "http://127.0.0.1:1338/path$segment`quoted\"";
+        let shell =
+            render_hosted_script("DEFAULT_SERVER_URL=\"http://127.0.0.1:1338\"", url, false);
+        assert_eq!(
+            shell,
+            "DEFAULT_SERVER_URL=\"http://127.0.0.1:1338/path\\$segment\\`quoted\\\"\""
+        );
+        let powershell = render_hosted_script("$Default = \"http://127.0.0.1:1338\"", url, true);
+        assert_eq!(
+            powershell,
+            "$Default = \"http://127.0.0.1:1338/path`$segment``quoted`\"\""
+        );
+    }
 }

@@ -17,6 +17,7 @@ impl ServerState {
         status: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<AgentStatus> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         let (team, agent_name, status) = validated_status_input(team, agent_name, Some(status))?;
         // Keep a read guard until the SQLite commit so a concurrent shelf deletion
@@ -79,6 +80,7 @@ impl ServerState {
         agent_name: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<ClearStatusResult> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         let (team, agent_name, _) = validated_status_input(team, agent_name, None)?;
         self.ensure_team_exists(session_id, &team).await?;
@@ -192,6 +194,7 @@ fn validated_status_input(
     if team.is_empty() {
         bail!("team is required for agent status");
     }
+    validate_segment(team)?;
     if agent_name.is_empty() {
         bail!("agent_name is required for agent status");
     }

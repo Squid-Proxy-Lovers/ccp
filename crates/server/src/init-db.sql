@@ -264,3 +264,18 @@ CREATE TRIGGER IF NOT EXISTS message_packs_au AFTER UPDATE ON message_packs BEGI
         new.context
     );
 END;
+
+CREATE TABLE IF NOT EXISTS journal_checkpoint (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    generation TEXT NOT NULL,
+    byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS session_id_sequence (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    last_id INTEGER NOT NULL CHECK (last_id >= 0)
+);
+
+INSERT INTO session_id_sequence (id, last_id)
+VALUES (1, (SELECT COALESCE(MAX(id), 0) FROM sessions))
+ON CONFLICT(id) DO UPDATE SET last_id = MAX(last_id, excluded.last_id);

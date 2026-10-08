@@ -23,7 +23,7 @@ use uuid::Uuid;
 use self::commands::search_helpers::{normalize_search_text, tokenize_search_text};
 use crate::identity::ConnectionAuthContext;
 use crate::init::{derive_auth_token, hash_token, open_sqlite_connection};
-use crate::journal::{JournalEntry, JournalHandle, load_entries};
+use crate::journal::{JournalEntry, JournalHandle, JournalPosition, load_entries_after};
 
 #[path = "commands/mod.rs"]
 mod commands;
@@ -191,6 +191,8 @@ struct SessionCache {
     shelf_book_counts: HashMap<String, usize>,
     shelf_entry_counts: HashMap<String, usize>,
     book_entry_counts: HashMap<(String, String), usize>,
+    entry_search_generation: u64,
+    context_search_generation: u64,
     entry_query_cache: HashMap<String, Vec<EntrySummary>>,
     context_query_cache: HashMap<String, Vec<SearchContextMatch>>,
 }
@@ -209,6 +211,8 @@ impl SessionCache {
             shelf_book_counts: HashMap::new(),
             shelf_entry_counts: HashMap::new(),
             book_entry_counts: HashMap::new(),
+            entry_search_generation: 0,
+            context_search_generation: 0,
             entry_query_cache: HashMap::new(),
             context_query_cache: HashMap::new(),
         };
@@ -384,6 +388,7 @@ impl SessionCache {
         }
     }
 
+    #[allow(clippy::too_many_arguments)] // Mirrors the stored entry fields.
     fn build_entry(
         &self,
         path: EntryPath,
@@ -462,6 +467,7 @@ impl SessionCache {
         }
         self.rebuild_list_entries_cache();
         self.invalidate_entry_search_results();
+        self.invalidate_context_search_results();
     }
 
     fn refresh_appended_context(entry: &mut CachedMessagePack, appended_content: &str) {
@@ -476,10 +482,12 @@ impl SessionCache {
     }
 
     fn invalidate_entry_search_results(&mut self) {
+        self.entry_search_generation = self.entry_search_generation.wrapping_add(1);
         self.entry_query_cache.clear();
     }
 
     fn invalidate_context_search_results(&mut self) {
+        self.context_search_generation = self.context_search_generation.wrapping_add(1);
         self.context_query_cache.clear();
     }
 
@@ -566,13 +574,18 @@ impl SessionCache {
     }
 }
 
+type AppendLocks = HashMap<(i64, String), Arc<Mutex<()>>>;
+
 pub struct ServerState {
     sessions: RwLock<HashMap<i64, SessionCache>>,
     auth_tokens: RwLock<HashMap<String, AuthGrant>>,
     cert_grants: RwLock<HashMap<String, CertGrant>>,
     revoked_cert_common_names: RwLock<HashSet<String>>,
-    append_locks: Mutex<HashMap<(i64, String), Arc<Mutex<()>>>>,
+    append_locks: Mutex<AppendLocks>,
     journal: Arc<JournalHandle>,
+    // All state-changing operations hold this gate before acquiring cache locks.
+    // It keeps snapshot journal positions consistent with their captured state.
+    mutation_lock: Mutex<()>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -613,11 +626,15 @@ impl ServerState {
     ) -> anyhow::Result<Vec<SessionActivity>> {
         let sessions = self.sessions.read().await;
         let mut activity = Vec::new();
+        let selected_id = session_selector
+            .map(|selector| {
+                resolve_session_id(&sessions, selector)
+                    .with_context(|| format!("unknown session '{selector}'"))
+            })
+            .transpose()?;
 
         for (session_id, session) in sessions.iter() {
-            if session_selector.is_some_and(|selector| {
-                selector != session_id.to_string() && selector != session.metadata.session_name
-            }) {
+            if selected_id.is_some_and(|selected| selected != *session_id) {
                 continue;
             }
 
@@ -688,9 +705,9 @@ impl ServerState {
         }
 
         activity.sort_by(|left, right| {
-            right
-                .created_at
-                .cmp(&left.created_at)
+            activity_timestamp_key(&right.created_at)
+                .cmp(&activity_timestamp_key(&left.created_at))
+                .then_with(|| right.created_at.cmp(&left.created_at))
                 .then_with(|| right.id.cmp(&left.id))
         });
         activity.truncate(limit.clamp(1, 500));
@@ -727,55 +744,51 @@ impl ServerState {
         if name.is_empty() {
             bail!("session name must not be empty");
         }
-        if let Some(existing) = self
-            .sessions
-            .read()
-            .await
+        let _mutation = self.mutation_lock.lock().await;
+        let mut sessions = self.sessions.write().await;
+        if let Some(existing) = sessions
             .values()
             .find(|session| session.metadata.session_name == name)
-            .map(|session| session.metadata.clone())
         {
-            return Ok(existing);
+            return Ok(existing.metadata.clone());
         }
         let session_id = crate::init::create_session(name)?;
-        let metadata = SessionMetadata {
-            session_name: name.to_string(),
-            session_id,
-            description: "Runtime session for CCP inter-agent communication".to_string(),
-            owner: String::new(),
-            labels: Vec::new(),
-            visibility: "public".to_string(),
-            purpose: "Runtime session for CCP inter-agent communication".to_string(),
-        };
-        self.sessions
-            .write()
-            .await
-            .insert(session_id, SessionCache::new(metadata.clone(), true));
+        let connection = open_sqlite_connection()?;
+        let mut stored = database::load_sessions(&connection)?;
+        let session = stored
+            .remove(&session_id)
+            .context("created session was not stored")?;
+        let metadata = session.metadata.clone();
+        sessions.insert(session_id, session);
         Ok(metadata)
     }
 
     pub async fn delete_session(&self, session_selector: &str) -> anyhow::Result<SessionMetadata> {
+        let _mutation = self.mutation_lock.lock().await;
+        self.checkpoint_locked().await?;
         let mut sessions = self.sessions.write().await;
-        let session_id = sessions
-            .iter()
-            .find(|(id, session)| {
-                id.to_string() == session_selector
-                    || session.metadata.session_name == session_selector
-            })
-            .map(|(id, _)| *id)
+        let session_id = resolve_session_id(&sessions, session_selector)
             .with_context(|| format!("unknown session '{session_selector}'"))?;
-        let removed = sessions
-            .remove(&session_id)
-            .expect("session was just resolved");
-        drop(sessions);
-        self.append_locks
-            .lock()
-            .await
-            .retain(|(candidate_id, _), _| *candidate_id != session_id);
         let connection = open_sqlite_connection()?;
         connection
             .execute("DELETE FROM sessions WHERE id = ?1", [session_id])
             .with_context(|| format!("failed to delete session {session_id}"))?;
+        let removed = sessions
+            .remove(&session_id)
+            .expect("session was just resolved");
+        drop(sessions);
+        self.auth_tokens
+            .write()
+            .await
+            .retain(|_, grant| grant.session_id != session_id);
+        self.cert_grants
+            .write()
+            .await
+            .retain(|_, grant| grant.session_id != session_id);
+        self.append_locks
+            .lock()
+            .await
+            .retain(|(candidate_id, _), _| *candidate_id != session_id);
         Ok(removed.metadata)
     }
 
@@ -784,14 +797,11 @@ impl ServerState {
         session_selector: &str,
     ) -> anyhow::Result<protocol::SessionStats> {
         let sessions = self.sessions.read().await;
-        let session = sessions
-            .iter()
-            .find(|(id, session)| {
-                id.to_string() == session_selector
-                    || session.metadata.session_name == session_selector
-            })
-            .map(|(_, session)| session)
+        let session_id = resolve_session_id(&sessions, session_selector)
             .with_context(|| format!("unknown session '{session_selector}'"))?;
+        let session = sessions
+            .get(&session_id)
+            .expect("session was just resolved");
         Ok(protocol::SessionStats {
             session: session.metadata.clone(),
             shelves: session.shelves.len(),
@@ -821,7 +831,8 @@ impl ServerState {
         &self,
         session_id: i64,
     ) -> anyhow::Result<protocol::MasterInstructions> {
-        if !self.sessions.read().await.contains_key(&session_id) {
+        let sessions = self.sessions.read().await;
+        if !sessions.contains_key(&session_id) {
             bail!("unknown session id {session_id}");
         }
         let connection = open_sqlite_connection()?;
@@ -900,16 +911,8 @@ impl ServerState {
         session_selector: &str,
         content: &str,
     ) -> anyhow::Result<protocol::InstructionRecord> {
-        let session_id = self
-            .sessions
-            .read()
-            .await
-            .iter()
-            .find(|(id, session)| {
-                id.to_string() == session_selector
-                    || session.metadata.session_name == session_selector
-            })
-            .map(|(id, _)| *id)
+        let sessions = self.sessions.read().await;
+        let session_id = resolve_session_id(&sessions, session_selector)
             .with_context(|| format!("unknown session '{session_selector}'"))?;
         let connection = open_sqlite_connection()?;
         connection.execute(
@@ -937,6 +940,7 @@ impl ServerState {
     }
 
     pub async fn note_auth_token_used(&self, token: &str) -> anyhow::Result<()> {
+        let _mutation = self.mutation_lock.lock().await;
         let timestamp = current_timestamp_string()?;
         let token_hash = hash_token(token);
 
@@ -968,6 +972,7 @@ impl ServerState {
         cert_pem: &str,
         expires_at: &str,
     ) -> anyhow::Result<()> {
+        let _mutation = self.mutation_lock.lock().await;
         let created_at = current_timestamp_string()?;
         self.journal.append(JournalEntry::IssuedCert {
             session_id,
@@ -992,6 +997,7 @@ impl ServerState {
     }
 
     pub async fn mark_sessions_stopped(&self) -> anyhow::Result<()> {
+        let _mutation = self.mutation_lock.lock().await;
         let timestamp = current_timestamp_string()?;
         let mut sessions = self.sessions.write().await;
         for session in sessions.values_mut() {
@@ -1027,7 +1033,7 @@ impl ServerState {
         Ok(())
     }
 
-    async fn ensure_read_access(
+    pub(crate) async fn ensure_read_access(
         &self,
         session_id: i64,
         auth_context: &ConnectionAuthContext,
@@ -1087,7 +1093,7 @@ fn normalize_optional_text(value: Option<&str>) -> Option<String> {
 }
 
 fn deleted_entry_key(name: &str, shelf: &str, book: &str, deleted_at: &str) -> String {
-    format!("{shelf}::{book}::{name}::{deleted_at}")
+    format!("{shelf}::{book}::{name}::{deleted_at}::{}", Uuid::new_v4())
 }
 
 fn parse_labels(raw: &str) -> Vec<String> {
@@ -1151,6 +1157,45 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
         .extend(tokenize_search_text(appended_content));
 }
 
-fn checkpoint_journal(journal: &JournalHandle) {
-    let _ = journal.truncate_blocking();
+fn activity_timestamp_key(value: &str) -> Option<u64> {
+    if let Ok(seconds) = value.parse() {
+        return Some(seconds);
+    }
+    // Legacy SQLite rows use UTC calendar strings rather than epoch seconds.
+    let (date, clock) = value.split_once(' ')?;
+    let mut date_parts = date.split('-');
+    let year = date_parts.next()?.parse().ok()?;
+    let month: u8 = date_parts.next()?.parse().ok()?;
+    let day = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+    let mut clock_parts = clock.split(':');
+    let hour = clock_parts.next()?.parse().ok()?;
+    let minute = clock_parts.next()?.parse().ok()?;
+    let second = clock_parts.next()?.parse().ok()?;
+    if clock_parts.next().is_some() {
+        return None;
+    }
+    let date = time::Date::from_calendar_date(year, month.try_into().ok()?, day).ok()?;
+    let clock = time::Time::from_hms(hour, minute, second).ok()?;
+    u64::try_from(
+        time::PrimitiveDateTime::new(date, clock)
+            .assume_utc()
+            .unix_timestamp(),
+    )
+    .ok()
+}
+
+fn resolve_session_id(sessions: &HashMap<i64, SessionCache>, selector: &str) -> Option<i64> {
+    sessions
+        .iter()
+        .find(|(_, session)| session.metadata.session_name == selector)
+        .map(|(id, _)| *id)
+        .or_else(|| {
+            selector
+                .parse::<i64>()
+                .ok()
+                .filter(|id| sessions.contains_key(id))
+        })
 }

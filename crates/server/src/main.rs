@@ -11,7 +11,7 @@ const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server create-session <session>"#;
 
 #[derive(Parser)]
-#[command(name = "server", args_conflicts_with_subcommands = true)]
+#[command(name = "server", version, args_conflicts_with_subcommands = true)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -57,6 +57,9 @@ fn parse_cli() -> Cli {
 }
 
 fn exit_with_cli_error(error: clap::Error, input_formats: &str) -> ! {
+    if !error.use_stderr() {
+        error.exit();
+    }
     // exit with an error code and print the input formats
     // Input formats:
     //     server <session-name>

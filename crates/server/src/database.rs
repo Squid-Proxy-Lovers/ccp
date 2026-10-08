@@ -23,9 +23,22 @@ impl ServerState {
             revoked_cert_common_names: RwLock::new(revoked_cert_common_names),
             append_locks: Mutex::new(HashMap::new()),
             journal,
+            mutation_lock: Mutex::new(()),
         };
 
-        for entry in load_entries(state.journal.path())? {
+        let checkpoint = connection
+            .query_row(
+                "SELECT generation, byte_offset FROM journal_checkpoint WHERE id = 1",
+                [],
+                |row| {
+                    Ok(JournalPosition {
+                        generation: row.get(0)?,
+                        byte_offset: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?;
+        for entry in load_entries_after(state.journal.path(), checkpoint.as_ref())? {
             state.apply_journal_entry(entry).await;
         }
 
@@ -33,15 +46,31 @@ impl ServerState {
     }
 
     pub async fn persist_snapshot_to_sqlite(&self) -> anyhow::Result<()> {
-        persist_snapshot(Snapshot::capture(self).await)
+        let _mutation = self.mutation_lock.lock().await;
+        persist_snapshot(Snapshot::capture(self).await?)
     }
 
     pub fn try_persist_snapshot_to_sqlite(&self) -> anyhow::Result<bool> {
-        let Some(snapshot) = Snapshot::try_capture(self) else {
+        let Ok(_mutation) = self.mutation_lock.try_lock() else {
+            return Ok(false);
+        };
+        let Some(snapshot) = Snapshot::try_capture(self)? else {
             return Ok(false);
         };
         persist_snapshot(snapshot)?;
         Ok(true)
+    }
+
+    pub(crate) async fn checkpoint(&self) -> anyhow::Result<()> {
+        let _mutation = self.mutation_lock.lock().await;
+        self.checkpoint_locked().await
+    }
+
+    /// Caller must hold mutation_lock and no cache lock. Persist all queued
+    /// mutations and their journal position atomically before rotating the log.
+    pub(super) async fn checkpoint_locked(&self) -> anyhow::Result<()> {
+        persist_snapshot(Snapshot::capture(self).await?)?;
+        self.journal.checkpoint()
     }
 
     async fn apply_journal_entry(&self, entry: JournalEntry) {
@@ -178,23 +207,36 @@ pub(super) struct Snapshot {
     sessions: HashMap<i64, SessionCache>,
     auth_tokens: HashMap<String, AuthGrant>,
     cert_grants: HashMap<String, CertGrant>,
+    journal_position: JournalPosition,
 }
 
 impl Snapshot {
-    pub(super) async fn capture(state: &ServerState) -> Self {
-        Self {
+    pub(super) async fn capture(state: &ServerState) -> anyhow::Result<Self> {
+        let journal_position = state.journal.flush()?;
+        Ok(Self {
             sessions: state.sessions.read().await.clone(),
             auth_tokens: state.auth_tokens.read().await.clone(),
             cert_grants: state.cert_grants.read().await.clone(),
-        }
+            journal_position,
+        })
     }
 
-    fn try_capture(state: &ServerState) -> Option<Self> {
-        Some(Self {
-            sessions: state.sessions.try_read().ok()?.clone(),
-            auth_tokens: state.auth_tokens.try_read().ok()?.clone(),
-            cert_grants: state.cert_grants.try_read().ok()?.clone(),
-        })
+    fn try_capture(state: &ServerState) -> anyhow::Result<Option<Self>> {
+        let Ok(sessions) = state.sessions.try_read() else {
+            return Ok(None);
+        };
+        let Ok(auth_tokens) = state.auth_tokens.try_read() else {
+            return Ok(None);
+        };
+        let Ok(cert_grants) = state.cert_grants.try_read() else {
+            return Ok(None);
+        };
+        Ok(Some(Self {
+            sessions: sessions.clone(),
+            auth_tokens: auth_tokens.clone(),
+            cert_grants: cert_grants.clone(),
+            journal_position: state.journal.flush()?,
+        }))
     }
 }
 
@@ -236,6 +278,7 @@ pub(super) fn persist_deleted_entry(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Matches the transfer audit row.
 pub(super) fn persist_transfer_log(
     session_id: i64,
     direction: &str,
@@ -580,6 +623,11 @@ fn persist_snapshot_transaction(
     transaction: &Transaction<'_>,
     snapshot: &Snapshot,
 ) -> anyhow::Result<()> {
+    transaction.execute(
+        "INSERT INTO journal_checkpoint (id, generation, byte_offset) VALUES (1, ?1, ?2)
+         ON CONFLICT(id) DO UPDATE SET generation = excluded.generation, byte_offset = excluded.byte_offset",
+        params![snapshot.journal_position.generation, snapshot.journal_position.byte_offset],
+    ).context("failed to persist journal checkpoint")?;
     for (session_id, session) in &snapshot.sessions {
         transaction
             .execute(
@@ -777,7 +825,7 @@ fn persist_snapshot_transaction(
     Ok(())
 }
 
-fn load_sessions(connection: &Connection) -> anyhow::Result<HashMap<i64, SessionCache>> {
+pub(super) fn load_sessions(connection: &Connection) -> anyhow::Result<HashMap<i64, SessionCache>> {
     let mut sessions = HashMap::new();
     let mut stmt = connection.prepare(
         "SELECT id, name, description, owner, labels, visibility, purpose, is_active, last_started_at, last_stopped_at

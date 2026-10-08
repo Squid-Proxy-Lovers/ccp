@@ -49,6 +49,9 @@ pub async fn handle_message_request(
             }
         }
         ClientRequest::GetMasterInstructions { session_id } => {
+            if let Err(error) = state.ensure_read_access(session_id, auth_context).await {
+                return map_error(error);
+            }
             match state.master_instructions(session_id).await {
                 Ok(instructions) => ServerResponse::MasterInstructions(instructions),
                 Err(error) => map_error(error),
@@ -97,9 +100,7 @@ pub async fn handle_message_request(
             }
         }
         ClientRequest::SearchDeleted { session_id, query } => {
-            if query.trim().is_empty() {
-                return bad_request("query is required for search_deleted");
-            }
+            // An empty query lists the archive, matching the CLI and MCP contract.
             match state
                 .search_deleted_entries(session_id, auth_context, &query)
                 .await
@@ -474,6 +475,9 @@ impl From<anyhow::Error> for CcpError {
             || root.contains("must be")
             || root.contains("must not exceed")
             || root.contains("invalid")
+            || root.contains("cannot contain")
+            || root.contains("integrity check failed")
+            || error.to_string().starts_with("invalid ")
         {
             CcpError::BadRequest(error.to_string())
         } else {
@@ -490,4 +494,27 @@ fn map_error(error: impl Into<CcpError>) -> ServerResponse {
         CcpError::Internal => (ErrorCode::Internal, "internal server error".to_string()),
     };
     ServerResponse::Error(ErrorResponse { code, message })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_paths_bundles_and_timestamps_are_bad_requests() {
+        for error in [
+            anyhow::anyhow!("name cannot contain '::'"),
+            anyhow::anyhow!("bundle integrity check failed: hash mismatch"),
+            anyhow::Error::new("".parse::<u64>().unwrap_err())
+                .context("invalid at_timestamp: must be Unix seconds"),
+        ] {
+            assert!(matches!(
+                map_error(error),
+                ServerResponse::Error(ErrorResponse {
+                    code: ErrorCode::BadRequest,
+                    ..
+                })
+            ));
+        }
+    }
 }

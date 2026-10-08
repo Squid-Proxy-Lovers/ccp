@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::super::*;
-use super::search_helpers::{Ranked, optional_search_query, score_search_candidate};
+use super::search_helpers::{Ranked, SearchQuery, run_bounded_search_task, score_search_candidate};
 
 impl ServerState {
     pub async fn search_deleted_entries(
@@ -13,10 +13,14 @@ impl ServerState {
         query: &str,
     ) -> anyhow::Result<Vec<DeletedEntrySummary>> {
         self.ensure_read_access(session_id, auth_context).await?;
-        let maybe_query = optional_search_query(query);
+        let maybe_query = if query.trim().is_empty() {
+            None
+        } else {
+            Some(SearchQuery::new(query)?)
+        };
 
         // SQLite query + fuzzy scoring are both blocking work
-        tokio::task::spawn_blocking(move || {
+        run_bounded_search_task(move || {
             let connection = open_sqlite_connection()?;
             let mut stmt = connection.prepare(
                 "SELECT entry_key, name, description, labels, shelf_name, book_name, shelf_description, book_description, deleted_at, deleted_by_client_common_name
@@ -67,7 +71,7 @@ impl ServerState {
                             ],
                         )
                     })
-                    .unwrap_or(1.0);
+                    .unwrap_or(if maybe_query.is_none() { 1.0 } else { 0.0 });
                 if maybe_query.is_none() || score > 0.0 {
                     results.push(Ranked::new(score, summary));
                 }
@@ -94,6 +98,6 @@ impl ServerState {
             Ok(results.into_iter().map(|ranked| ranked.value).collect())
         })
         .await
-        .context("search task panicked")?
+        ?
     }
 }

@@ -107,7 +107,7 @@ Each item in an entry's `history` array:
 | Field | Type | Description |
 |---|---|---|
 | `operation_id` | string | Unique ID for this append operation |
-| `client_common_name` | string | Which client cert made the append |
+| `client_common_name` | string | Transport worker identity; current HTTP appends use `http-client` |
 | `agent_name` | string or null | Agent name from append metadata |
 | `host_name` | string or null | Host name from append metadata |
 | `reason` | string or null | Why this append was made |
@@ -128,3 +128,9 @@ When importing a droplet into a session that already has entries with the same n
 | `overwrite` | Replace existing entries with the ones from the droplet. |
 | `skip` | Keep existing entries, only import new ones. |
 | `merge-history` | Keep existing entry content, add any history rows from the droplet that aren't already present (matched by `operation_id`). |
+
+## Import validation and historical reads
+
+Entry, shelf, and book names must be nonblank and valid path segments. An incoming bundle cannot contain duplicate entry paths after path normalization, regardless of conflict policy. Each entry's history must use unique, nonblank operation IDs and chronological, nonnegative Unix-second timestamp strings. Invalid input is rejected before changing entries.
+
+`get-entry-at` reconstructs text from append history and preserves original newline content. It does not restore older descriptions or labels. `merge-history` retains the current content; if the merged history cannot reconstruct that content, point-in-time reads return an explicit error. Ordinary reads continue to return the stored text. Exported entries do not carry their original creation time separately from append history.

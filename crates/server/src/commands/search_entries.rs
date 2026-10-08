@@ -24,6 +24,7 @@ impl ServerState {
         if let Some(cached) = session.entry_query_cache.get(&search_query.raw) {
             return Ok(cached.clone());
         }
+        let generation = session.entry_search_generation;
         let snapshots = session
             .entries
             .values()
@@ -71,7 +72,10 @@ impl ServerState {
         let session = sessions
             .get_mut(&session_id)
             .with_context(|| format!("unknown session id {session_id}"))?;
-        session.cache_entry_query(cache_key, results.clone());
+        // A mutation may have invalidated this snapshot while scoring ran.
+        if session.entry_search_generation == generation {
+            session.cache_entry_query(cache_key, results.clone());
+        }
         Ok(results)
     }
 }

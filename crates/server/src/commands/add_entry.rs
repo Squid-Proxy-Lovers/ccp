@@ -7,6 +7,8 @@ use protocol::DuplicateWarning;
 use super::super::*;
 
 impl ServerState {
+    // Preserve the existing command API used by the dispatcher and clients.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_entry(
         &self,
         session_id: i64,
@@ -18,6 +20,7 @@ impl ServerState {
         book_name: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<(MessageEntry, Option<DuplicateWarning>)> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         if name.trim().is_empty() {
             bail!("name is required for add_entry");

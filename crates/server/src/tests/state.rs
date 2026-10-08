@@ -54,6 +54,7 @@ fn admin(session_id: i64, common_name: &str) -> ConnectionAuthContext {
 }
 
 impl TestContext {
+    #[allow(clippy::await_holding_lock)] // Serializes process-global test environment.
     async fn new(test_name: &str) -> anyhow::Result<Self> {
         let env_guard = test_env_lock()
             .lock()
@@ -1174,7 +1175,7 @@ async fn handshake_returns_version_info() {
             assert!(info.compatible);
             assert!(!info.server_version.is_empty());
         }
-        other => panic!("expected HandshakeOk, got {:?}", other),
+        other => panic!("expected HandshakeOk, got {other:?}"),
     }
 }
 
@@ -1196,7 +1197,7 @@ async fn handshake_rejects_incompatible_protocol_version() {
             assert_eq!(info.protocol_version, protocol::PROTOCOL_VERSION);
             assert!(!info.compatible);
         }
-        other => panic!("expected HandshakeRejected, got {:?}", other),
+        other => panic!("expected HandshakeRejected, got {other:?}"),
     }
 }
 
@@ -1344,7 +1345,7 @@ async fn import_rollback_restores_original_shelf_descriptions() {
 }
 
 #[tokio::test]
-async fn search_deleted_rejects_empty_query() {
+async fn search_deleted_accepts_empty_query_for_list_all() {
     let ctx = TestContext::new("search-deleted-empty")
         .await
         .expect("test context should initialize");
@@ -1357,14 +1358,8 @@ async fn search_deleted_rejects_empty_query() {
 
     let response = crate::message::handle_message_request(&ctx.state, &auth, request).await;
     match response {
-        protocol::ServerResponse::Error(err) => {
-            assert_eq!(err.code, protocol::ErrorCode::BadRequest);
-            assert!(err.message.contains("required"));
-        }
-        other => panic!(
-            "expected error for empty search-deleted query, got {:?}",
-            other
-        ),
+        protocol::ServerResponse::DeletedEntries(entries) => assert!(entries.is_empty()),
+        other => panic!("expected archive listing for blank query, got {other:?}"),
     }
 }
 
@@ -2129,4 +2124,385 @@ async fn import_v2_flushes_query_caches() {
         session.context_query_cache.is_empty(),
         "context_query_cache should be flushed after import"
     );
+}
+
+#[tokio::test]
+async fn snapshot_watermark_prevents_replaying_already_persisted_appends() {
+    let ctx = TestContext::new("snapshot-watermark").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "entry",
+            "",
+            &[],
+            "base",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "entry",
+            None,
+            None,
+            &auth,
+            "first",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(ctx.session_id, "team", "old", &auth)
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(ctx.session_id, "team", "new", &auth)
+        .await
+        .unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    // Simulate a crash after SQLite commit but before journal rotation.
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    let entry = recovered
+        .get_entry(ctx.session_id, "entry", None, None, &auth)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.context, "base\nfirst");
+    assert_eq!(
+        recovered.sessions.read().await[&ctx.session_id]
+            .entries
+            .values()
+            .next()
+            .unwrap()
+            .history
+            .len(),
+        1
+    );
+    assert_eq!(
+        recovered.sessions.read().await[&ctx.session_id].shelf_description("team"),
+        "new"
+    );
+    // Writes accepted after the snapshot must still replay.
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "entry",
+            None,
+            None,
+            &auth,
+            "second",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.journal.flush().unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "entry", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "base\nfirst\nsecond"
+    );
+}
+
+#[tokio::test]
+async fn deletion_and_restore_preserve_other_queued_entries_across_recovery() {
+    let ctx = TestContext::new("checkpoint-delete-restore").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    for name in ["keep", "remove"] {
+        ctx.state
+            .add_entry(
+                ctx.session_id,
+                name,
+                "",
+                &[],
+                name,
+                "main",
+                "default",
+                &auth,
+            )
+            .await
+            .unwrap();
+    }
+    let deleted = ctx
+        .state
+        .delete_entry(ctx.session_id, "remove", None, None, &auth)
+        .await
+        .unwrap();
+    // A different journal generation now follows the snapshot watermark.
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "keep",
+            None,
+            None,
+            &auth,
+            "after rotation",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.journal.flush().unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert!(
+        recovered
+            .get_entry(ctx.session_id, "remove", None, None, &auth)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "keep\nafter rotation"
+    );
+    ctx.state
+        .restore_deleted_entry(ctx.session_id, &deleted.entry_key, &auth)
+        .await
+        .unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "remove", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "remove"
+    );
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "keep\nafter rotation"
+    );
+}
+
+#[tokio::test]
+async fn failed_checkpoint_preserves_memory_and_recoverable_journal() {
+    let ctx = TestContext::new("checkpoint-failure").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "keep",
+            "",
+            &[],
+            "unpersisted",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON journal_checkpoint BEGIN SELECT RAISE(ABORT, 'test snapshot failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .delete_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .is_err()
+    );
+    ctx.journal.flush().unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    for state in [&ctx.state, &recovered] {
+        assert_eq!(
+            state
+                .get_entry(ctx.session_id, "keep", None, None, &auth)
+                .await
+                .unwrap()
+                .unwrap()
+                .context,
+            "unpersisted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn session_creation_uses_stored_metadata_and_concurrent_calls_preserve_cache() {
+    let ctx = TestContext::new("session-metadata").await.unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute("INSERT INTO sessions(name, owner, labels, visibility, purpose) VALUES('configured', 'owner', 'one,two', 'private', 'custom')", []).unwrap();
+    let (first, second) = tokio::join!(
+        ctx.state.create_session("configured"),
+        ctx.state.create_session("configured")
+    );
+    let first = first.unwrap();
+    assert_eq!(first, second.unwrap());
+    assert_eq!(first.owner, "owner");
+    assert_eq!(first.labels, ["one", "two"]);
+    assert_eq!(first.visibility, "private");
+    assert_eq!(first.purpose, "custom");
+    let auth = writer(first.session_id, "writer");
+    ctx.state
+        .add_entry(
+            first.session_id,
+            "keep",
+            "",
+            &[],
+            "content",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    ctx.state.create_session("configured").await.unwrap();
+    assert_eq!(
+        ctx.state
+            .get_entry(first.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "content"
+    );
+}
+
+#[tokio::test]
+async fn session_delete_failure_keeps_runtime_state_and_credentials() {
+    let ctx = TestContext::new("delete-session-failure").await.unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'test delete failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .delete_session("session-under-test")
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.state
+            .sessions
+            .read()
+            .await
+            .contains_key(&ctx.session_id)
+    );
+    assert!(ctx.state.cert_grants.read().await.contains_key("writer"));
+}
+
+#[test]
+fn archive_keys_do_not_collide_for_identical_paths_and_milliseconds() {
+    assert_ne!(
+        deleted_entry_key("same", "main", "default", "1000"),
+        deleted_entry_key("same", "main", "default", "1000")
+    );
+}
+
+#[tokio::test]
+async fn targeted_archive_and_restore_failures_roll_back_memory_and_sqlite() {
+    let ctx = TestContext::new("archive-restore-rollback").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "keep",
+            "",
+            &[],
+            "content",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_archive BEFORE INSERT ON deleted_message_packs BEGIN SELECT RAISE(ABORT, 'test archive failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .delete_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.state
+            .get_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    connection
+        .execute_batch("DROP TRIGGER reject_archive;")
+        .unwrap();
+    let deleted = ctx
+        .state
+        .delete_entry(ctx.session_id, "keep", None, None, &auth)
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(ctx.session_id, "main", "current description", &auth)
+        .await
+        .unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_restore BEFORE DELETE ON deleted_message_packs BEGIN SELECT RAISE(ABORT, 'test restore failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .restore_deleted_entry(ctx.session_id, &deleted.entry_key, &auth)
+            .await
+            .is_err()
+    );
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    for state in [&ctx.state, &recovered] {
+        assert!(
+            state
+                .get_entry(ctx.session_id, "keep", None, None, &auth)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state.sessions.read().await[&ctx.session_id].shelf_description("main"),
+            "current description"
+        );
+    }
+    assert!(
+        database::load_deleted_entry(&deleted.entry_key)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn activity_order_handles_mixed_epoch_and_sqlite_timestamps_consistently() {
+    assert_eq!(activity_timestamp_key("1970-01-01 00:00:10"), Some(10));
+    assert!(activity_timestamp_key("9") < activity_timestamp_key("10"));
+    assert!(activity_timestamp_key("10") < activity_timestamp_key("2026-01-01 00:00:00"));
+    assert!(activity_timestamp_key("9") < activity_timestamp_key("2026-01-01 00:00:00"));
+    assert_eq!(activity_timestamp_key("invalid"), None);
 }

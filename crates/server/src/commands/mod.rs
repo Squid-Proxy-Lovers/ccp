@@ -24,3 +24,6 @@ mod search_deleted_entries;
 mod search_entries;
 pub(super) mod search_helpers;
 mod search_shelves;
+
+#[cfg(test)]
+mod tests;
