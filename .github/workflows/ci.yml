@@ -85,10 +85,10 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             platform: linux-x86_64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             platform: linux-aarch64
           - target: x86_64-apple-darwin
             os: macos-15-intel
@@ -104,22 +104,23 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build Linux binaries and verify Bookworm runtime
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-build-linux.sh '${{ matrix.target }}'
 
-      - name: Build
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --workspace --locked --release --target ${{ matrix.target }}
+      - name: Build macOS binaries
+        if: runner.os == 'macOS'
+        run: cargo build --locked --release -p server -p client --target ${{ matrix.target }}
 
       - name: Package binaries
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/server dist/ccp-server-${{ matrix.platform }}
-          cp target/${{ matrix.target }}/release/client dist/ccp-client-${{ matrix.platform }}
+          binary_dir="target/${{ matrix.target }}/release"
+          if [ '${{ runner.os }}' = Linux ]; then
+            binary_dir="target/bookworm/${{ matrix.target }}/release"
+          fi
+          cp "$binary_dir/server" dist/ccp-server-${{ matrix.platform }}
+          cp "$binary_dir/client" dist/ccp-client-${{ matrix.platform }}
 
       - uses: actions/upload-artifact@v4
         with:

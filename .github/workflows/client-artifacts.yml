@@ -18,10 +18,12 @@ jobs:
             source: target/release/client
           - runner: ubuntu-24.04
             artifact: ccp-client-linux-x86_64
-            source: target/release/client
+            target: x86_64-unknown-linux-gnu
+            source: target/bookworm/x86_64-unknown-linux-gnu/release/client
           - runner: ubuntu-24.04-arm
             artifact: ccp-client-linux-aarch64
-            source: target/release/client
+            target: aarch64-unknown-linux-gnu
+            source: target/bookworm/aarch64-unknown-linux-gnu/release/client
           - runner: windows-2025
             artifact: ccp-client-windows-x86_64.exe
             source: target/release/client.exe
@@ -29,7 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo build --locked --release -p client
+      - if: runner.os != 'Linux'
+        run: cargo build --locked --release -p client
+      - if: runner.os == 'Linux'
+        run: bash scripts/ci-build-linux.sh '${{ matrix.target }}' client
       - shell: bash
         run: cp '${{ matrix.source }}' '${{ matrix.artifact }}'
       - uses: actions/upload-artifact@v4
