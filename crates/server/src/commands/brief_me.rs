@@ -65,7 +65,7 @@ impl ServerState {
             }
         }
         let mut label_pairs: Vec<_> = label_counts.into_iter().collect();
-        label_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+        label_pairs.sort_by_key(|pair| std::cmp::Reverse(pair.1));
         let frequent_labels: Vec<String> = label_pairs
             .into_iter()
             .take(10)
