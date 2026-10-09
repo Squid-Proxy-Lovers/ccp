@@ -53,6 +53,29 @@ docs/                design docs and format specs
 - Dependencies we don't need
 - Features that break backward compatibility without discussion
 
+## Dependency updates
+
+Dependabot opens weekly update PRs for Cargo, the MCP package, GitHub Actions,
+Docker images, and the Rust toolchain. Cargo updates are limited to the existing
+manifest ranges; Python major upgrades require a separate review. Updates are
+reviewed PRs and do not merge automatically.
+
+Rust 1.88 is the supported minimum. The pinned development/CI compiler is in
+`rust-toolchain.toml`; when changing it, update the Docker builder version too.
+Cargo's resolver prefers dependencies compatible with the minimum compiler.
+Build with `--locked` so validation and release artifacts use the reviewed lockfile.
+
+Before accepting dependency updates, run the existing unit/CLI tests, the MCP
+smoke test, and the old/new client and persisted-data compatibility check. CI also
+checks the minimum compiler and audits Rust/Python dependencies; the weekly audit
+detects newly published advisories even when there is no source change.
+
+Keep the protocol, database schema, CLI commands and public response shapes
+compatible in maintenance updates. Bincode 1.3 remains in use to preserve the
+version-1 wire format. RustSec reports it as unmaintained, without a known
+vulnerability; replacing the serializer requires an explicitly versioned protocol
+migration, rather than a routine dependency update.
+
 ## Versioning
 
 CCP follows [semver](https://semver.org/). We're at `0.x.y` which means the protocol and API can still change between minor versions.

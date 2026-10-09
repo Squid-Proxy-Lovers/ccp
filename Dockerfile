@@ -1,9 +1,11 @@
-FROM rust:1-bookworm AS builder
+FROM rust:1.99.0-bookworm AS builder
 
 WORKDIR /app
 
 COPY Cargo.toml /app/Cargo.toml
 COPY Cargo.lock /app/Cargo.lock
+COPY rust-toolchain.toml /app/rust-toolchain.toml
+COPY .cargo/config.toml /app/.cargo/config.toml
 
 # Copy all workspace member manifests so cargo can resolve the workspace.
 # Only protocol and server get full source trees — client and tests get
@@ -17,7 +19,7 @@ RUN mkdir -p /app/crates/client/src && echo "" > /app/crates/client/src/lib.rs &
 COPY tests/Cargo.toml /app/tests/Cargo.toml
 RUN mkdir -p /app/tests/src && echo "" > /app/tests/src/lib.rs
 
-RUN cargo build --release -p server
+RUN cargo build --release --locked -p server
 
 FROM debian:bookworm-slim AS runtime
 

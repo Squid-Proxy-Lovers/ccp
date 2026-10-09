@@ -161,7 +161,7 @@ build_from_source() {
     fi
 
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release); then
+    if ! (cd "$build_dir" && cargo build --release --locked); then
         err "Build failed."
         exit 1
     fi
