@@ -225,7 +225,7 @@ chmod +x ccp-manage
 
 ## MCP tools
 
-Run `bash install.sh --client` to set up the FastMCP bridge. Agents get tools for reading, searching, creating entries, appending content, and publishing temporary team status. Destructive operations (delete, import, revoke, restore) and server management are CLI-only.
+Run `bash install.sh --client` to set up the FastMCP bridge. Agents get tools for reading, searching, creating entries, appending content, and publishing temporary team status. Entry deletion, import, and restoration are CLI-only; server management uses the admin HTTP API, scripts, or dashboard. Certificate enrollment and revocation are outside the active HTTP/MCP workflow.
 
 Challenge teams use existing shelves. An agent sets its status when starting work, updates it when the task changes, and clears it when finished; unrefreshed statuses expire after three hours so stale workers disappear automatically.
 

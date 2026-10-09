@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "package_version": "0.2.0",
+  "artifacts": {
+    "ccp-client-darwin-aarch64": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "aarch64-apple-darwin",
+      "sha256": "64f033d9da5b3ba597962d3e03f005946a13f92992b1a539203b0cd26173c881",
+      "size_bytes": 4181472
+    },
+    "ccp-server-darwin-aarch64": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "aarch64-apple-darwin",
+      "sha256": "2aad905570e4682ded0bed0a9fa49f1a928335e87f64c1e303ab5eb43edc9ab4",
+      "size_bytes": 6744240
+    },
+    "ccp-client-darwin-x86_64": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "x86_64-apple-darwin",
+      "sha256": "568d7c5c0adfb9b0d1cece542f98b7ab90505dfc14a22160af1749cf08414847",
+      "size_bytes": 4269328
+    },
+    "ccp-client-linux-aarch64": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "aarch64-unknown-linux-gnu",
+      "sha256": "451f102a3a749f19d86f9d58f200d6474aa3b2c7b66ad33d19f83815726a2249",
+      "size_bytes": 4768344,
+      "validated_runtime": "Debian Bookworm / glibc 2.36"
+    },
+    "ccp-client-linux-x86_64": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "x86_64-unknown-linux-gnu",
+      "sha256": "1b345f35873c7253a8db2affc22b79968b3656241bd7136aed7b6686127a342d",
+      "size_bytes": 4733480,
+      "validated_runtime": "Debian Bookworm / glibc 2.36"
+    },
+    "ccp-client-windows-x86_64.exe": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "x86_64-pc-windows-msvc",
+      "sha256": "c56596f68d08a56dde99fb633f85b2dd0389cbd6e705210d02a507eeece8c3c1",
+      "size_bytes": 3806208
+    },
+    "ccp-mcp.tar.gz": {
+      "source_commit": "ea645e5055c86c022c6ae36ba8bfa7b047f688af",
+      "workflow_run": 37869487087,
+      "workflow_url": "https://github.com/Squid-Proxy-Lovers/ccp/actions/runs/37869487087",
+      "target": "python-source",
+      "sha256": "752c326ede7ea39dd5d28d309dd349865aa464365d5b5c53f47beee5c1720f6d",
+      "size_bytes": 19543
+    }
+  }
+}
