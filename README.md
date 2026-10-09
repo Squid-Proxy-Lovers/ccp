@@ -101,24 +101,32 @@ From that point on, every request goes over mTLS. The server extracts the client
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --docker --session my-session
 ```
 
-This builds the image and starts the container. Enrollment tokens are in the logs:
+The installer starts the pulled GHCR image directly, without requiring Compose or
+a local checkout. If the pull fails, installation stops and suggests an explicit
+source build. Use `--docker --from-source` to build from the local checkout or a
+temporary clone (requires Git). Pull, build, and startup failures are reported;
+an existing `ccp-server` container is never replaced automatically. Removing the container
+retains the `ccp-server-data` volume. Checkout-based Compose remains available
+separately with `docker compose up -d`.
+
+Enrollment tokens are in the logs:
 
 ```bash
-docker compose logs -f ccp-server
+docker logs -f ccp-server
 ```
 
 Issue more tokens:
 
 ```bash
-docker compose exec ccp-server server issue-token my-session read
-docker compose exec ccp-server server issue-token my-session read_write
-docker compose exec ccp-server server issue-token my-session admin --ttl 3600
+docker exec ccp-server server issue-token my-session read
+docker exec ccp-server server issue-token my-session read_write
+docker exec ccp-server server issue-token my-session admin --ttl 3600
 ```
 
 Override the session or advertised host:
 
 ```bash
-CCP_SESSION_NAME=prod CCP_ADVERTISE_HOST=192.168.1.50 docker compose up -d
+CCP_ADVERTISE_HOST=192.168.1.50 bash install.sh --docker --session prod
 ```
 
 > **Note:** The auth endpoint defaults to plaintext HTTP inside the container. Put it behind an HTTPS reverse proxy or tunnel for remote deployments.
@@ -126,13 +134,13 @@ CCP_SESSION_NAME=prod CCP_ADVERTISE_HOST=192.168.1.50 docker compose up -d
 Health check:
 
 ```bash
-docker compose exec -T ccp-server server health my-session
+docker exec ccp-server server health my-session
 ```
 
 Stop:
 
 ```bash
-docker compose down
+docker stop ccp-server && docker rm ccp-server
 ```
 
 ## Token issuance
