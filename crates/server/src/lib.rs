@@ -111,6 +111,11 @@ pub async fn run_plain_server_with_shutdown(
             return Err(error);
         }
     };
+    if let Err(error) = ccp.mark_sessions_started().await {
+        let _ = journal.shutdown();
+        stop_bootstrap_session(initial_id);
+        return Err(error);
+    }
     let state = AppState {
         ccp: Arc::clone(&ccp),
         client_key,
@@ -186,9 +191,12 @@ fn stop_bootstrap_session(session_id: Option<i64>) {
 }
 
 fn configured_base_url() -> anyhow::Result<String> {
-    let url = url::Url::parse(&http_server_base_url())
-        .context("CCP_HTTP_BASE_URL must be an absolute HTTP(S) URL")?;
-    if !matches!(url.scheme(), "http" | "https")
+    validate_base_url(&http_server_base_url())
+}
+
+fn validate_base_url(value: &str) -> anyhow::Result<String> {
+    let url = url::Url::parse(value).context("CCP_HTTP_BASE_URL must be an absolute HTTP URL")?;
+    if url.scheme() != "http"
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -196,7 +204,7 @@ fn configured_base_url() -> anyhow::Result<String> {
         || url.fragment().is_some()
     {
         anyhow::bail!(
-            "CCP_HTTP_BASE_URL must be an HTTP(S) URL without credentials, query, or fragment"
+            "CCP_HTTP_BASE_URL must be an HTTP URL without credentials, query, or fragment"
         );
     }
     Ok(url.as_str().trim_end_matches('/').to_string())
@@ -628,6 +636,26 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn advertised_urls_match_the_plain_http_client_contract() {
+        assert_eq!(
+            validate_base_url("http://localhost:1338/context/").unwrap(),
+            "http://localhost:1338/context"
+        );
+        for invalid in [
+            "https://localhost:1338",
+            "file:///context",
+            "http://user:password@localhost:1338",
+            "http://localhost:1338/?key=value",
+            "http://localhost:1338/#fragment",
+        ] {
+            assert!(
+                validate_base_url(invalid).is_err(),
+                "unexpected accepted base URL: {invalid}"
+            );
+        }
+    }
 
     #[test]
     fn hosted_defaults_preserve_quoted_shell_and_powershell_literals() {

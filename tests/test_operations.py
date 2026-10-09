@@ -45,6 +45,38 @@ class ScriptTests(unittest.TestCase):
                               env=environment or self.environment,
                               capture_output=True, text=True, timeout=15)
 
+    def test_linux_artifacts_isolate_libc_build_and_check_runtime(self):
+        self.capture("docker")
+        environment = dict(self.environment, CCP_CI_CARGO_CACHE=str(self.directory / "cargo"))
+        response = subprocess.run(["bash", str(ROOT / "scripts/ci-build-linux.sh"),
+                                   "aarch64-unknown-linux-gnu", "client"],
+                                  env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(response.returncode, 0, response.stderr)
+        build, runtime = [call["args"] for call in self.calls()]
+        self.assertIn("linux/arm64", build)
+        self.assertIn("rust:1.88.0-bookworm", build)
+        self.assertIn("debian:bookworm-slim", runtime)
+        self.assertIn("--locked", build)
+        self.assertNotIn("--workspace", build)
+        self.assertEqual(build[-2:], ["-p", "client"])
+        self.assertTrue(any(value.endswith("target=/source,readonly") for value in build))
+        self.assertIn("CARGO_TARGET_DIR=/build", build)
+        self.assertEqual(runtime[-1], "--version")
+        self.log.unlink()
+        invalid = subprocess.run(["bash", str(ROOT / "scripts/ci-build-linux.sh"),
+                                  "aarch64-unknown-linux-gnu", "unexpected-package"],
+                                 env=environment, capture_output=True, text=True, timeout=15)
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertFalse(self.log.exists())
+
+    def test_failed_linux_build_never_reports_runtime_success(self):
+        self.executable("docker", "import sys\nsys.exit(23)\n")
+        environment = dict(self.environment, CCP_CI_CARGO_CACHE=str(self.directory / "cargo"))
+        response = subprocess.run(["bash", str(ROOT / "scripts/ci-build-linux.sh"),
+                                   "x86_64-unknown-linux-gnu", "client"],
+                                  env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(response.returncode, 23)
+
     def test_management_encodes_selector_and_serializes_json(self):
         self.capture("curl")
         selector = 'topic /?#"\\\n雪'

@@ -2506,3 +2506,69 @@ fn activity_order_handles_mixed_epoch_and_sqlite_timestamps_consistently() {
     assert!(activity_timestamp_key("9") < activity_timestamp_key("2026-01-01 00:00:00"));
     assert_eq!(activity_timestamp_key("invalid"), None);
 }
+
+#[tokio::test]
+async fn explicit_runtime_start_reactivates_all_sessions_without_changing_offline_loads() {
+    let ctx = TestContext::new("restart-session-lifecycle").await.unwrap();
+    let second = ctx.state.create_session("second-session").await.unwrap();
+    {
+        let mut sessions = ctx.state.sessions.write().await;
+        for session in sessions.values_mut() {
+            session.last_started_at = Some("0".into());
+        }
+    }
+    ctx.state.mark_sessions_stopped().await.unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    let before = recovered.all_session_stats().await;
+    assert_eq!(before.len(), 2);
+    assert!(before.iter().all(|stats| !stats.is_active));
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_second_start BEFORE UPDATE ON sessions WHEN NEW.name='second-session' AND NEW.is_active=1 BEGIN SELECT RAISE(ABORT, 'test startup failure'); END;").unwrap();
+    assert!(recovered.mark_sessions_started().await.is_err());
+    assert!(
+        recovered
+            .all_session_stats()
+            .await
+            .iter()
+            .all(|stats| !stats.is_active)
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE is_active=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    connection
+        .execute_batch("DROP TRIGGER reject_second_start;")
+        .unwrap();
+    recovered.mark_sessions_started().await.unwrap();
+    assert!(
+        recovered
+            .all_session_stats()
+            .await
+            .iter()
+            .all(|stats| stats.is_active)
+    );
+    let sessions = recovered.sessions.read().await;
+    let connection = open_sqlite_connection().unwrap();
+    for session_id in [ctx.session_id, second.session_id] {
+        let session = &sessions[&session_id];
+        let started = session.last_started_at.as_ref().unwrap();
+        assert!(started.parse::<u64>().unwrap() > 0);
+        let stored: (bool, String) = connection
+            .query_row(
+                "SELECT is_active, last_started_at FROM sessions WHERE id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (true, started.clone()));
+    }
+}

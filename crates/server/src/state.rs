@@ -996,6 +996,33 @@ impl ServerState {
         Ok(())
     }
 
+    /// Starting the HTTP runtime serves every loaded session, including servers
+    /// restarted without an initial topic. Offline storage loads keep their
+    /// persisted lifecycle until this explicit startup transition succeeds.
+    pub(crate) async fn mark_sessions_started(&self) -> anyhow::Result<()> {
+        let _mutation = self.mutation_lock.lock().await;
+        let timestamp = current_timestamp_string()?;
+        let mut sessions = self.sessions.write().await;
+        let mut connection = open_sqlite_connection()?;
+        let transaction = connection.transaction()?;
+        for session_id in sessions.keys() {
+            transaction
+                .execute(
+                    "UPDATE sessions SET is_active=1, last_started_at=?2 WHERE id=?1",
+                    params![session_id, timestamp],
+                )
+                .with_context(|| format!("failed to mark session {session_id} started"))?;
+        }
+        transaction
+            .commit()
+            .context("failed to commit session startup lifecycle")?;
+        for session in sessions.values_mut() {
+            session.is_active = true;
+            session.last_started_at = Some(timestamp.clone());
+        }
+        Ok(())
+    }
+
     pub async fn mark_sessions_stopped(&self) -> anyhow::Result<()> {
         let _mutation = self.mutation_lock.lock().await;
         let timestamp = current_timestamp_string()?;

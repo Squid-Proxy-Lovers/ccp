@@ -13,7 +13,7 @@ One process hosts multiple sessions in SQLite and serves a plaintext HTTP/JSON A
 | `CCP_CLIENT_KEY` | Built-in compatibility key | Shared access key for private session requests |
 | `CCP_ADMIN_KEY` | Built-in compatibility key | Key for every administration API route |
 
-Configure deployment keys explicitly. Public session operations are available to subscribers without a client key; keys are carried over plaintext HTTP. Restrict the listener/network or place the service behind a trusted TLS endpoint when deploying outside a trusted local network. Current transport does not enroll certificates or enforce separate certificate-based read/write roles.
+Configure deployment keys explicitly. Public session operations are available to subscribers without a client key; keys are carried over plaintext HTTP. Restrict the listener/network or use a trusted local forwarding tunnel; native clients accept only `http://` URLs. HTTPS-aware callers can use a TLS reverse proxy in front of the server. Current transport does not enroll certificates or enforce separate certificate-based read/write roles.
 
 The Docker entrypoint binds `0.0.0.0:${CCP_HTTP_PORT:-1338}` inside the container. Compose publishes on host loopback by default. Set `CCP_HTTP_BASE_URL` to the address reachable by clients and `CCP_PUBLISH_HOST` for the intended host interface. `compose.sdcl.yml` uses the same HTTP transport, requires configured keys, and probes `/health`.
 
@@ -67,7 +67,7 @@ With no arguments, the script opens `/admin`. Enter the admin key in the dashboa
 
 ## Artifact publishing
 
-Run `scripts/build-downloads.sh` to build the native client/server and a fresh MCP source distribution. Other platform binaries require the corresponding CI artifacts. Generated binaries are revision-dependent; the draft's prebuilt downloads must not be treated as evidence that the reviewed source was built or tested.
+Run `scripts/build-downloads.sh` to build the native client/server and a fresh MCP source distribution. Other platform binaries require the corresponding CI artifacts. Generated binaries are revision-dependent; `downloads/provenance.json` records the verified source revision, CI run and hashes for checked-in downloads. Refresh the relevant files and provenance after changing source. Local builds do not automatically refresh provenance for other platforms.
 
 Tagged CI releases include Unix server/client binaries, a Windows x86_64 client, and `ccp-mcp.tar.gz`. The separate client-artifacts workflow also produces workflow artifacts for manual deployment. Download the matching release/workflow artifacts into `CCP_DOWNLOAD_DIR` to refresh a live server; GitHub uploads do not update its mounted directory automatically.
 

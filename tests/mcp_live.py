@@ -86,6 +86,9 @@ async def exercise(base_url, admin_key, *, after_restart=False):
             return json.loads(result.content[0].text)
 
         if after_restart:
+            overview = http_json(base_url + "/v1/admin/overview", admin_key=admin_key)
+            assert {item["session"]["session_name"] for item in overview["sessions"]} == {SESSION, "mcp-second"}
+            assert all(item["is_active"] for item in overview["sessions"])
             entry = await call("get_entry", **path)
             assert entry["context"] == initial + "\n" + appended
             rows = await call("get_history", **path)
@@ -102,6 +105,7 @@ async def exercise(base_url, admin_key, *, after_restart=False):
         assert len(saved) == 1 and saved[0]["endpoint"] == base_url
         assert (await call("server_health", session=selector))["status"] == "ok"
 
+        http_json(base_url + "/v1/admin/sessions", method="POST", data={"session_name": "mcp-second"}, admin_key=admin_key)
         http_json(base_url + "/v1/admin/master", method="PUT", data={"content": "global instruction"}, admin_key=admin_key)
         http_json(base_url + f"/v1/admin/sessions/{SESSION}/master", method="PUT", data={"content": "session instruction"}, admin_key=admin_key)
         boards = await call("master_instructions", session=selector)
@@ -166,7 +170,8 @@ def main():
         })
         for after_restart in (False, True):
             with (work / "server.log").open("a") as log:
-                process = subprocess.Popen([str(server_bin), SESSION], stdout=log, stderr=log)
+                arguments = [str(server_bin)] if after_restart else [str(server_bin), SESSION]
+                process = subprocess.Popen(arguments, stdout=log, stderr=log)
                 try:
                     wait_ready(process, base_url)
                     asyncio.run(exercise(base_url, admin_key, after_restart=after_restart))
