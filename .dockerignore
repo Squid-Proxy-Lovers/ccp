@@ -11,3 +11,12 @@ crates/protocol/target
 tests/target
 crates/server/sessions
 tests/benchmark-results
+target
+handoff
+.agents
+.codex
+AGENTS.md
+**/__pycache__
+**/.venv
+**/venv
+mcp/build

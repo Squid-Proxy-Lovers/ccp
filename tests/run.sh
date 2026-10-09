@@ -519,7 +519,7 @@ KEY_FILES=$(find "$CLIENT_HOME" -name "client.key" -type f 2>/dev/null)
 if [ -n "$KEY_FILES" ]; then
     BAD_PERMS=false
     while IFS= read -r kf; do
-        PERMS=$(stat -f "%Lp" "$kf" 2>/dev/null || stat -c "%a" "$kf" 2>/dev/null)
+        PERMS=$(python3 -c 'import os, stat, sys; print(format(stat.S_IMODE(os.stat(sys.argv[1]).st_mode), "o"))' "$kf")
         if [ "$PERMS" != "600" ]; then
             BAD_PERMS=true
             fail "client.key at $kf has permissions $PERMS (should be 600)"

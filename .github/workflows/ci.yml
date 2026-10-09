@@ -6,6 +6,16 @@ on:
     tags: ["v*"]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,22 +24,16 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build
-        run: cargo build --release
-
-      - name: Server tests
-        run: cargo test -p server --lib -- --test-threads=1
-
-      - name: Client tests
-        run: cargo test -p client --lib
-
-      - name: Protocol tests
-        run: cargo test -p protocol
-
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+      - name: Build reviewed dependencies
+        run: cargo build --release --workspace --locked
+      - name: Library tests
+        run: cargo test --workspace --lib --locked -- --test-threads=1
+      - name: CLI integration
+        run: bash tests/run.sh --skip-build
       - name: No secrets tracked
         run: |
           SECRETS=$(git ls-files '*.pem' '*.sqlite3' '*.key' '*.bin')
@@ -37,30 +41,136 @@ jobs:
             echo "Secret files tracked: $SECRETS"
             exit 1
           fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ccp-smoke-binaries
+          path: |
+            target/release/server
+            target/release/client
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
+          build-warnings: ""
+      - run: cargo clippy --workspace --locked -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
 
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
-          components: rustfmt
+          cache: false
+          build-warnings: ""
       - run: cargo fmt --all -- --check
 
-  # Build release binaries for all platforms on every push to main and on tags.
-  # Tagged pushes also create a GitHub release with the binaries attached.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          toolchain: "1.88.0"
+          build-warnings: ""
+      - run: cargo +1.88.0 check --workspace --locked
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: cargo audit
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: python -m pip install ./mcp pip-audit==2.10.1
+      - run: python -m pip_audit
+
+  compat:
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ccp-smoke-binaries
+          path: ${{ runner.temp }}/ccp-current
+      - run: chmod +x "$RUNNER_TEMP/ccp-current/server" "$RUNNER_TEMP/ccp-current/client"
+      - name: Current client and persistence smoke
+        run: python3 tests/dependency_compat.py --server "$RUNNER_TEMP/ccp-current/server" --client "$RUNNER_TEMP/ccp-current/client"
+      - name: Compare API versions with PR base
+        id: versions
+        if: github.event_name == 'pull_request'
+        env:
+          CCP_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/ccp-baseline" "$CCP_BASE_SHA"
+          python3 - <<'PY'
+          import os, pathlib, re
+          pairs = [("crates/protocol/src/lib.rs", "PROTOCOL_VERSION"), ("crates/server/src/init.rs", "SCHEMA_VERSION")]
+          same = True
+          for path, name in pairs:
+              pattern = rf"pub const {name}:\s*u32\s*=\s*(\d+)"
+              current = re.search(pattern, pathlib.Path(path).read_text()).group(1)
+              old = re.search(pattern, (pathlib.Path(os.environ["RUNNER_TEMP"]) / "ccp-baseline" / path).read_text()).group(1)
+              same = same and current == old
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"same_api={str(same).lower()}\n")
+          if not same:
+              print("Protocol/schema migration: cross-version maintenance check does not apply.")
+          PY
+      - name: Build previous dependency set
+        if: steps.versions.outputs.same_api == 'true'
+        run: cargo build --release --locked --manifest-path "$RUNNER_TEMP/ccp-baseline/Cargo.toml" --target-dir "$RUNNER_TEMP/ccp-baseline-target" -p server -p client
+      - name: Old/new clients and upgrade/downgrade persistence
+        if: steps.versions.outputs.same_api == 'true'
+        run: python3 tests/dependency_compat.py --server "$RUNNER_TEMP/ccp-current/server" --client "$RUNNER_TEMP/ccp-current/client" --old-server "$RUNNER_TEMP/ccp-baseline-target/release/server" --old-client "$RUNNER_TEMP/ccp-baseline-target/release/client"
+
+  mcp:
+    needs: [test]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            fastmcp: "==2.14.7"
+          - python: "3.10"
+            fastmcp: ">=4,<5"
+          - python: "3.13"
+            fastmcp: ">=3,<4"
+          - python: "3.13"
+            fastmcp: ">=4,<5"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ccp-smoke-binaries
+          path: ${{ runner.temp }}/ccp-current
+      - run: chmod +x "$RUNNER_TEMP/ccp-current/server" "$RUNNER_TEMP/ccp-current/client"
+      - run: python -m pip install ./mcp "fastmcp${{ matrix.fastmcp }}"
+      - name: Real MCP to CLI to TLS server
+        env:
+          CCP_SERVER_BIN: ${{ runner.temp }}/ccp-current/server
+          CCP_CLIENT_BIN: ${{ runner.temp }}/ccp-current/client
+        run: python tests/mcp_smoke.py
+
   build:
-    needs: [test, clippy, fmt]
+    needs: [test, clippy, fmt, msrv, audit, compat, mcp]
     strategy:
       matrix:
         include:
@@ -78,30 +188,24 @@ jobs:
             platform: darwin-aarch64
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
-
+          target: ${{ matrix.target }}
+          build-warnings: ""
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }}
-
+        run: cargo build --release --workspace --locked --target ${{ matrix.target }}
       - name: Package binaries
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/server dist/ccp-server-${{ matrix.platform }}
           cp target/${{ matrix.target }}/release/client dist/ccp-client-${{ matrix.platform }}
-
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.platform }}
           path: dist/
@@ -113,36 +217,47 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
+          pattern: binaries-*
           path: dist
           merge-multiple: true
-
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
           generate_release_notes: true
 
   docker:
-    needs: [test]
+    needs: [test, clippy, fmt, msrv, audit, compat, mcp]
     runs-on: ubuntu-latest
     permissions:
       packages: write
+      contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: docker/login-action@v3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: github.event_name == 'push'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: ${{ github.event_name == 'push' }}
+          load: ${{ github.event_name != 'push' }}
           tags: |
             ghcr.io/squid-proxy-lovers/ccp:latest
             ghcr.io/squid-proxy-lovers/ccp:${{ github.sha }}
+      - name: Container startup and health
+        if: github.event_name != 'push'
+        run: |
+          docker run --rm -d --name ccp-ci-smoke -e CCP_AUTH_LISTENER_ADDR=127.0.0.1:1337 -e CCP_MTLS_LISTENER_ADDR=127.0.0.1:1338 ghcr.io/squid-proxy-lovers/ccp:latest dependency-smoke
+          trap 'docker rm -f ccp-ci-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 40); do
+            if docker exec ccp-ci-smoke server health dependency-smoke; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+          exit 1
