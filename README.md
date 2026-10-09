@@ -1,10 +1,5 @@
 <div id="user-content-toc" align="center">
-  <img src=".github/spl-logo.png" alt="SPL" width="200">
-  <ul style="list-style: none;">
-    <summary>
-      <h1>Cephalopod Coordination Protocol</h1>
-    </summary>
-  </ul>
+  <img src=".github/ccp-banner.png" alt="Cephalopod Coordination Protocol" width="1000">
   <p>A Rust-based client-server coordination protocol for agentic systems.</p>
 </div>
 
