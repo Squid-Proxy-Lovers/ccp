@@ -102,10 +102,10 @@ curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install
 ```
 
 The installer starts the pulled GHCR image directly, without requiring Compose or
-a local checkout. If GHCR cannot be pulled, it builds the image from the local
-checkout or a temporary clone (requires Git). Use `--docker --from-source` to
-build explicitly. Pull, build, and startup failures are reported; an existing
-`ccp-server` container is never replaced automatically. Removing the container
+a local checkout. If the pull fails, installation stops and suggests an explicit
+source build. Use `--docker --from-source` to build from the local checkout or a
+temporary clone (requires Git). Pull, build, and startup failures are reported;
+an existing `ccp-server` container is never replaced automatically. Removing the container
 retains the `ccp-server-data` volume. Checkout-based Compose remains available
 separately with `docker compose up -d`.
 

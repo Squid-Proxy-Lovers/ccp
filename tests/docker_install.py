@@ -84,23 +84,28 @@ if command == 'git':
                       '192.0.2.10:2338:2338'):
             self.assertIn(value, run)
 
-    def test_failed_pull_clones_builds_and_runs_local_image(self):
-        result, calls = self.run_installer(failure='pull')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual([call[1] for call in calls], ['info', 'pull', 'clone', 'build', 'run'])
-        self.assertEqual(calls[-1][-1], 'cephalopod-coordination-protocol-server:local')
-        self.assertIn('simulated pull failure', result.stderr)
+    def test_failed_pull_suggests_build_without_cloning_or_starting(self):
+        for checkout in (False, True):
+            with self.subTest(checkout=checkout):
+                result, calls = self.run_installer(checkout=checkout, failure='pull')
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([call[1] for call in calls], ['info', 'pull'])
+                self.assertIn('--docker --from-source --session', result.stdout)
+                self.assertIn('simulated pull failure', result.stderr)
+                self.assertNotIn('Server container started.', result.stdout)
 
-    def test_checkout_fallback_does_not_clone(self):
-        result, calls = self.run_installer(checkout=True, failure='pull')
+    def test_explicit_checkout_build_does_not_clone(self):
+        result, calls = self.run_installer(checkout=True, source=True)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertFalse(any(call[0] == 'git' for call in calls))
+        self.assertEqual([call[1] for call in calls], ['info', 'build', 'run'])
+        self.assertEqual(calls[-1][-1], 'cephalopod-coordination-protocol-server:local')
 
     def test_from_source_skips_pull(self):
         result, calls = self.run_installer(source=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(any(call[:2] == ['docker', 'pull'] for call in calls))
-        self.assertIn(['docker', 'build'], [call[:2] for call in calls])
+        self.assertEqual([call[1] for call in calls], ['info', 'clone', 'build', 'run'])
+        self.assertEqual(calls[-1][-1], 'cephalopod-coordination-protocol-server:local')
 
     def test_failures_exit_without_success_message(self):
         for failure in ('info', 'clone', 'build', 'run'):

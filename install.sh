@@ -353,16 +353,17 @@ if [ "$MODE" = "docker" ]; then
     fi
 
     image="ghcr.io/${REPO}:latest"
-    build_image="$FROM_SOURCE"
-    if [ "$build_image" = false ]; then
+    if [ "$FROM_SOURCE" = false ]; then
         step "Pulling CCP server image..."
         if ! docker pull "$image"; then
-            warn "Image pull failed (registry access, network, or platform availability). Building from source."
-            build_image=true
+            err "Image pull failed. Check the registry, network, or platform error above."
+            info "To build from source explicitly, run:"
+            printf '  curl -fsSL %s/install.sh | bash -s -- --docker --from-source --session %q\n' "$REPO_RAW" "$SESSION_NAME"
+            exit 1
         fi
     fi
 
-    if [ "$build_image" = true ]; then
+    if [ "$FROM_SOURCE" = true ]; then
         build_dir="$REPO_ROOT"
         temporary_build=false
         if [ ! -f "$build_dir/Dockerfile" ] || [ ! -f "$build_dir/Cargo.toml" ]; then
