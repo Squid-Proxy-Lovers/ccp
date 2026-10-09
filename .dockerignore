@@ -1,4 +1,14 @@
 .git
+.agents
+.codex
+AGENTS.md
+handoff
+target
+.venv
+mcp/.venv
+mcp/src/*.egg-info
+mcp/dist
+mcp/build
 .claude
 .mypy_cache
 benchmark-cpu.txt

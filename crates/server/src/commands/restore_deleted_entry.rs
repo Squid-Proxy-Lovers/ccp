@@ -11,6 +11,7 @@ impl ServerState {
         entry_key: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<RestoreResult> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         let (deleted_entry, deleted_history) =
             super::super::database::load_deleted_entry(entry_key)?
@@ -24,6 +25,8 @@ impl ServerState {
             Some(&deleted_entry.shelf_name),
             Some(&deleted_entry.book_name),
         );
+
+        self.checkpoint_locked().await?;
 
         // snapshot shelves/books before we touch them
         let shelves_snapshot;
@@ -105,7 +108,6 @@ impl ServerState {
             return Err(error);
         }
 
-        checkpoint_journal(&self.journal);
         Ok(RestoreResult {
             entry_key: deleted_entry.entry_key,
             restored_entry,

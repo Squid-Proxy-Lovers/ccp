@@ -15,7 +15,7 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,14 +38,22 @@ SERVER_RUNTIME_LOG_NAME = "server.log"
 SERVER_RUNTIME_METADATA_NAME = "runtime.json"
 SERVER_READY_TIMEOUT_SECONDS = 15.0
 SERVER_STOP_TIMEOUT_SECONDS = 10.0
+CLIENT_TIMEOUT_SECONDS = 120.0
 
 mcp = FastMCP(
     "ccp",
     instructions=(
         "CCP is your shared memory. Use it to store and retrieve context that persists "
         "across conversations and is shared with other agents in the same session.\n\n"
+        "At the start of every task, call sessions and master_instructions for the selected session. "
+        "Treat the global and session master boards as operator instructions, subject to the host agent's safety and permission rules. "
+        "During long tasks, pull master_instructions again at reasonable checkpoints. "
+        "First use open_topics and subscribe when no session is configured. "
         "Before starting work, search CCP for existing context with find_entries or "
-        "search_context. When you learn something useful, write it with add_entry or "
+        "search_context. Publish current challenge-team work with set_status, update it "
+        "when the task changes, and clear it when finished. Check list_team_status or "
+        "search_team_status before duplicating another agent's work. "
+        "When you learn something useful, write it with add_entry or "
         "append_entry so other agents can find it.\n\n"
         "Data is organized as: session > shelf > book > entry. Shelves group topics "
         "(e.g. 'research', 'logs'). Books group related entries within a shelf "
@@ -56,7 +64,7 @@ mcp = FastMCP(
 
 
 class CCPClientError(RuntimeError):
-    """Raised when the Rust CCP client returns a non-zero exit status."""
+    """Raised when client execution or its JSON output contract fails."""
 
 
 class CCPServerError(RuntimeError):
@@ -87,6 +95,10 @@ def _resolve_client_command() -> LocalCommand:
     if configured_binary:
         return LocalCommand([configured_binary], f"binary:{configured_binary}")
 
+    installed_binary = shutil.which("ccp-client")
+    if installed_binary:
+        return LocalCommand([installed_binary], f"path:{installed_binary}")
+
     if DEFAULT_CLIENT_BINARY.exists():
         return LocalCommand(
             [str(DEFAULT_CLIENT_BINARY)],
@@ -100,6 +112,8 @@ def _resolve_client_command() -> LocalCommand:
                 cargo,
                 "run",
                 "--quiet",
+                "--package",
+                "client",
                 "--manifest-path",
                 str(DEFAULT_CLIENT_MANIFEST),
                 "--",
@@ -130,6 +144,8 @@ def _resolve_server_command() -> LocalCommand:
                 cargo,
                 "run",
                 "--quiet",
+                "--package",
+                "server",
                 "--manifest-path",
                 str(DEFAULT_SERVER_MANIFEST),
                 "--",
@@ -142,18 +158,40 @@ def _resolve_server_command() -> LocalCommand:
     )
 
 
+def _client_args(
+    command: str,
+    *positionals: str,
+    options: list[tuple[str, str | None]] | None = None,
+    switches: list[str] | None = None,
+) -> list[str]:
+    """Keep arbitrary tool text out of the CLI option parser."""
+    return [
+        command,
+        *(f"{flag}={value}" for flag, value in options or [] if value is not None),
+        *(switches or []),
+        "--",
+        *positionals,
+    ]
+
+
 def _run_client(*args: str, env_overrides: dict[str, str] | None = None) -> str:
     command = _resolve_client_command()
     env = os.environ.copy()
     if env_overrides:
         env.update(env_overrides)
-    process = subprocess.run(
-        [*command.argv, *args],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        process = subprocess.run(
+            [*command.argv, *args],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=CLIENT_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise CCPClientError("CCP client command timed out") from error
+    except OSError as error:
+        raise CCPClientError(f"unable to run CCP client: {error}") from error
     if process.returncode != 0:
         detail = (process.stderr or process.stdout).strip() or "unknown client failure"
         raise CCPClientError(detail)
@@ -162,9 +200,10 @@ def _run_client(*args: str, env_overrides: dict[str, str] | None = None) -> str:
 
 def _run_client_json(*args: str, env_overrides: dict[str, str] | None = None) -> Any:
     output = _run_client(*args, env_overrides=env_overrides)
-    if not output:
-        return {}
-    return json.loads(output)
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as error:
+        raise CCPClientError("client returned invalid JSON") from error
 
 
 def _client_home() -> Path:
@@ -200,7 +239,7 @@ def _runtime_metadata_path(session_name: str) -> Path:
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 def _current_unix_timestamp() -> int:
@@ -695,16 +734,28 @@ def _load_session_summaries() -> list[dict[str, Any]]:
 
 
 def _session_warning_for_selector(session: str) -> str | None:
-    for summary in _load_session_summaries():
-        if session in {summary["session_name"], str(summary["session_id"])}:
-            warning = summary.get("cert_warning")
-            if isinstance(warning, str) and warning:
-                return warning
-    return None
+    name, separator, endpoint = session.rpartition("@")
+    if not separator or not endpoint.startswith("http://"):
+        name = session
+        endpoint = os.environ.get("CCP_SERVER_URL", "")
+    candidates = [
+        summary for summary in _load_session_summaries()
+        if name in {summary["session_name"], str(summary["session_id"])}
+        and (not endpoint or summary["endpoint"].rstrip("/") == endpoint.rstrip("/"))
+    ]
+    # Legacy warning metadata must not be attributed to a different endpoint.
+    if len(candidates) != 1:
+        return None
+    warning = candidates[0].get("cert_warning")
+    return warning if isinstance(warning, str) and warning else None
 
 
 def _attach_session_warning(session: str, payload: dict[str, Any]) -> dict[str, Any]:
-    warning = _session_warning_for_selector(session)
+    try:
+        warning = _session_warning_for_selector(session)
+    except (OSError, ValueError, KeyError, TypeError):
+        # Optional legacy certificate metadata must not hide a completed mutation.
+        return payload
     if warning:
         payload = dict(payload)
         payload["ccp_certificate_warning"] = warning
@@ -731,43 +782,71 @@ def server_status() -> dict[str, Any]:
     """Return the resolved CCP client command and key local paths."""
 
     client_command = _resolve_client_command()
-    server_command = _resolve_server_command()
+    try:
+        server_command = _resolve_server_command()
+        server_resolution = server_command.description
+    except CCPServerError as error:
+        server_command = None
+        server_resolution = str(error)
+    managed_servers = _list_runtime_records()
     return {
         "server_name": SERVER_NAME,
         "client_command": client_command.argv,
         "client_resolution": client_command.description,
-        "server_command": server_command.argv,
-        "server_resolution": server_command.description,
+        "server_command": server_command.argv if server_command else None,
+        "server_resolution": server_resolution,
         "client_home": str(_client_home()),
         "server_home": str(_server_home()),
         "repo_root": str(REPO_ROOT),
         "server_dir": str(SERVER_DIR),
         "mcp_dir": str(MCP_DIR),
         "saved_sessions": _load_session_summaries(),
-        "managed_sessions": _list_runtime_records(),
-        "managed_servers": _list_runtime_records(),
+        "managed_sessions": managed_servers,
+        "managed_servers": managed_servers,
     }
 
 
 @mcp.tool()
-def enroll(token: str, redeem_url: str | None = None) -> dict[str, Any]:
-    """Redeem a CCP enrollment token and save the resulting enrollment material locally."""
+def open_topics(server_url: str | None = None) -> list[dict[str, Any]]:
+    """List open topics that this agent may subscribe to."""
 
-    if redeem_url is None:
-        servers = running_servers()
-        if len(servers) != 1:
-            raise CCPClientError("redeem_url is required unless exactly one managed server is running")
-        redeem_url = servers[0].get("auth_redeem_url")
-    if not redeem_url:
-        raise CCPClientError("missing auth_redeem_url for enrollment")
-    return _parse_enroll_output(_run_client("enroll", "--redeem-url", redeem_url, "--token", token))
+    endpoint = server_url or os.environ.get("CCP_SERVER_URL", "http://127.0.0.1:1338")
+    result = _run_client_json(*_client_args("remote-sessions", options=[("--server", endpoint)]))
+    if isinstance(result, list):
+        return result
+    raise CCPClientError("client returned a non-list payload for remote-sessions")
+
+
+@mcp.tool()
+def subscribe(topic: str, server_url: str | None = None) -> dict[str, Any]:
+    """Subscribe this agent to an open topic by session name or id."""
+
+    endpoint = server_url or os.environ.get("CCP_SERVER_URL", "http://127.0.0.1:1338")
+    message = _run_client(*_client_args("subscribe", topic, options=[("--server", endpoint)]))
+    return {"message": message, "topic": topic, "server_url": endpoint}
+
+
+def _saved_sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
+    return _filter_records(_load_session_summaries(), filter_text)
+
+
+def _master_boards(session: str) -> dict[str, Any]:
+    result = _run_client_json(*_client_args("master-instructions", session))
+    if isinstance(result, dict):
+        return result
+    raise CCPClientError("client returned a non-object payload for master-instructions")
 
 
 @mcp.tool()
 def sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
-    """List sessions discoverable from saved CCP enrollments."""
+    """List saved subscriptions without contacting or subscribing to a server."""
+    return _saved_sessions(filter_text)
 
-    return _filter_records(_load_session_summaries(), filter_text)
+
+@mcp.tool()
+def master_instructions(session: str) -> dict[str, Any]:
+    """Read the global master board and the selected session's master board."""
+    return _master_boards(session)
 
 
 def server_sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
@@ -931,7 +1010,7 @@ def delete_session(session: str, force: bool = False) -> dict[str, Any]:
 def list_entries(session: str) -> list[dict[str, Any]]:
     """List message entries for a session, including shelf and book metadata."""
 
-    data = _run_client_json("list", session)
+    data = _run_client_json(*_client_args("list", session))
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for list")
@@ -941,7 +1020,7 @@ def list_entries(session: str) -> list[dict[str, Any]]:
 def find_entries(session: str, query: str) -> list[dict[str, Any]]:
     """Search entry names and descriptions for keywords."""
 
-    data = _run_client_json("search-entries", session, query)
+    data = _run_client_json(*_client_args("search-entries", session, query))
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for search-entries")
@@ -951,7 +1030,7 @@ def find_entries(session: str, query: str) -> list[dict[str, Any]]:
 def find_shelves(session: str, query: str) -> list[dict[str, Any]]:
     """Search shelf names and descriptions for keywords."""
 
-    data = _run_client_json("search-shelves", session, query)
+    data = _run_client_json(*_client_args("search-shelves", session, query))
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for search-shelves")
@@ -961,7 +1040,7 @@ def find_shelves(session: str, query: str) -> list[dict[str, Any]]:
 def find_books(session: str, query: str) -> list[dict[str, Any]]:
     """Search book names and descriptions for keywords."""
 
-    data = _run_client_json("search-books", session, query)
+    data = _run_client_json(*_client_args("search-books", session, query))
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for search-books")
@@ -971,7 +1050,7 @@ def find_books(session: str, query: str) -> list[dict[str, Any]]:
 def search_context(session: str, query: str) -> list[dict[str, Any]]:
     """Search entry context for keywords and return snippets."""
 
-    data = _run_client_json("search-context", session, query)
+    data = _run_client_json(*_client_args("search-context", session, query))
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for search-context")
@@ -981,13 +1060,66 @@ def search_context(session: str, query: str) -> list[dict[str, Any]]:
 def search_deleted_entries(session: str, query: str = "") -> list[dict[str, Any]]:
     """Search deleted entries by name and description, or list them all with an empty query."""
 
-    args = ["search-deleted", session]
+    args = _client_args("search-deleted", session)
     if query:
         args.append(query)
     data = _run_client_json(*args)
     if isinstance(data, list):
         return data
     raise CCPClientError("client returned a non-list payload for search-deleted")
+
+
+@mcp.tool()
+def set_status(
+    session: str,
+    team: str,
+    agent_name: str,
+    status: str,
+) -> dict[str, Any]:
+    """Publish or refresh an agent's current work in a shelf-backed challenge team."""
+
+    data = _run_client_json(
+        *_client_args("set-status", session, status, options=[("--team", team), ("--agent", agent_name)])
+    )
+    if isinstance(data, dict):
+        return _attach_session_warning(session, data)
+    raise CCPClientError("client returned a non-object payload for set-status")
+
+
+@mcp.tool()
+def clear_status(session: str, team: str, agent_name: str) -> dict[str, Any]:
+    """Clear an agent's current status and leave the shelf-backed team."""
+
+    data = _run_client_json(
+        *_client_args("clear-status", session, options=[("--team", team), ("--agent", agent_name)])
+    )
+    if isinstance(data, dict):
+        return _attach_session_warning(session, data)
+    raise CCPClientError("client returned a non-object payload for clear-status")
+
+
+@mcp.tool()
+def list_team_status(session: str, team: str) -> list[dict[str, Any]]:
+    """List active agent statuses in one shelf-backed challenge team."""
+
+    data = _run_client_json(*_client_args("team-status", session, options=[("--team", team)]))
+    if isinstance(data, list):
+        return data
+    raise CCPClientError("client returned a non-list payload for team-status")
+
+
+@mcp.tool()
+def search_team_status(
+    session: str,
+    team: str,
+    query: str,
+) -> list[dict[str, Any]]:
+    """Search agent names and current work within one challenge team."""
+
+    data = _run_client_json(*_client_args("search-team-status", session, query, options=[("--team", team)]))
+    if isinstance(data, list):
+        return data
+    raise CCPClientError("client returned a non-list payload for search-team-status")
 
 
 @mcp.tool()
@@ -999,11 +1131,10 @@ def get_entry(
 ) -> dict[str, Any]:
     """Fetch a full message entry, including context, by session and chapter path."""
 
-    args = ["get", session, entry_name]
-    if shelf_name is not None:
-        args.extend(["--shelf", shelf_name])
-    if book_name is not None:
-        args.extend(["--book", book_name])
+    args = _client_args(
+        "get", session, entry_name,
+        options=[("--shelf", shelf_name), ("--book", book_name)],
+    )
     data = _run_client_json(*args)
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
@@ -1014,7 +1145,7 @@ def get_entry(
 def add_shelf(session: str, shelf_name: str, shelf_description: str) -> dict[str, Any]:
     """Create or describe a shelf in a session using a read_write enrollment."""
 
-    data = _run_client_json("add-shelf", session, shelf_name, shelf_description)
+    data = _run_client_json(*_client_args("add-shelf", session, shelf_name, shelf_description))
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
     raise CCPClientError("client returned a non-object payload for add-shelf")
@@ -1030,12 +1161,7 @@ def add_book(
     """Create or describe a book in an existing shelf using a read_write enrollment."""
 
     data = _run_client_json(
-        "add-book",
-        session,
-        "--shelf",
-        shelf_name,
-        book_name,
-        book_description,
+        *_client_args("add-book", session, book_name, book_description, options=[("--shelf", shelf_name)]),
     )
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
@@ -1054,19 +1180,11 @@ def add_entry(
 ) -> dict[str, Any]:
     """Create a new entry in an existing shelf/book using a read_write enrollment."""
 
-    args = [
-        "add-entry",
-        session,
-        "--shelf",
-        shelf_name,
-        "--book",
-        book_name,
-        entry_name,
-        entry_description,
-        entry_data,
-    ]
-    if labels:
-        args.extend(["--labels", ",".join(labels)])
+    args = _client_args(
+        "add-entry", session, entry_name, entry_description, entry_data,
+        options=[("--shelf", shelf_name), ("--book", book_name),
+                 ("--labels", ",".join(labels) if labels else None)],
+    )
     data = _run_client_json(*args)
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
@@ -1096,12 +1214,8 @@ def append_entry(
         if value is not None
     }
     data = _run_client_json(
-        "append",
-        session,
-        entry_name,
-        content,
-        *(["--shelf", shelf_name] if shelf_name is not None else []),
-        *(["--book", book_name] if book_name is not None else []),
+        *_client_args("append", session, entry_name, content,
+                      options=[("--shelf", shelf_name), ("--book", book_name)]),
         env_overrides=env_overrides or None,
     )
     if isinstance(data, dict):
@@ -1117,11 +1231,10 @@ def delete_entry(
 ) -> dict[str, Any]:
     """Delete a message entry from a session using a read_write enrollment."""
 
-    args = ["delete", session, entry_name]
-    if shelf_name is not None:
-        args.extend(["--shelf", shelf_name])
-    if book_name is not None:
-        args.extend(["--book", book_name])
+    args = _client_args(
+        "delete", session, entry_name,
+        options=[("--shelf", shelf_name), ("--book", book_name)],
+    )
     data = _run_client_json(*args)
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
@@ -1131,7 +1244,7 @@ def delete_entry(
 def restore_entry(session: str, entry_key: str) -> dict[str, Any]:
     """Restore a deleted message entry by deleted primary key."""
 
-    data = _run_client_json("restore", session, entry_key)
+    data = _run_client_json(*_client_args("restore", session, entry_key))
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
     raise CCPClientError("client returned a non-object payload for restore")
@@ -1146,11 +1259,10 @@ def get_history(
 ) -> list[dict[str, Any]]:
     """Return the append history for a specific chapter."""
 
-    args = ["history", session, entry_name]
-    if shelf_name is not None:
-        args.extend(["--shelf", shelf_name])
-    if book_name is not None:
-        args.extend(["--book", book_name])
+    args = _client_args(
+        "history", session, entry_name,
+        options=[("--shelf", shelf_name), ("--book", book_name)],
+    )
     data = _run_client_json(*args)
     if isinstance(data, list):
         return data
@@ -1175,23 +1287,18 @@ def export_bundle(
     - shelf + book + entries: specific named entries
     """
 
-    args = ["export", session]
-    if shelf is not None:
-        args.extend(["--shelf", shelf])
-    if book is not None:
-        args.extend(["--book", book])
-    if entries:
-        for entry in entries:
-            args.extend(["--entry", entry])
-    if no_history:
-        args.append("--no-history")
+    options = [("--shelf", shelf), ("--book", book), ("--output", output_path)]
+    options.extend(("--entry", entry) for entry in entries or [])
+    args = _client_args("export", session, options=options,
+                        switches=["--no-history"] if no_history else [])
     if output_path is not None:
-        args.extend(["--output", output_path])
         written_path = _run_client(*args).strip()
         return _attach_session_warning(session, {"written_path": written_path})
 
-    output = _run_client(*args)
-    return _attach_session_warning(session, json.loads(output))
+    data = _run_client_json(*args)
+    if isinstance(data, dict):
+        return _attach_session_warning(session, data)
+    raise CCPClientError("client returned a non-object payload for export")
 
 
 def import_bundle(
@@ -1204,7 +1311,7 @@ def import_bundle(
     policy controls collision handling: error (default), overwrite, skip, merge-history.
     """
 
-    args = ["import", session, bundle_path, "--policy", policy]
+    args = _client_args("import", session, bundle_path, options=[("--policy", policy)])
     data = _run_client_json(*args)
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
@@ -1222,28 +1329,12 @@ def revoke_certificate(session: str, client_common_name: str) -> dict[str, Any]:
 
 @mcp.tool()
 def server_health(session: str) -> dict[str, Any]:
-    """Get health status of a CCP server session.
+    """Check the HTTP health endpoint of the selected saved subscription."""
 
-    Returns server status, active session count, issued/revoked certificates,
-    database path, journal path, and certificate expiry information.
-    """
-    server_cmd = _resolve_server_command()
-    try:
-        output = subprocess.run(
-            [*server_cmd.argv, "health", session],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=True,
-        ).stdout
-        data = json.loads(output)
-        if isinstance(data, dict):
-            return data
-        raise CCPServerError("server health returned non-object payload")
-    except subprocess.CalledProcessError as e:
-        raise CCPServerError(f"server health check failed: {e.stderr}")
-    except json.JSONDecodeError as e:
-        raise CCPServerError(f"failed to parse server health response: {e}")
+    data = _run_client_json(*_client_args("health", session))
+    if isinstance(data, dict):
+        return data
+    raise CCPClientError("client returned a non-object payload for health")
 
 
 @mcp.tool()
@@ -1255,7 +1346,7 @@ def brief_me(session: str) -> dict[str, Any]:
     starting work on a session to understand what's already there.
     """
 
-    data = _run_client_json("brief-me", session)
+    data = _run_client_json(*_client_args("brief-me", session))
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
     raise CCPClientError("client returned a non-object payload for brief-me")
@@ -1275,11 +1366,10 @@ def get_entry_at(
     Useful for understanding what was known at a particular moment.
     """
 
-    args = ["get-entry-at", session, entry_name, "--at", at_timestamp]
-    if shelf_name:
-        args.extend(["--shelf", shelf_name])
-    if book_name:
-        args.extend(["--book", book_name])
+    args = _client_args(
+        "get-entry-at", session, entry_name,
+        options=[("--at", at_timestamp), ("--shelf", shelf_name), ("--book", book_name)],
+    )
     data = _run_client_json(*args)
     if isinstance(data, dict):
         return _attach_session_warning(session, data)
@@ -1288,9 +1378,16 @@ def get_entry_at(
 
 @mcp.resource("ccp://sessions")
 def sessions_resource() -> str:
-    """Enrolled sessions available to this client."""
+    """Saved subscriptions available to this client (no network refresh)."""
 
-    return json.dumps(sessions(), indent=2, sort_keys=True)
+    return json.dumps(_saved_sessions(), indent=2, sort_keys=True)
+
+
+@mcp.resource("ccp://master/{session}")
+def master_resource(session: str) -> str:
+    """Global and session-specific master instructions for an agent."""
+
+    return json.dumps(_master_boards(session), indent=2, sort_keys=True)
 
 
 @mcp.resource("ccp://help")
@@ -1301,9 +1398,9 @@ def help_resource() -> str:
 
 ## What is CCP?
 
-CCP is shared persistent storage for AI agents. Multiple agents enrolled in
-the same session can read and write structured data over authenticated
-connections. Everything is persisted and searchable.
+CCP is shared persistent storage for AI agents. Multiple agents subscribed to
+the same session can read and write structured data over HTTP. Configure the
+server URL and client key for your deployment. Stored entries are searchable.
 
 ## Data model
 
@@ -1316,12 +1413,16 @@ connections. Everything is persisted and searchable.
 
 ## Workflow
 
-1. Search before writing. Use find_entries or search_context to check if
+1. Pull master instructions. Use master_instructions for the selected session
+   before work and again at checkpoints during long-running work.
+2. Announce team work with set_status, refresh it when the task changes, and
+   clear_status when finished. Check list_team_status before duplicating work.
+3. Search before writing. Use find_entries or search_context to check if
    someone already wrote about what you're working on.
-2. Write what you learn. When you discover something useful, create an entry
+4. Write what you learn. When you discover something useful, create an entry
    or append to an existing one. Be specific in the description and use
    labels so other agents can find it.
-3. Organize by topic. Put related work in the same shelf/book. Don't dump
+5. Organize by topic. Put related work in the same shelf/book. Don't dump
    everything into the default shelf.
 
 ## Available tools
@@ -1337,18 +1438,25 @@ connections. Everything is persisted and searchable.
 - find_shelves / find_books: search the organizational structure
 - search_context: full-text search inside entry content
 - search_deleted_entries: find archived deleted entries
+- list_team_status: list active agents and current work in a challenge team
+- search_team_status: search agents and current work in a challenge team
 
 ### Writing
 - add_shelf: create a new shelf for a topic
 - add_book: create a new book inside a shelf
 - add_entry: create a new entry with content
 - append_entry: add content to an existing entry
+- set_status: join a challenge team or update your current work
+- clear_status: clear your current work and leave the team
 
 ### Session
-- enroll: join a session with a token
-- sessions: list your enrolled sessions
+- open_topics: discover topics on a server
+- subscribe: save a topic subscription for later tools
+- sessions: list saved subscriptions without a network refresh
+- master_instructions: read global and selected session master boards
+- server_status: show local client configuration (server binary optional)
 - brief_me: get a quick overview of a session (structure, recent entries, common labels)
-- server_health: check server status
+- server_health: check the selected subscription server's HTTP health endpoint
 
 ### Time travel
 - get_entry_at: read an entry's content as it was at a specific timestamp
@@ -1365,8 +1473,8 @@ connections. Everything is persisted and searchable.
 
 ## What you can't do through MCP
 
-Delete, restore, import, and certificate operations are CLI-only for safety.
-Ask a human to run those through ccp-client if needed.
+Delete, restore, and import operations are available through the client CLI.
+Server lifecycle and legacy certificate helpers are not exposed as MCP tools.
 """
 
 

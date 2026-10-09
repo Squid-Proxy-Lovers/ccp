@@ -5,6 +5,7 @@
 mod add_book;
 mod add_entry;
 mod add_shelf;
+mod agent_status;
 mod append_to_entry;
 mod brief_me;
 mod delete_entry;
@@ -23,3 +24,6 @@ mod search_deleted_entries;
 mod search_entries;
 pub(super) mod search_helpers;
 mod search_shelves;
+
+#[cfg(test)]
+mod tests;

@@ -34,6 +34,8 @@ pub const AUTH_SERVER_BASE_URL_ENV: &str = "CCP_AUTH_BASE_URL";
 pub const MTLS_SERVER_BASE_URL_ENV: &str = "CCP_MTLS_BASE_URL";
 pub const AUTH_LISTENER_ADDR_ENV: &str = "CCP_AUTH_LISTENER_ADDR";
 pub const MTLS_LISTENER_ADDR_ENV: &str = "CCP_MTLS_LISTENER_ADDR";
+pub const HTTP_LISTENER_ADDR_ENV: &str = "CCP_HTTP_LISTENER_ADDR";
+pub const HTTP_SERVER_BASE_URL_ENV: &str = "CCP_HTTP_BASE_URL";
 pub const TLS_SERVER_NAMES_ENV: &str = "CCP_TLS_SERVER_NAMES";
 pub const ALLOW_NON_LOOPBACK_AUTH_LISTENER_ENV: &str = "CCP_ALLOW_NON_LOOPBACK_AUTH_LISTENER";
 pub const SESSION_OWNER_ENV: &str = "CCP_SESSION_OWNER";
@@ -45,6 +47,7 @@ pub const CLIENT_CERT_TTL_SECONDS_ENV: &str = "CCP_CLIENT_CERT_TTL_SECONDS";
 pub const CA_CERT_TTL_DAYS_ENV: &str = "CCP_CA_CERT_TTL_DAYS";
 pub const CERT_WARNING_WINDOW_SECONDS_ENV: &str = "CCP_CERT_WARNING_WINDOW_SECONDS";
 pub const AUTO_ISSUE_INITIAL_TOKENS_ENV: &str = "CCP_AUTO_ISSUE_INITIAL_TOKENS";
+pub const AGENT_STATUS_TTL_SECONDS_ENV: &str = "CCP_AGENT_STATUS_TTL_SECONDS";
 
 const DEFAULT_DATA_DIR: &str = "data";
 const DEFAULT_SERVER_HOME: &str = "sessions";
@@ -52,14 +55,17 @@ const DEFAULT_AUTH_SERVER_BASE_URL: &str = "http://127.0.0.1:1337";
 const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
+const DEFAULT_HTTP_LISTENER_ADDR: &str = "127.0.0.1:1338";
+const DEFAULT_HTTP_SERVER_BASE_URL: &str = "http://127.0.0.1:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 4;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
 const DEFAULT_CLIENT_CERT_TTL_SECONDS: u64 = 3650 * 24 * 60 * 60;
 const DEFAULT_CA_CERT_TTL_DAYS: i64 = 3650;
 const DEFAULT_CERT_WARNING_WINDOW_SECONDS: u64 = 0;
+const DEFAULT_AGENT_STATUS_TTL_SECONDS: u64 = 3 * 60 * 60;
 
 const SCHEMA: &str = include_str!("init-db.sql");
 
@@ -106,6 +112,42 @@ pub async fn initialize_cpp_server(session_name: &str) -> anyhow::Result<Session
         initial_read_token,
         initial_read_write_token,
     })
+}
+
+/// Initialize the shared, plaintext server database without generating any
+/// authentication or TLS material.
+pub fn initialize_plain_server(initial_session: Option<&str>) -> anyhow::Result<Option<i64>> {
+    fs::create_dir_all(server_data_dir()).with_context(|| {
+        format!(
+            "failed to create server data directory {}",
+            server_data_dir().display()
+        )
+    })?;
+    init_sqlite(&db_path())?;
+    match initial_session
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => create_session(name).map(Some),
+        None => Ok(None),
+    }
+}
+
+pub fn create_session(session_name: &str) -> anyhow::Result<i64> {
+    let name = session_name.trim();
+    if name.is_empty() {
+        bail!("session name must not be empty");
+    }
+    let mut connection = open_sqlite_connection()?;
+    ensure_runtime_session(&mut connection, name)
+}
+
+pub fn http_listener_addr() -> String {
+    env::var(HTTP_LISTENER_ADDR_ENV).unwrap_or_else(|_| DEFAULT_HTTP_LISTENER_ADDR.to_string())
+}
+
+pub fn http_server_base_url() -> String {
+    env::var(HTTP_SERVER_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_HTTP_SERVER_BASE_URL.to_string())
 }
 
 pub fn open_sqlite_connection() -> anyhow::Result<Connection> {
@@ -330,6 +372,14 @@ pub fn cert_warning_window_seconds() -> u64 {
         .unwrap_or(DEFAULT_CERT_WARNING_WINDOW_SECONDS)
 }
 
+pub fn agent_status_ttl_seconds() -> u64 {
+    env::var(AGENT_STATUS_TTL_SECONDS_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_AGENT_STATUS_TTL_SECONDS)
+}
+
 #[cfg(test)]
 pub(crate) fn test_env_lock() -> &'static Mutex<()> {
     static TEST_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -345,7 +395,8 @@ pub(crate) fn configure_sqlite(connection: &Connection) -> anyhow::Result<()> {
         .execute_batch(
             "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;",
+             PRAGMA synchronous = FULL;
+             PRAGMA busy_timeout = 5000;",
         )
         .context("failed to configure sqlite pragmas")?;
     Ok(())
@@ -631,7 +682,7 @@ fn initialize_ca_material(session_id: i64, session_name: &str) -> anyhow::Result
     params.not_after = OffsetDateTime::now_utc() + TimeDuration::days(ca_cert_ttl_days());
     params.distinguished_name.push(
         DnType::CommonName,
-        format!("CCP Session CA [{}:{}]", session_name, session_id),
+        format!("CCP Session CA [{session_name}:{session_id}]"),
     );
 
     let certificate = params
@@ -667,12 +718,43 @@ pub fn ensure_active_session_binding(session_id: i64) -> anyhow::Result<SessionB
 fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> anyhow::Result<i64> {
     let owner = env::var(SESSION_OWNER_ENV).unwrap_or_default();
     let labels = env::var(SESSION_LABELS_ENV).unwrap_or_default();
-    let visibility = env::var(SESSION_VISIBILITY_ENV).unwrap_or_else(|_| "private".to_string());
+    let visibility = env::var(SESSION_VISIBILITY_ENV).unwrap_or_else(|_| "public".to_string());
+    if !matches!(visibility.as_str(), "public" | "private") {
+        bail!("CCP_SESSION_VISIBILITY must be public or private");
+    }
     let purpose = env::var(SESSION_PURPOSE_ENV)
         .unwrap_or_else(|_| "Runtime session for CCP inter-agent communication".to_string());
-    connection
-        .execute(
-            "INSERT OR IGNORE INTO sessions (
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let existing = transaction
+        .query_row(
+            "SELECT id FROM sessions WHERE name = ?1",
+            [session_name],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    let session_id = match existing {
+        Some(id) => id,
+        None => {
+            let last_id: i64 = transaction.query_row(
+                "SELECT MAX(last_id, COALESCE((SELECT MAX(id) FROM sessions), 0)) FROM session_id_sequence WHERE id = 1",
+                [], |row| row.get(0),
+            ).context("failed to read session ID allocator")?;
+            let next_id = last_id
+                .checked_add(1)
+                .context("session ID allocator exhausted")?;
+            transaction.execute(
+                "UPDATE session_id_sequence SET last_id = ?1 WHERE id = 1",
+                [next_id],
+            )?;
+            next_id
+        }
+    };
+    if existing.is_none() {
+        transaction
+            .execute(
+                "INSERT INTO sessions (
+                id,
                 name,
                 description,
                 owner,
@@ -681,39 +763,43 @@ fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> an
                 purpose,
                 is_active,
                 last_started_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, CURRENT_TIMESTAMP)",
-            params![
-                session_name,
-                "Runtime session for CCP inter-agent communication",
-                owner,
-                labels,
-                visibility,
-                purpose
-            ],
-        )
-        .with_context(|| format!("failed to ensure session {session_name} exists"))?;
-
-    connection
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, CURRENT_TIMESTAMP)",
+                params![
+                    session_id,
+                    session_name,
+                    "Runtime session for CCP inter-agent communication",
+                    owner,
+                    labels,
+                    visibility,
+                    purpose
+                ],
+            )
+            .with_context(|| format!("failed to ensure session {session_name} exists"))?;
+    }
+    transaction
         .execute(
             "UPDATE sessions
              SET is_active = 1,
-                 owner = ?2,
-                 labels = ?3,
-                 visibility = ?4,
-                 purpose = ?5,
+                 owner = COALESCE(?2, owner),
+                 labels = COALESCE(?3, labels),
+                 visibility = COALESCE(?4, visibility),
+                 purpose = COALESCE(?5, purpose),
                  last_started_at = CURRENT_TIMESTAMP
              WHERE name = ?1",
-            params![session_name, owner, labels, visibility, purpose],
+            params![
+                session_name,
+                env::var(SESSION_OWNER_ENV).ok(),
+                env::var(SESSION_LABELS_ENV).ok(),
+                env::var(SESSION_VISIBILITY_ENV).ok(),
+                env::var(SESSION_PURPOSE_ENV).ok()
+            ],
         )
         .with_context(|| format!("failed to activate session {session_name}"))?;
 
-    connection
-        .query_row(
-            "SELECT id FROM sessions WHERE name = ?1",
-            [session_name],
-            |row| row.get(0),
-        )
-        .with_context(|| format!("failed to load session id for {session_name}"))
+    transaction
+        .commit()
+        .context("failed to commit session creation")?;
+    Ok(session_id)
 }
 
 fn apply_schema_migrations(connection: &Connection) -> anyhow::Result<()> {
@@ -871,6 +957,40 @@ fn apply_schema_migrations(connection: &Connection) -> anyhow::Result<()> {
         )
         .context("failed to apply v2 migration: transfer_log table")?;
 
+    // v3: short-lived worker status within a shelf/team.
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_statuses (
+                session_id INTEGER NOT NULL,
+                team TEXT NOT NULL,
+                worker_id TEXT NOT NULL,
+                agent_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                updated_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL,
+                PRIMARY KEY (session_id, team, worker_id, agent_name),
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_statuses_team_expiry
+            ON agent_statuses(session_id, team, expires_at);",
+        )
+        .context("failed to apply v3 migration: agent_statuses table")?;
+
+    connection
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS journal_checkpoint (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            generation TEXT NOT NULL,
+            byte_offset INTEGER NOT NULL CHECK (byte_offset >= 0)
+        );
+        CREATE TABLE IF NOT EXISTS session_id_sequence (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            last_id INTEGER NOT NULL CHECK (last_id >= 0)
+        );",
+        )
+        .context("failed to apply v4 migration: journal_checkpoint table")?;
+
     record_schema_version(connection)?;
 
     Ok(())
@@ -893,7 +1013,7 @@ fn record_schema_version(connection: &Connection) -> anyhow::Result<()> {
             [],
             |row| row.get(0),
         )
-        .unwrap_or(0);
+        .context("failed to read recorded schema version")?;
 
     if current < SCHEMA_VERSION {
         connection
@@ -907,26 +1027,24 @@ fn record_schema_version(connection: &Connection) -> anyhow::Result<()> {
 }
 
 pub fn current_schema_version() -> anyhow::Result<u32> {
-    let connection = open_sqlite_connection()?;
-    let has_table: bool = connection
-        .query_row(
-            "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
+    read_schema_version(&open_sqlite_connection()?)
+}
+
+fn read_schema_version(connection: &Connection) -> anyhow::Result<u32> {
+    let has_table: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version')",
+        [], |row| row.get(0),
+    ).context("failed to inspect schema version table")?;
     if !has_table {
         return Ok(0);
     }
-    let version: u32 = connection
+    connection
         .query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_version",
             [],
             |row| row.get(0),
         )
-        .unwrap_or(0);
-    Ok(version)
+        .context("failed to read recorded schema version")
 }
 
 fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
@@ -942,10 +1060,21 @@ fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    connection.execute_batch(
-        "PRAGMA foreign_keys = OFF;
+    let declarations = connection.query_row(
+        "SELECT COALESCE((SELECT sql FROM sqlite_master WHERE name = 'auth_tokens'), '') || COALESCE((SELECT sql FROM sqlite_master WHERE name = 'issued_client_certs'), '')",
+        [], |row| row.get::<_, String>(0),
+    )?;
+    if declarations.matches("'admin'").count() >= 2 {
+        return Ok(());
+    }
+    let foreign_keys: bool =
+        connection.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    connection.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| {
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(
 
-         CREATE TABLE IF NOT EXISTS auth_tokens_admin_new (
+        "CREATE TABLE auth_tokens_admin_new (
              id INTEGER PRIMARY KEY,
              session_id INTEGER NOT NULL,
              token_nonce TEXT NOT NULL DEFAULT '',
@@ -958,7 +1087,7 @@ fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
              expires_at TEXT,
              FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
          );
-         INSERT OR IGNORE INTO auth_tokens_admin_new (
+         INSERT INTO auth_tokens_admin_new (
              id,
              session_id,
              token_nonce,
@@ -987,7 +1116,7 @@ fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
          CREATE INDEX IF NOT EXISTS idx_auth_tokens_session_id ON auth_tokens(session_id);
          CREATE INDEX IF NOT EXISTS idx_auth_tokens_access_level ON auth_tokens(access_level);
 
-         CREATE TABLE IF NOT EXISTS issued_client_certs_admin_new (
+         CREATE TABLE issued_client_certs_admin_new (
              id INTEGER PRIMARY KEY,
              session_id INTEGER NOT NULL,
              common_name TEXT NOT NULL UNIQUE,
@@ -998,14 +1127,19 @@ fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
              revoked_at TEXT,
              FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
          );
-         INSERT OR IGNORE INTO issued_client_certs_admin_new SELECT * FROM issued_client_certs;
+         INSERT INTO issued_client_certs_admin_new SELECT * FROM issued_client_certs;
          DROP TABLE issued_client_certs;
          ALTER TABLE issued_client_certs_admin_new RENAME TO issued_client_certs;
-         CREATE INDEX IF NOT EXISTS idx_issued_client_certs_session_id ON issued_client_certs(session_id);
-
-         PRAGMA foreign_keys = ON;",
+         CREATE INDEX IF NOT EXISTS idx_issued_client_certs_session_id ON issued_client_certs(session_id);",
     )
     .context("failed to migrate access_level admin")?;
+        transaction
+            .commit()
+            .context("failed to commit access-level migration")
+    })();
+    let restore_result = connection.pragma_update(None, "foreign_keys", foreign_keys);
+    result?;
+    restore_result.context("failed to restore SQLite foreign key checks")?;
     Ok(())
 }
 
@@ -1126,7 +1260,7 @@ fn get_host(value: &str) -> Option<String> {
     let to_parse = if value.contains("://") {
         value.to_string()
     } else {
-        format!("https://{}", value)
+        format!("https://{value}")
     };
     Url::parse(&to_parse)
         .ok()
@@ -1178,6 +1312,42 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     }
 }
 
+fn preflight_legacy_journal(connection: &Connection, journal: &Path) -> anyhow::Result<()> {
+    if !crate::journal::has_legacy_entries(journal)? {
+        return Ok(());
+    }
+    let table_exists = |name: &str| -> anyhow::Result<bool> {
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [name],
+            |row| row.get(0),
+        )?)
+    };
+    if table_exists("journal_checkpoint")?
+        && connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM journal_checkpoint WHERE id=1)",
+            [],
+            |row| row.get::<_, bool>(0),
+        )?
+    {
+        return Ok(());
+    }
+    for table in ["shelves", "books", "message_packs", "message_history"] {
+        if table_exists(table)?
+            && connection.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM {table})"),
+                [],
+                |row| row.get::<_, bool>(0),
+            )?
+        {
+            bail!(
+                "legacy journal overlaps persisted data; back up the database and journal, recover with the producing server version, and shut it down cleanly before upgrading"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn init_sqlite(db_path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -1190,8 +1360,16 @@ pub(crate) fn init_sqlite(db_path: &Path) -> anyhow::Result<()> {
 
     let mut connection = Connection::open(db_path)
         .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
-    configure_sqlite(&connection)?;
+    let version = read_schema_version(&connection)?;
+    if version > SCHEMA_VERSION {
+        bail!("database schema version {version} is newer than supported version {SCHEMA_VERSION}");
+    }
 
+    preflight_legacy_journal(
+        &connection,
+        &db_path.with_file_name("runtime-journal.jsonl"),
+    )?;
+    configure_sqlite(&connection)?;
     apply_schema_migrations(&connection)?;
 
     let transaction = connection

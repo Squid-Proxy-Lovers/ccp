@@ -5,6 +5,8 @@
 use super::super::*;
 
 impl ServerState {
+    // Preserve the existing command API used by the dispatcher and clients.
+    #[allow(clippy::too_many_arguments)]
     pub async fn append_to_entry(
         &self,
         session_id: i64,
@@ -15,6 +17,7 @@ impl ServerState {
         appended_content: &str,
         metadata: AppendMetadata,
     ) -> anyhow::Result<AppendResult> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         let (path, key) = entry_path_for(name, shelf_name, book_name);
         let entry_lock = self.append_lock(session_id, &key).await;

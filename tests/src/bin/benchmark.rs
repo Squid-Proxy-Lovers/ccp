@@ -4,11 +4,10 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
 use serde::Serialize;
-use tokio::time::sleep;
 
 use ccp_tests::harness::{LoadOperation, LoadResult, TestServer, run_persistent_load};
 
@@ -53,7 +52,7 @@ async fn run_benchmark_suite(config: &BenchmarkConfig) -> anyhow::Result<Benchma
         "seeding {} entries... ",
         config.seed_entries.max(config.clients)
     );
-    let seed_client = server.enroll_read_write().await?;
+    let seed_client = server.subscribe().await?;
     let effective_seed_entries = config.seed_entries.max(config.clients);
     let seed_entries = seed_entries(&seed_client, effective_seed_entries).await?;
     eprintln!("done");
@@ -62,31 +61,17 @@ async fn run_benchmark_suite(config: &BenchmarkConfig) -> anyhow::Result<Benchma
     let total = scenarios.len();
     let mut results = Vec::with_capacity(total);
 
-    const ENROLL_THROTTLE_THRESHOLD: usize = 100;
-    let enroll_delay =
-        (config.clients > ENROLL_THROTTLE_THRESHOLD).then(|| Duration::from_millis(1));
-
     for (idx, scenario) in scenarios.into_iter().enumerate() {
         eprint!(
-            "[{}/{}] {} — enrolling {} clients... ",
+            "[{}/{}] {} — subscribing {} HTTP clients... ",
             idx + 1,
             total,
             scenario.name,
             config.clients
         );
         let mut clients = Vec::with_capacity(config.clients);
-        for i in 0..config.clients {
-            if i > 0
-                && let Some(d) = enroll_delay
-            {
-                sleep(d).await;
-            }
-            let client = if scenario.requires_write {
-                server.enroll_read_write().await?
-            } else {
-                server.enroll_read().await?
-            };
-            clients.push(client);
+        for _ in 0..config.clients {
+            clients.push(server.subscribe().await?);
         }
 
         eprint!("running... ");
@@ -103,6 +88,7 @@ async fn run_benchmark_suite(config: &BenchmarkConfig) -> anyhow::Result<Benchma
         ));
     }
 
+    server.stop().await?;
     Ok(BenchmarkReport {
         profile_name: config.mode.clone(),
         clients: config.clients,
@@ -113,7 +99,7 @@ async fn run_benchmark_suite(config: &BenchmarkConfig) -> anyhow::Result<Benchma
 }
 
 async fn seed_entries(
-    client: &ccp_tests::harness::EnrolledClient,
+    client: &ccp_tests::harness::SubscribedClient,
     count: usize,
 ) -> anyhow::Result<Vec<String>> {
     let mut entry_names = Vec::with_capacity(count);
@@ -159,15 +145,14 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
     let all = vec![
         Scenario {
             name: "list".to_string(),
-            description: "List entry summaries repeatedly over persistent mTLS sessions."
-                .to_string(),
-            requires_write: false,
+            description: "List entry summaries repeatedly using reusable HTTP pools.".to_string(),
+
             operation: LoadOperation::List,
         },
         Scenario {
             name: "get".to_string(),
-            description: "Fetch full entries repeatedly over persistent mTLS sessions.".to_string(),
-            requires_write: false,
+            description: "Fetch full entries repeatedly using reusable HTTP pools.".to_string(),
+
             operation: LoadOperation::Get {
                 entry_names: entry_names.clone(),
             },
@@ -175,7 +160,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
         Scenario {
             name: "search-entries-simple".to_string(),
             description: "Search name, description, and labels for a simple hit.".to_string(),
-            requires_write: false,
+
             operation: LoadOperation::SearchEntries {
                 query: "benchmark".to_string(),
             },
@@ -183,7 +168,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
         Scenario {
             name: "search-entries-complex".to_string(),
             description: "Search name, description, and labels for a multi-term hit.".to_string(),
-            requires_write: false,
+
             operation: LoadOperation::SearchEntries {
                 query: "benchmark protocol".to_string(),
             },
@@ -191,7 +176,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
         Scenario {
             name: "search-entries-miss".to_string(),
             description: "Search name, description, and labels for a guaranteed miss.".to_string(),
-            requires_write: false,
+
             operation: LoadOperation::SearchEntries {
                 query: "voidneedleabsent".to_string(),
             },
@@ -199,7 +184,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
         Scenario {
             name: "search-context-simple".to_string(),
             description: "Search context text for a simple hit and return snippets.".to_string(),
-            requires_write: false,
+
             operation: LoadOperation::SearchContext {
                 query: "tls framing".to_string(),
             },
@@ -208,7 +193,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
             name: "search-context-complex".to_string(),
             description: "Search context text for a multi-term hit in generated nonsense."
                 .to_string(),
-            requires_write: false,
+
             operation: LoadOperation::SearchContext {
                 query: "glorbax zenthar".to_string(),
             },
@@ -216,7 +201,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
         Scenario {
             name: "search-context-miss".to_string(),
             description: "Search context text for a guaranteed miss.".to_string(),
-            requires_write: false,
+
             operation: LoadOperation::SearchContext {
                 query: "voidneedleabsent".to_string(),
             },
@@ -224,7 +209,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
         Scenario {
             name: "append".to_string(),
             description: "Append to a single hot entry from many concurrent clients.".to_string(),
-            requires_write: true,
+
             operation: LoadOperation::Append {
                 entry_name: entry_names
                     .first()
@@ -238,7 +223,7 @@ fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> V
             description:
                 "Mixed workload: list, get, simple/complex search, miss-path search, and append."
                     .to_string(),
-            requires_write: true,
+
             operation: LoadOperation::Mixed {
                 entry_names,
                 label_query: "protocol".to_string(),
@@ -505,7 +490,6 @@ impl BenchmarkConfig {
 struct Scenario {
     name: String,
     description: String,
-    requires_write: bool,
     operation: LoadOperation,
 }
 
@@ -546,7 +530,7 @@ impl BenchmarkScenarioResult {
 }
 
 fn print_usage() {
-    eprintln!("usage: cargo run --manifest-path src/tests/Cargo.toml --bin benchmark -- [options]");
+    eprintln!("usage: cargo run --manifest-path tests/Cargo.toml --bin benchmark -- [options]");
     eprintln!(
         "  --mode <suite|full-suite|list|get|search-entries-simple|search-entries-complex|search-entries-miss|search-context-simple|search-context-complex|search-context-miss|append|mixed>"
     );
@@ -560,7 +544,7 @@ fn print_usage() {
         "  --seed-entries <count>            Seed entries created before the suite. Default: {DEFAULT_SEED_ENTRIES}"
     );
     eprintln!(
-        "  --output-dir <path>               Write JSON and Markdown reports here. Default: src/tests/benchmark-results"
+        "  --output-dir <path>               Write JSON and Markdown reports here. Default: tests/benchmark-results"
     );
 }
 

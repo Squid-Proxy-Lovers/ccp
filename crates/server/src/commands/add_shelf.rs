@@ -12,6 +12,7 @@ impl ServerState {
         description: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<AddShelfResult> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         let shelf_name = normalize_segment(Some(shelf_name), "");
         if shelf_name.is_empty() {

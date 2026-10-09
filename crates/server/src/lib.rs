@@ -2,605 +2,674 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-pub mod auth_request;
 pub mod identity;
 pub mod init;
 pub mod journal;
 pub mod message;
 pub mod state;
 
-use std::panic;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::Duration;
 
-use std::net::SocketAddr;
+use anyhow::Context;
+use axum::body::Body;
+use axum::extract::{Path, Query, State};
+use axum::http::{HeaderMap, StatusCode, header};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::{Json, Router};
+use protocol::{ClientRequest, ErrorCode, ErrorResponse, ServerResponse, SessionMetadata};
+use serde::{Deserialize, Serialize};
 
-use anyhow::{Context, anyhow, bail};
-use protocol::{ClientRequest, ServerResponse, decode, encode};
-use rustls::crypto::ring;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use rustls::server::WebPkiClientVerifier;
-use rustls::{RootCertStore, ServerConfig};
-use socket2::{Domain, Socket, Type};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{Notify, Semaphore, watch};
-use tokio::time::timeout;
-use tokio_rustls::{TlsAcceptor, server::TlsStream};
-use x509_parser::{extensions::GeneralName, parse_x509_certificate};
-
-use crate::auth_request::try_handle_auth_request;
-use crate::identity::{
-    ACCESS_URI_PREFIX, ConnectionAuthContext, PeerIdentity, SESSION_URI_PREFIX,
-    parse_access_identity_uri, parse_session_identity_uri,
-};
+use crate::identity::ConnectionAuthContext;
 use crate::init::{
-    auth_listener_addr, ca_cert_path, ensure_active_session_binding, initialize_cpp_server,
-    journal_path, mtls_listener_addr, mtls_server_base_url, server_cert_path, server_key_path,
+    http_listener_addr, http_server_base_url, initialize_plain_server, journal_path,
 };
 use crate::journal::JournalHandle;
 use crate::message::handle_message_request;
 use crate::state::ServerState;
 
-const MAX_CONCURRENT_CONNECTIONS: usize = 8192;
-const AUTH_LISTEN_BACKLOG: i32 = 2048;
-const MTLS_LISTEN_BACKLOG: i32 = 2048;
-const AUTH_REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_AUTH_REQUEST_SIZE: usize = 64 * 1024;
-const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(30);
-const FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+pub const DEFAULT_CLIENT_KEY: &str = "ccp-client-7b6c2f915e4a8d30";
+pub const DEFAULT_ADMIN_KEY: &str = "ccp-admin-f1a847d36c509e2b";
+const CLIENT_KEY_HEADER: &str = "x-ccp-client-key";
+const ADMIN_KEY_HEADER: &str = "x-ccp-admin-key";
+
+#[derive(Clone)]
+struct AppState {
+    ccp: Arc<ServerState>,
+    client_key: String,
+    admin_key: String,
+    download_dir: PathBuf,
+    base_url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RequestEnvelope {
+    subscribed_session_ids: Vec<i64>,
+    request: ClientRequest,
+}
+
+#[derive(Debug, Deserialize)]
+struct SessionSelector {
+    session: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateSessionBody {
+    session_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InstructionUpdate {
+    content: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ActivityQuery {
+    session: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct AdminOverview {
+    sessions: Vec<protocol::SessionStats>,
+    global_master: protocol::InstructionRecord,
+}
 
 pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
-    let _ = ring::default_provider().install_default();
-    let bootstrap = initialize_cpp_server(session_name).await?;
-    let journal = Arc::new(JournalHandle::start(journal_path())?);
-    let state = Arc::new(ServerState::load_from_storage(Arc::clone(&journal)).await?);
-    install_crash_persistence_hook(Arc::clone(&state));
-    let shutdown = Arc::new(ShutdownCoordinator::new());
-
-    println!(
-        "Initialized session '{}' (id={})",
-        bootstrap.session_name, bootstrap.session_id
-    );
-    println!("Auth redeem endpoint: {}", bootstrap.auth_redeem_url);
-    println!("mTLS endpoint: {}", mtls_server_base_url());
-    if let Some(token) = &bootstrap.initial_read_token {
-        println!("Initial read token (save now): {}", token.token);
-    }
-    if let Some(token) = &bootstrap.initial_read_write_token {
-        println!("Initial read_write token (save now): {}", token.token);
-    }
-
-    let auth_listener = {
-        let addr: SocketAddr = auth_listener_addr()
-            .parse()
-            .context("invalid auth listener address")?;
-        let domain = if addr.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let socket = Socket::new(domain, Type::STREAM, None)
-            .context("failed to create auth listener socket")?;
-        socket
-            .set_nonblocking(true)
-            .context("failed to set auth listener nonblocking")?;
-        socket
-            .bind(&addr.into())
-            .context("failed to bind auth listener")?;
-        socket
-            .listen(AUTH_LISTEN_BACKLOG)
-            .context("failed to listen on auth socket")?;
-        let std_listener: std::net::TcpListener = socket.into();
-        TcpListener::from_std(std_listener).context("failed to create tokio auth listener")?
-    };
-    let mtls_listener = {
-        let addr: SocketAddr = mtls_listener_addr()
-            .parse()
-            .context("invalid mTLS listener address")?;
-        let domain = if addr.is_ipv4() {
-            Domain::IPV4
-        } else {
-            Domain::IPV6
-        };
-        let socket = Socket::new(domain, Type::STREAM, None)
-            .context("failed to create mTLS listener socket")?;
-        socket
-            .set_nonblocking(true)
-            .context("failed to set mTLS listener nonblocking")?;
-        socket
-            .bind(&addr.into())
-            .context("failed to bind mTLS listener")?;
-        socket
-            .listen(MTLS_LISTEN_BACKLOG)
-            .context("failed to listen on mTLS socket")?;
-        let std_listener: std::net::TcpListener = socket.into();
-        TcpListener::from_std(std_listener).context("failed to create tokio mTLS listener")?
-    };
-    let tls_acceptor = TlsAcceptor::from(build_mtls_server_config(bootstrap.session_id)?);
-    let connection_limit = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
-
-    let auth_task = tokio::spawn({
-        let state = Arc::clone(&state);
-        let shutdown = Arc::clone(&shutdown);
-        let connection_limit = Arc::clone(&connection_limit);
-        async move {
-            loop {
-                let (socket, addr) = auth_listener.accept().await?;
-                socket.set_nodelay(true).ok();
-                let connection_permit = match timeout(
-                    Duration::from_secs(5),
-                    Arc::clone(&connection_limit).acquire_owned(),
-                )
-                .await
-                {
-                    Ok(Ok(permit)) => permit,
-                    _ => {
-                        drop(socket);
-                        continue;
-                    }
-                };
-                let Some(request_guard) = shutdown.try_track_request() else {
-                    drop(socket);
-                    continue;
-                };
-                let state = Arc::clone(&state);
-                let shutdown_rx = shutdown.subscribe();
-
-                tokio::spawn(async move {
-                    let _connection_permit = connection_permit;
-                    let _request_guard = request_guard;
-                    if let Err(error) = auth_handler(socket, state, shutdown_rx).await {
-                        eprintln!("Auth error from {addr}: {error}");
-                    }
-                });
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        }
-    });
-
-    let mtls_task = tokio::spawn({
-        let state = Arc::clone(&state);
-        let shutdown = Arc::clone(&shutdown);
-        let connection_limit = Arc::clone(&connection_limit);
-        async move {
-            loop {
-                let (socket, addr) = mtls_listener.accept().await?;
-                socket.set_nodelay(true).ok();
-                let connection_permit = match timeout(
-                    Duration::from_secs(5),
-                    Arc::clone(&connection_limit).acquire_owned(),
-                )
-                .await
-                {
-                    Ok(Ok(permit)) => permit,
-                    _ => {
-                        drop(socket);
-                        continue;
-                    }
-                };
-                let Some(request_guard) = shutdown.try_track_request() else {
-                    drop(socket);
-                    continue;
-                };
-                let acceptor = tls_acceptor.clone();
-                let state = Arc::clone(&state);
-                let shutdown_rx = shutdown.subscribe();
-                let expected_session_id = bootstrap.session_id;
-
-                tokio::spawn(async move {
-                    let _connection_permit = connection_permit;
-                    let _request_guard = request_guard;
-                    if let Err(error) = mtls_message_handler(
-                        socket,
-                        acceptor,
-                        state,
-                        expected_session_id,
-                        shutdown_rx,
-                    )
-                    .await
-                    {
-                        eprintln!("mTLS error from {addr}: {error}");
-                    }
-                });
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        }
-    });
-
-    let mut auth_task = auth_task;
-    let mut mtls_task = mtls_task;
-    let server_result: anyhow::Result<()> = tokio::select! {
-        result = &mut auth_task => {
-            result.context("auth listener task failed to join")??;
-            Ok(())
-        }
-        result = &mut mtls_task => {
-            result.context("mTLS listener task failed to join")??;
-            Ok(())
-        }
-        result = tokio::signal::ctrl_c() => {
-            result.context("failed to listen for ctrl-c")?;
-            Ok(())
-        }
-    };
-
-    shutdown.begin_shutdown();
-    auth_task.abort();
-    mtls_task.abort();
-    let _ = auth_task.await;
-    let _ = mtls_task.await;
-    shutdown.wait_for_idle().await;
-
-    state.mark_sessions_stopped().await?;
-    journal.shutdown()?;
-    state.persist_snapshot_to_sqlite().await?;
-    journal.truncate_blocking()?;
-
-    server_result
+    run_plain_server(Some(session_name)).await
 }
 
-async fn auth_handler(
-    mut socket: TcpStream,
-    state: Arc<ServerState>,
-    mut shutdown: watch::Receiver<bool>,
+pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<()> {
+    run_plain_server_with_shutdown(initial_session, shutdown_signal()).await
+}
+
+pub async fn run_plain_server_with_shutdown(
+    initial_session: Option<&str>,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let request = read_full_auth_request(&mut socket, &mut shutdown).await?;
-    if try_handle_auth_request(&mut socket, &request, state).await? {
-        return Ok(());
-    }
-    send_plain_404(&mut socket).await
-}
-
-async fn read_full_auth_request(
-    socket: &mut TcpStream,
-    shutdown: &mut watch::Receiver<bool>,
-) -> anyhow::Result<String> {
-    let mut buf = Vec::with_capacity(4096);
-    let mut header_buf = [0u8; 4096];
-    loop {
-        let n = tokio::select! {
-            _ = shutdown.changed() => bail!("shutdown during auth request read"),
-            result = timeout(AUTH_REQUEST_READ_TIMEOUT, socket.read(&mut header_buf)) => result,
+    let base_url = configured_base_url()?;
+    let client_key = configured_key("CCP_CLIENT_KEY", DEFAULT_CLIENT_KEY)?;
+    let admin_key = configured_key("CCP_ADMIN_KEY", DEFAULT_ADMIN_KEY)?;
+    let listener = tokio::net::TcpListener::bind(http_listener_addr())
+        .await
+        .context("failed to bind HTTP listener")?;
+    let initial_id = initialize_plain_server(initial_session)?;
+    let journal = match JournalHandle::start(journal_path()) {
+        Ok(journal) => Arc::new(journal),
+        Err(error) => {
+            stop_bootstrap_session(initial_id);
+            return Err(error);
         }
-        .context("auth request read timed out")??;
-        if n == 0 {
-            bail!("auth connection closed before request complete");
+    };
+
+    let ccp = match ServerState::load_from_storage(Arc::clone(&journal)).await {
+        Ok(state) => Arc::new(state),
+        Err(error) => {
+            let _ = journal.shutdown();
+            stop_bootstrap_session(initial_id);
+            return Err(error);
         }
-        buf.extend_from_slice(&header_buf[..n]);
-        if buf.len() > MAX_AUTH_REQUEST_SIZE {
-            bail!("auth request exceeds max size");
-        }
-        if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            let header_len = header_end + 4;
-            let content_length = parse_content_length(&buf[..header_len]).unwrap_or(0);
-            let needed = header_len + content_length;
-            while buf.len() < needed {
-                let to_read = (needed - buf.len()).min(header_buf.len());
-                let n = tokio::select! {
-                    _ = shutdown.changed() => bail!("shutdown during auth request read"),
-                    result = timeout(AUTH_REQUEST_READ_TIMEOUT, socket.read(&mut header_buf[..to_read])) => result,
-                }
-                .context("auth request read timed out")??;
-                if n == 0 {
-                    bail!("auth connection closed before body complete");
-                }
-                buf.extend_from_slice(&header_buf[..n]);
-                if buf.len() > MAX_AUTH_REQUEST_SIZE {
-                    bail!("auth request exceeds max size");
-                }
-            }
-            return String::from_utf8(buf).context("auth request is not valid UTF-8");
-        }
+    };
+    if let Err(error) = ccp.mark_sessions_started().await {
+        let _ = journal.shutdown();
+        stop_bootstrap_session(initial_id);
+        return Err(error);
     }
-}
+    let state = AppState {
+        ccp: Arc::clone(&ccp),
+        client_key,
+        admin_key,
+        download_dir: std::env::var_os("CCP_DOWNLOAD_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("downloads")),
+        base_url: base_url.clone(),
+    };
 
-fn parse_content_length(headers: &[u8]) -> Option<usize> {
-    let headers_str = std::str::from_utf8(headers).ok()?;
-    for line in headers_str.lines() {
-        let line = line.trim();
-        if line.to_lowercase().starts_with("content-length:") {
-            let value = line[15..].trim();
-            return value.parse().ok();
-        }
+    if let (Some(name), Some(id)) = (initial_session, initial_id) {
+        println!("Initialized session '{name}' (id={id})");
     }
-    None
-}
+    println!("HTTP endpoint: {base_url}");
 
-async fn mtls_message_handler(
-    socket: TcpStream,
-    acceptor: TlsAcceptor,
-    state: Arc<ServerState>,
-    expected_session_id: i64,
-    mut shutdown: watch::Receiver<bool>,
-) -> anyhow::Result<()> {
-    let mut tls_stream = tokio::select! {
-        _ = shutdown.changed() => return Ok(()),
-        result = timeout(TLS_HANDSHAKE_TIMEOUT, acceptor.accept(socket)) => result,
+    let app = Router::new()
+        .route("/health", get(health))
+        .route("/v1/sessions", get(list_open_sessions))
+        .route("/v1/subscribe", post(subscribe))
+        .route("/v1/request", post(request))
+        .route("/v1/admin/sessions", post(admin_create_session))
+        .route("/v1/admin/overview", get(admin_overview))
+        .route("/v1/admin/activity", get(admin_activity))
+        .route(
+            "/v1/admin/master",
+            get(admin_get_global_master).put(admin_set_global_master),
+        )
+        .route("/v1/admin/sessions/{session}", delete(admin_delete_session))
+        .route(
+            "/v1/admin/sessions/{session}/stats",
+            get(admin_session_stats),
+        )
+        .route(
+            "/v1/admin/sessions/{session}/master",
+            get(admin_get_session_master).put(admin_set_session_master),
+        )
+        .route("/admin", get(admin_dashboard))
+        .route("/setup-client.sh", get(setup_client_script))
+        .route("/setup-client.ps1", get(setup_client_powershell))
+        .route("/ccp-manage", get(management_script))
+        .route("/ccp-manage.ps1", get(management_powershell))
+        .route("/ccp-update", get(update_script))
+        .route("/ccp-update.ps1", get(update_powershell))
+        .route("/downloads/{artifact}", get(download_artifact))
+        .with_state(state);
+
+    let serve_result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await
+        .context("HTTP server failed");
+    let persist_result = async {
+        ccp.mark_sessions_stopped().await?;
+        ccp.checkpoint().await
     }
-    .context("TLS handshake timed out")?
-    .context("TLS accept failed")?;
-    let peer_identity = extract_peer_identity(&tls_stream)?;
-    if peer_identity.session_id != expected_session_id {
-        bail!(
-            "client certificate session {} does not match active session {}",
-            peer_identity.session_id,
-            expected_session_id
-        );
-    }
-    let auth_context = ConnectionAuthContext::try_from(&peer_identity)?;
-
-    loop {
-        let request = match tokio::select! {
-            _ = shutdown.changed() => return Ok(()),
-            result = timeout(FRAME_READ_TIMEOUT, read_frame::<ClientRequest, _>(&mut tls_stream)) => result,
-        } {
-            Ok(Ok(Some(request))) => request,
-            Ok(Ok(None)) => return Ok(()),
-            Err(_) => {
-                let response = ServerResponse::Error(protocol::ErrorResponse {
-                    code: protocol::ErrorCode::BadRequest,
-                    message: "request timed out".to_string(),
-                });
-                timeout(FRAME_WRITE_TIMEOUT, write_frame(&mut tls_stream, &response))
-                    .await
-                    .ok();
-                return Ok(());
-            }
-            Ok(Err(error)) => {
-                let response = ServerResponse::Error(protocol::ErrorResponse {
-                    code: protocol::ErrorCode::BadRequest,
-                    message: error.to_string(),
-                });
-                timeout(FRAME_WRITE_TIMEOUT, write_frame(&mut tls_stream, &response))
-                    .await
-                    .context("response write timed out")??;
-                return Ok(());
-            }
-        };
-
-        let response = handle_message_request(&state, &auth_context, request).await;
-        timeout(FRAME_WRITE_TIMEOUT, write_frame(&mut tls_stream, &response))
-            .await
-            .context("response write timed out")??;
-    }
-}
-
-async fn send_plain_404(socket: &mut (impl AsyncWriteExt + Unpin)) -> anyhow::Result<()> {
-    let body = "Unknown route\n";
-    let response = format!(
-        "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    socket.write_all(response.as_bytes()).await?;
+    .await;
+    // Always drain/stop the writer, including failed snapshot/server exits.
+    let shutdown_result = journal.shutdown();
+    serve_result?;
+    persist_result?;
+    shutdown_result?;
     Ok(())
 }
 
-fn build_mtls_server_config(session_id: i64) -> anyhow::Result<Arc<ServerConfig>> {
-    let _ = ensure_active_session_binding(session_id)?;
-    let server_cert_path = server_cert_path();
-    let server_key_path = server_key_path();
-    let ca_cert_path = ca_cert_path();
-    let cert_pem = std::fs::read(&server_cert_path).with_context(|| {
-        format!(
-            "failed to read server cert from {}",
-            server_cert_path.display()
-        )
-    })?;
-    let key_pem = std::fs::read(&server_key_path).with_context(|| {
-        format!(
-            "failed to read server key from {}",
-            server_key_path.display()
-        )
-    })?;
-    let ca_pem = std::fs::read(&ca_cert_path)
-        .with_context(|| format!("failed to read CA cert from {}", ca_cert_path.display()))?;
-
-    let cert_chain = CertificateDer::pem_slice_iter(&cert_pem)
-        .collect::<Result<Vec<_>, _>>()
-        .context("failed to parse server certificate chain")?;
-    let private_key =
-        PrivateKeyDer::from_pem_slice(&key_pem).context("failed to parse server private key")?;
-
-    let mut roots = RootCertStore::empty();
-    for cert in CertificateDer::pem_slice_iter(&ca_pem) {
-        roots
-            .add(cert.context("failed to parse CA certificate")?)
-            .context("failed to add CA certificate to root store")?;
+fn stop_bootstrap_session(session_id: Option<i64>) {
+    if let Some(session_id) = session_id
+        && let Ok(connection) = init::open_sqlite_connection()
+    {
+        let _ = connection.execute(
+            "UPDATE sessions SET is_active=0, last_stopped_at=CURRENT_TIMESTAMP WHERE id=?1",
+            [session_id],
+        );
     }
-
-    let client_verifier = WebPkiClientVerifier::builder(roots.into())
-        .build()
-        .context("failed to build client verifier")?;
-
-    let server_config = ServerConfig::builder()
-        .with_client_cert_verifier(client_verifier)
-        .with_single_cert(cert_chain, private_key)
-        .context("failed to build rustls server config")?;
-
-    Ok(Arc::new(server_config))
 }
 
-fn extract_peer_identity(stream: &TlsStream<TcpStream>) -> anyhow::Result<PeerIdentity> {
-    let (_, connection) = stream.get_ref();
-    let peer_cert = connection
-        .peer_certificates()
-        .and_then(|certs| certs.first())
-        .context("missing peer certificate after TLS handshake")?;
+fn configured_base_url() -> anyhow::Result<String> {
+    validate_base_url(&http_server_base_url())
+}
 
-    let (_, cert) = parse_x509_certificate(peer_cert.as_ref())
-        .map_err(|error| anyhow!("failed to parse peer certificate: {error}"))?;
+fn validate_base_url(value: &str) -> anyhow::Result<String> {
+    let url = url::Url::parse(value).context("CCP_HTTP_BASE_URL must be an absolute HTTP URL")?;
+    if url.scheme() != "http"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        anyhow::bail!(
+            "CCP_HTTP_BASE_URL must be an HTTP URL without credentials, query, or fragment"
+        );
+    }
+    Ok(url.as_str().trim_end_matches('/').to_string())
+}
 
-    let common_name = cert
-        .subject()
-        .iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok())
-        .context("peer certificate is missing a UTF-8 common name")?;
+fn configured_key(name: &str, default: &str) -> anyhow::Result<String> {
+    let value = match std::env::var(name) {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => default.to_string(),
+        Err(error) => return Err(error).with_context(|| format!("{name} must be valid UTF-8")),
+    };
+    if value.is_empty()
+        || value.trim() != value
+        || !axum::http::HeaderValue::from_str(&value).is_ok_and(|header| header.to_str().is_ok())
+    {
+        anyhow::bail!(
+            "{name} must be a nonempty valid HTTP header value without surrounding whitespace"
+        );
+    }
+    Ok(value)
+}
 
-    let san = cert
-        .subject_alternative_name()
-        .map_err(|error| anyhow!("failed to read peer certificate SAN: {error}"))?
-        .context("peer certificate is missing a subject alternative name")?;
-    let session_uri = san
-        .value
-        .general_names
-        .iter()
-        .find_map(|name| match name {
-            GeneralName::URI(uri) if uri.starts_with(SESSION_URI_PREFIX) => {
-                Some((*uri).to_string())
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut terminate) => tokio::select! {
+                _ = tokio::signal::ctrl_c() => {},
+                _ = terminate.recv() => {},
+            },
+            Err(_) => {
+                let _ = tokio::signal::ctrl_c().await;
             }
-            _ => None,
-        })
-        .context("peer certificate is missing a CCP session identity URI")?;
-    let session_id = parse_session_identity_uri(&session_uri)?;
-    let access_uri = san
-        .value
-        .general_names
-        .iter()
-        .find_map(|name| match name {
-            GeneralName::URI(uri) if uri.starts_with(ACCESS_URI_PREFIX) => Some((*uri).to_string()),
-            _ => None,
-        })
-        .context("peer certificate is missing a CCP access identity URI")?;
-    let access_level = parse_access_identity_uri(&access_uri)?;
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
 
-    Ok(PeerIdentity {
-        common_name: common_name.to_string(),
-        session_id,
-        access_level,
+fn render_hosted_script(script: &str, base_url: &str, powershell: bool) -> String {
+    // The placeholders are inside quoted literals. Preserve those literals even
+    // when a configured URL contains characters meaningful to the shell.
+    let escaped = if powershell {
+        base_url
+            .replace('`', "``")
+            .replace('"', "`\"")
+            .replace('$', "`$")
+    } else {
+        base_url
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('$', "\\$")
+            .replace('`', "\\`")
+    };
+    script.replace("http://127.0.0.1:1338", &escaped)
+}
+
+async fn health() -> Json<serde_json::Value> {
+    Json(serde_json::json!({"status": "ok"}))
+}
+
+async fn list_open_sessions(State(state): State<AppState>) -> Json<Vec<SessionMetadata>> {
+    Json(
+        state
+            .ccp
+            .list_sessions()
+            .await
+            .into_iter()
+            .filter(|session| session.visibility == "public")
+            .collect(),
+    )
+}
+
+async fn subscribe(
+    State(state): State<AppState>,
+    Json(selector): Json<SessionSelector>,
+) -> Response {
+    match resolve_open_session(&state.ccp, &selector.session).await {
+        Some(session) => (StatusCode::OK, Json(session)).into_response(),
+        None => error(StatusCode::NOT_FOUND, "open session not found"),
+    }
+}
+
+async fn request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(envelope): Json<RequestEnvelope>,
+) -> Response {
+    let session_id = request_session_id(&envelope.request);
+    if let Some(session_id) = session_id {
+        if !envelope.subscribed_session_ids.contains(&session_id) {
+            return protocol_error(
+                StatusCode::FORBIDDEN,
+                ErrorCode::Forbidden,
+                format!("not subscribed to session {session_id}"),
+            );
+        }
+        let sessions = state.ccp.list_sessions().await;
+        let Some(session) = sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+        else {
+            return protocol_error(
+                StatusCode::NOT_FOUND,
+                ErrorCode::NotFound,
+                "session not found".to_string(),
+            );
+        };
+        let key_matches =
+            header_value(&headers, CLIENT_KEY_HEADER).is_some_and(|key| key == state.client_key);
+        if session.visibility != "public" && !key_matches {
+            return protocol_error(
+                StatusCode::UNAUTHORIZED,
+                ErrorCode::Forbidden,
+                "invalid client key".to_string(),
+            );
+        }
+    }
+
+    let context = ConnectionAuthContext {
+        common_name: "http-client".to_string(),
+        session_id: session_id.unwrap_or(0),
+        can_write: true,
+        can_revoke_others: false,
+    };
+    Json(handle_message_request(&state.ccp, &context, envelope.request).await).into_response()
+}
+
+async fn admin_create_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CreateSessionBody>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.create_session(&body.session_name).await {
+        Ok(session) => (StatusCode::CREATED, Json(session)).into_response(),
+        Err(error_value) => error(StatusCode::BAD_REQUEST, error_value.to_string()),
+    }
+}
+
+async fn admin_overview(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.global_master_instructions() {
+        Ok(global_master) => Json(AdminOverview {
+            sessions: state.ccp.all_session_stats().await,
+            global_master,
+        })
+        .into_response(),
+        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
+async fn admin_activity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ActivityQuery>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state
+        .ccp
+        .recent_activity(query.session.as_deref(), query.limit.unwrap_or(100))
+        .await
+    {
+        Ok(activity) => Json(activity).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_get_global_master(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.global_master_instructions() {
+        Ok(record) => Json(record).into_response(),
+        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
+async fn admin_set_global_master(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(update): Json<InstructionUpdate>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.set_global_master_instructions(&update.content) {
+        Ok(record) => Json(record).into_response(),
+        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+    }
+}
+
+async fn admin_delete_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.delete_session(&session).await {
+        Ok(metadata) => (StatusCode::OK, Json(metadata)).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_session_stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.session_stats(&session).await {
+        Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_get_session_master(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.session_stats(&session).await {
+        Ok(stats) => match state
+            .ccp
+            .master_instructions(stats.session.session_id)
+            .await
+        {
+            Ok(instructions) => Json(instructions.session).into_response(),
+            Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+        },
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_set_session_master(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+    Json(update): Json<InstructionUpdate>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state
+        .ccp
+        .set_session_master_instructions(&session, &update.content)
+        .await
+    {
+        Ok(record) => Json(record).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_dashboard() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        include_str!("admin.html"),
+    )
+}
+
+async fn setup_client_script(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
+        render_hosted_script(
+            include_str!("../../../scripts/setup-client.sh"),
+            &state.base_url,
+            false,
+        ),
+    )
+}
+
+async fn setup_client_powershell(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        render_hosted_script(
+            include_str!("../../../scripts/setup-client.ps1"),
+            &state.base_url,
+            true,
+        ),
+    )
+}
+
+async fn management_script(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-manage"),
+            &state.base_url,
+            false,
+        ),
+    )
+}
+
+async fn management_powershell(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-manage.ps1"),
+            &state.base_url,
+            true,
+        ),
+    )
+}
+
+async fn update_script(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/x-shellscript; charset=utf-8")],
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-update"),
+            &state.base_url,
+            false,
+        ),
+    )
+}
+
+async fn update_powershell(State(state): State<AppState>) -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        render_hosted_script(
+            include_str!("../../../scripts/ccp-update.ps1"),
+            &state.base_url,
+            true,
+        ),
+    )
+}
+
+async fn download_artifact(
+    State(state): State<AppState>,
+    Path(artifact): Path<String>,
+) -> Response {
+    if !artifact
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'))
+    {
+        return error(StatusCode::BAD_REQUEST, "invalid artifact name");
+    }
+    let path = state.download_dir.join(&artifact);
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .header(
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{artifact}\""),
+            )
+            .body(Body::from(bytes))
+            .expect("valid artifact response"),
+        Err(_) => error(StatusCode::NOT_FOUND, "artifact not found"),
+    }
+}
+
+async fn resolve_open_session(ccp: &ServerState, selector: &str) -> Option<SessionMetadata> {
+    ccp.list_sessions().await.into_iter().find(|session| {
+        session.visibility == "public"
+            && (session.session_name == selector || session.session_id.to_string() == selector)
     })
 }
 
-async fn read_frame<T, R>(reader: &mut R) -> anyhow::Result<Option<T>>
-where
-    T: serde::de::DeserializeOwned,
-    R: AsyncRead + Unpin,
-{
-    let mut header = [0u8; 4];
-    match reader.read_exact(&mut header).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(error) => return Err(error).context("failed to read frame header"),
-    }
-
-    let frame_len = u32::from_be_bytes(header) as usize;
-    if frame_len == 0 {
-        bail!("empty frames are not allowed");
-    }
-    if frame_len > 8 * 1024 * 1024 {
-        bail!("frame exceeds maximum size");
-    }
-
-    let mut payload = vec![0u8; frame_len];
-    reader
-        .read_exact(&mut payload)
-        .await
-        .context("failed to read frame payload")?;
-    decode(&payload)
-        .context("failed to decode framed payload")
-        .map(Some)
+fn admin_authorized(state: &AppState, headers: &HeaderMap) -> bool {
+    header_value(headers, ADMIN_KEY_HEADER).is_some_and(|key| key == state.admin_key)
 }
 
-async fn write_frame<T, W>(writer: &mut W, value: &T) -> anyhow::Result<()>
-where
-    T: serde::Serialize,
-    W: AsyncWrite + Unpin,
-{
-    let payload = encode(value).context("failed to encode response frame")?;
-    let frame_len = u32::try_from(payload.len()).context("encoded frame is too large")?;
-    writer
-        .write_all(&frame_len.to_be_bytes())
-        .await
-        .context("failed to write frame header")?;
-    writer
-        .write_all(&payload)
-        .await
-        .context("failed to write frame payload")?;
-    writer.flush().await.context("failed to flush frame")?;
-    Ok(())
+fn header_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name)?.to_str().ok()
 }
 
-fn install_crash_persistence_hook(state: Arc<ServerState>) {
-    let previous = panic::take_hook();
-    panic::set_hook(Box::new(move |panic_info| {
-        let _ = state.try_persist_snapshot_to_sqlite();
-        previous(panic_info);
-    }));
-}
-
-struct ShutdownCoordinator {
-    is_shutting_down: AtomicBool,
-    active_requests: AtomicUsize,
-    idle_notify: Notify,
-    shutdown_tx: watch::Sender<bool>,
-}
-
-impl ShutdownCoordinator {
-    fn new() -> Self {
-        let (shutdown_tx, _) = watch::channel(false);
-        Self {
-            is_shutting_down: AtomicBool::new(false),
-            active_requests: AtomicUsize::new(0),
-            idle_notify: Notify::new(),
-            shutdown_tx,
-        }
-    }
-
-    fn try_track_request(self: &Arc<Self>) -> Option<RequestGuard> {
-        if self.is_shutting_down.load(Ordering::Acquire) {
-            return None;
-        }
-
-        self.active_requests.fetch_add(1, Ordering::AcqRel);
-        if self.is_shutting_down.load(Ordering::Acquire) {
-            self.finish_request();
-            return None;
-        }
-
-        Some(RequestGuard {
-            coordinator: Arc::clone(self),
-        })
-    }
-
-    fn subscribe(&self) -> watch::Receiver<bool> {
-        self.shutdown_tx.subscribe()
-    }
-
-    fn begin_shutdown(&self) {
-        if self.is_shutting_down.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let _ = self.shutdown_tx.send(true);
-        if self.active_requests.load(Ordering::Acquire) == 0 {
-            self.idle_notify.notify_waiters();
-        }
-    }
-
-    async fn wait_for_idle(&self) {
-        while self.active_requests.load(Ordering::Acquire) != 0 {
-            self.idle_notify.notified().await;
-        }
-    }
-
-    fn finish_request(&self) {
-        if self.active_requests.fetch_sub(1, Ordering::AcqRel) == 1 {
-            self.idle_notify.notify_waiters();
-        }
+fn request_session_id(request: &ClientRequest) -> Option<i64> {
+    match request {
+        ClientRequest::List { session_id }
+        | ClientRequest::GetMasterInstructions { session_id }
+        | ClientRequest::Get { session_id, .. }
+        | ClientRequest::AddShelf { session_id, .. }
+        | ClientRequest::AddBook { session_id, .. }
+        | ClientRequest::AddEntry { session_id, .. }
+        | ClientRequest::Append { session_id, .. }
+        | ClientRequest::Delete { session_id, .. }
+        | ClientRequest::SearchEntries { session_id, .. }
+        | ClientRequest::SearchShelves { session_id, .. }
+        | ClientRequest::SearchBooks { session_id, .. }
+        | ClientRequest::SearchContext { session_id, .. }
+        | ClientRequest::SearchDeleted { session_id, .. }
+        | ClientRequest::RestoreDeleted { session_id, .. }
+        | ClientRequest::GetHistory { session_id, .. }
+        | ClientRequest::ExportBundle { session_id, .. }
+        | ClientRequest::ImportBundle { session_id, .. }
+        | ClientRequest::RevokeClientCert { session_id, .. }
+        | ClientRequest::DeleteShelf { session_id, .. }
+        | ClientRequest::BriefMe { session_id }
+        | ClientRequest::GetEntryAt { session_id, .. }
+        | ClientRequest::SetStatus { session_id, .. }
+        | ClientRequest::ClearStatus { session_id, .. }
+        | ClientRequest::ListTeamStatus { session_id, .. }
+        | ClientRequest::SearchTeamStatus { session_id, .. } => Some(*session_id),
+        ClientRequest::Ping
+        | ClientRequest::Handshake(_)
+        | ClientRequest::ListSessions
+        | ClientRequest::CreateSession { .. }
+        | ClientRequest::Subscribe { .. } => None,
     }
 }
 
-struct RequestGuard {
-    coordinator: Arc<ShutdownCoordinator>,
+fn protocol_error(status: StatusCode, code: ErrorCode, message: String) -> Response {
+    (
+        status,
+        Json(ServerResponse::Error(ErrorResponse { code, message })),
+    )
+        .into_response()
 }
 
-impl Drop for RequestGuard {
-    fn drop(&mut self) {
-        self.coordinator.finish_request();
+fn error(status: StatusCode, message: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({"error": message.into()}))).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn advertised_urls_match_the_plain_http_client_contract() {
+        assert_eq!(
+            validate_base_url("http://localhost:1338/context/").unwrap(),
+            "http://localhost:1338/context"
+        );
+        for invalid in [
+            "https://localhost:1338",
+            "file:///context",
+            "http://user:password@localhost:1338",
+            "http://localhost:1338/?key=value",
+            "http://localhost:1338/#fragment",
+        ] {
+            assert!(
+                validate_base_url(invalid).is_err(),
+                "unexpected accepted base URL: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_defaults_preserve_quoted_shell_and_powershell_literals() {
+        let url = "http://127.0.0.1:1338/path$segment`quoted\"";
+        let shell =
+            render_hosted_script("DEFAULT_SERVER_URL=\"http://127.0.0.1:1338\"", url, false);
+        assert_eq!(
+            shell,
+            "DEFAULT_SERVER_URL=\"http://127.0.0.1:1338/path\\$segment\\`quoted\\\"\""
+        );
+        let powershell = render_hosted_script("$Default = \"http://127.0.0.1:1338\"", url, true);
+        assert_eq!(
+            powershell,
+            "$Default = \"http://127.0.0.1:1338/path`$segment``quoted`\"\""
+        );
     }
 }

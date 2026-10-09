@@ -9,25 +9,30 @@ If you want to work on an open issue, comment on it first so nobody else picks i
 ```bash
 git clone https://github.com/squid-proxy-lovers/ccp.git
 cd ccp
-cargo build --release
+cargo build --locked --release
 ```
 
 Run the test suite before submitting anything:
 
 ```bash
-cargo test -p server --lib -- --test-threads=1
-cargo test -p client --lib
-bash tests/run.sh --skip-build
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ./mcp
+make test
+make integration
+python tests/mcp_live.py
+make fmt
+make lint
 ```
 
 ## Codebase layout
 
 ```text
 crates/protocol/     shared wire format types (client + server depend on this)
-crates/server/       the CCP server (Rust, SQLite, mTLS)
+crates/server/       the CCP server (Rust, SQLite, HTTP/JSON)
 crates/client/       CLI client (Rust)
 mcp/                 FastMCP bridge for Claude/Cursor/Codex (Python)
-tests/               integration tests + benchmarks
+tests/               HTTP/CLI integration tests + benchmarks
 docs/                design docs and format specs
 ```
 
@@ -36,8 +41,8 @@ docs/                design docs and format specs
 - Branch from `main`. Rebase onto current `main` before submitting if your branch has fallen behind.
 - Please keep commits small. Each one should compile and pass tests on its own.
 - Add tests for new functionality or bug fixes.
-- CI runs tests, clippy, and format checks on every PR. Make sure those pass before requesting review.
-- Run `cargo fmt --all` and `cargo clippy --workspace` before pushing.
+- CI runs the workspace, CLI, script, and live MCP tests, Clippy, formatting, and container builds on every PR. Make sure those pass before requesting review.
+- Run `make fmt` and `make lint` before pushing. Rust is pinned to 1.88.0; the CI Python version is 3.12.
 
 ## What we're looking for
 
@@ -55,7 +60,7 @@ docs/                design docs and format specs
 
 ## Versioning
 
-CCP follows [semver](https://semver.org/). We're at `0.x.y` which means the protocol and API can still change between minor versions.
+CCP follows [semver](https://semver.org/). The draft HTTP transport is version `0.2.0`; we're at `0.x.y` which means the protocol and API can still change between minor versions.
 
 - `0.1.x` patch: bug fixes, doc corrections, no protocol changes
 - `0.2.0` minor: new features, new protocol messages, new CLI commands

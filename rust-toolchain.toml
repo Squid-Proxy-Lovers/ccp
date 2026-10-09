@@ -1,0 +1,5 @@
+[toolchain]
+# The locked dependency set requires Rust 1.88 or newer.
+channel = "1.88.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

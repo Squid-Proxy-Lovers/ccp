@@ -11,6 +11,7 @@ impl ServerState {
         auth_context: &ConnectionAuthContext,
         target_client_common_name: &str,
     ) -> anyhow::Result<RevokeCertResult> {
+        let _mutation = self.mutation_lock.lock().await;
         self.ensure_write_access(session_id, auth_context).await?;
         let revoking_self = auth_context.common_name == target_client_common_name;
         if !revoking_self && !auth_context.can_revoke_others {
@@ -18,8 +19,11 @@ impl ServerState {
         }
         let revoked_at = current_timestamp_string()?;
 
+        self.checkpoint_locked().await?;
+
         // Add to revocation set first (fail-closed: deny access before removing grant)
-        self.revoked_cert_common_names
+        let newly_revoked = self
+            .revoked_cert_common_names
             .write()
             .await
             .insert(target_client_common_name.to_string());
@@ -30,18 +34,22 @@ impl ServerState {
             let removed = grants.remove(target_client_common_name);
             let Some(grant) = removed else {
                 // Not found — undo revocation mark
-                self.revoked_cert_common_names
-                    .write()
-                    .await
-                    .remove(target_client_common_name);
+                if newly_revoked {
+                    self.revoked_cert_common_names
+                        .write()
+                        .await
+                        .remove(target_client_common_name);
+                }
                 bail!("client certificate '{target_client_common_name}' not found");
             };
             if grant.session_id != session_id {
                 grants.insert(target_client_common_name.to_string(), grant);
-                self.revoked_cert_common_names
-                    .write()
-                    .await
-                    .remove(target_client_common_name);
+                if newly_revoked {
+                    self.revoked_cert_common_names
+                        .write()
+                        .await
+                        .remove(target_client_common_name);
+                }
                 bail!("client certificate '{target_client_common_name}' not found");
             }
             grant
@@ -58,14 +66,15 @@ impl ServerState {
                 .write()
                 .await
                 .insert(target_client_common_name.to_string(), grant);
-            self.revoked_cert_common_names
-                .write()
-                .await
-                .remove(target_client_common_name);
+            if newly_revoked {
+                self.revoked_cert_common_names
+                    .write()
+                    .await
+                    .remove(target_client_common_name);
+            }
             return Err(error);
         }
 
-        checkpoint_journal(&self.journal);
         Ok(RevokeCertResult {
             client_common_name: target_client_common_name.to_string(),
             revoked_at,

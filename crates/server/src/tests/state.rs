@@ -35,6 +35,15 @@ fn writer(session_id: i64, common_name: &str) -> ConnectionAuthContext {
     }
 }
 
+fn reader(session_id: i64, common_name: &str) -> ConnectionAuthContext {
+    ConnectionAuthContext {
+        common_name: common_name.to_string(),
+        session_id,
+        can_write: false,
+        can_revoke_others: false,
+    }
+}
+
 fn admin(session_id: i64, common_name: &str) -> ConnectionAuthContext {
     ConnectionAuthContext {
         common_name: common_name.to_string(),
@@ -45,6 +54,7 @@ fn admin(session_id: i64, common_name: &str) -> ConnectionAuthContext {
 }
 
 impl TestContext {
+    #[allow(clippy::await_holding_lock)] // Serializes process-global test environment.
     async fn new(test_name: &str) -> anyhow::Result<Self> {
         let env_guard = test_env_lock()
             .lock()
@@ -113,6 +123,222 @@ impl Drop for TestContext {
         }
         let _ = fs::remove_dir_all(&self.data_dir);
     }
+}
+
+#[tokio::test]
+async fn status_upsert_lists_searches_and_clears_only_its_owner() {
+    let ctx = TestContext::new("agent-status-lifecycle")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "worker-a");
+    let other = writer(ctx.session_id, "worker-b");
+
+    let initial = ctx
+        .state
+        .set_status(ctx.session_id, "main", "parser", "Reading grammar", &owner)
+        .await
+        .expect("status should be created");
+    assert_eq!(initial.worker_id, "worker-a");
+    let updated = ctx
+        .state
+        .set_status(
+            ctx.session_id,
+            "main",
+            "parser",
+            "Writing PARSER tests",
+            &owner,
+        )
+        .await
+        .expect("status should be updated");
+    assert_eq!(updated.status, "Writing PARSER tests");
+
+    ctx.state
+        .set_status(ctx.session_id, "main", "parser", "Reviewing docs", &other)
+        .await
+        .expect("same logical name from another worker should be allowed");
+    let statuses = ctx
+        .state
+        .list_team_status(ctx.session_id, "main", &reader(ctx.session_id, "reader"))
+        .await
+        .expect("reader should list statuses");
+    assert_eq!(statuses.len(), 2);
+    assert_eq!(
+        statuses.iter().filter(|s| s.agent_name == "parser").count(),
+        2
+    );
+
+    let matches = ctx
+        .state
+        .search_team_status(ctx.session_id, "main", "parser TESTS", &owner)
+        .await
+        .expect("search should be case insensitive across status text");
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].worker_id, "worker-a");
+
+    let other_clear = ctx
+        .state
+        .clear_status(ctx.session_id, "main", "parser", &other)
+        .await
+        .expect("other worker can clear only its own status");
+    assert!(other_clear.cleared);
+    let repeated = ctx
+        .state
+        .clear_status(ctx.session_id, "main", "parser", &other)
+        .await
+        .expect("clear should be idempotent");
+    assert!(!repeated.cleared);
+    let remaining = ctx
+        .state
+        .list_team_status(ctx.session_id, "main", &owner)
+        .await
+        .expect("remaining status should list");
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].worker_id, "worker-a");
+}
+
+#[tokio::test]
+async fn expired_statuses_are_purged_and_shelf_deletion_removes_statuses() {
+    let ctx = TestContext::new("agent-status-expiry")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "worker");
+    ctx.state
+        .set_status(ctx.session_id, "main", "builder", "Compiling", &owner)
+        .await
+        .expect("status should be created");
+    open_sqlite_connection()
+        .expect("database should open")
+        .execute(
+            "UPDATE agent_statuses SET expires_at = '0' WHERE session_id = ?1",
+            [ctx.session_id],
+        )
+        .expect("status should be made expired");
+    assert!(
+        ctx.state
+            .list_team_status(ctx.session_id, "main", &owner)
+            .await
+            .expect("list should hide expired status")
+            .is_empty()
+    );
+    ctx.state
+        .set_status(ctx.session_id, "main", "active", "Working", &owner)
+        .await
+        .expect("a subsequent write should purge expired rows");
+    let persisted: i64 = open_sqlite_connection()
+        .expect("database should open")
+        .query_row(
+            "SELECT COUNT(*) FROM agent_statuses WHERE agent_name = 'builder'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count should query");
+    assert_eq!(persisted, 0);
+
+    ctx.state
+        .add_shelf(ctx.session_id, "challenge", "", &owner)
+        .await
+        .expect("challenge shelf should be added");
+    ctx.state
+        .set_status(ctx.session_id, "challenge", "builder", "Compiling", &owner)
+        .await
+        .expect("challenge status should be created");
+    ctx.state
+        .delete_shelf(ctx.session_id, "challenge", &owner)
+        .await
+        .expect("challenge shelf should be deleted");
+    let persisted: i64 = open_sqlite_connection()
+        .expect("database should open")
+        .query_row(
+            "SELECT COUNT(*) FROM agent_statuses WHERE team = 'challenge'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count should query");
+    assert_eq!(persisted, 0);
+}
+
+#[tokio::test]
+async fn snapshot_rebuild_preserves_active_statuses() {
+    let ctx = TestContext::new("agent-status-snapshot")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "snapshot-worker");
+    let expected = ctx
+        .state
+        .set_status(
+            ctx.session_id,
+            "main",
+            "builder",
+            "Running the release build",
+            &owner,
+        )
+        .await
+        .expect("status should be created");
+
+    ctx.state
+        .persist_snapshot_to_sqlite()
+        .await
+        .expect("snapshot persistence should succeed");
+
+    let statuses = ctx
+        .state
+        .list_team_status(ctx.session_id, "main", &owner)
+        .await
+        .expect("status should survive snapshot persistence");
+    assert_eq!(statuses, vec![expected]);
+}
+
+#[tokio::test]
+async fn status_validation_and_access_are_enforced() {
+    let ctx = TestContext::new("agent-status-validation")
+        .await
+        .expect("test context should initialize");
+    let owner = writer(ctx.session_id, "worker");
+    let read_only = reader(ctx.session_id, "reader");
+
+    for (agent, status, expected) in [
+        ("", "working", "agent_name is required"),
+        ("agent", "   ", "status is required"),
+    ] {
+        let error = ctx
+            .state
+            .set_status(ctx.session_id, "main", agent, status, &owner)
+            .await
+            .expect_err("invalid status should fail");
+        assert!(error.to_string().contains(expected));
+    }
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "main", &"a".repeat(129), "working", &owner)
+            .await
+            .expect_err("oversized agent name should fail")
+            .to_string()
+            .contains("128 bytes")
+    );
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "main", "agent", &"x".repeat(4097), &owner)
+            .await
+            .expect_err("oversized status should fail")
+            .to_string()
+            .contains("4096 bytes")
+    );
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "missing", "agent", "working", &owner)
+            .await
+            .expect_err("missing shelf should fail")
+            .to_string()
+            .contains("not found")
+    );
+    assert!(
+        ctx.state
+            .set_status(ctx.session_id, "main", "agent", "working", &read_only)
+            .await
+            .expect_err("reader cannot set status")
+            .to_string()
+            .contains("write access")
+    );
 }
 
 #[tokio::test]
@@ -949,7 +1175,7 @@ async fn handshake_returns_version_info() {
             assert!(info.compatible);
             assert!(!info.server_version.is_empty());
         }
-        other => panic!("expected HandshakeOk, got {:?}", other),
+        other => panic!("expected HandshakeOk, got {other:?}"),
     }
 }
 
@@ -971,7 +1197,7 @@ async fn handshake_rejects_incompatible_protocol_version() {
             assert_eq!(info.protocol_version, protocol::PROTOCOL_VERSION);
             assert!(!info.compatible);
         }
-        other => panic!("expected HandshakeRejected, got {:?}", other),
+        other => panic!("expected HandshakeRejected, got {other:?}"),
     }
 }
 
@@ -1119,7 +1345,7 @@ async fn import_rollback_restores_original_shelf_descriptions() {
 }
 
 #[tokio::test]
-async fn search_deleted_rejects_empty_query() {
+async fn search_deleted_accepts_empty_query_for_list_all() {
     let ctx = TestContext::new("search-deleted-empty")
         .await
         .expect("test context should initialize");
@@ -1132,14 +1358,8 @@ async fn search_deleted_rejects_empty_query() {
 
     let response = crate::message::handle_message_request(&ctx.state, &auth, request).await;
     match response {
-        protocol::ServerResponse::Error(err) => {
-            assert_eq!(err.code, protocol::ErrorCode::BadRequest);
-            assert!(err.message.contains("required"));
-        }
-        other => panic!(
-            "expected error for empty search-deleted query, got {:?}",
-            other
-        ),
+        protocol::ServerResponse::DeletedEntries(entries) => assert!(entries.is_empty()),
+        other => panic!("expected archive listing for blank query, got {other:?}"),
     }
 }
 
@@ -1904,4 +2124,451 @@ async fn import_v2_flushes_query_caches() {
         session.context_query_cache.is_empty(),
         "context_query_cache should be flushed after import"
     );
+}
+
+#[tokio::test]
+async fn snapshot_watermark_prevents_replaying_already_persisted_appends() {
+    let ctx = TestContext::new("snapshot-watermark").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "entry",
+            "",
+            &[],
+            "base",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "entry",
+            None,
+            None,
+            &auth,
+            "first",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(ctx.session_id, "team", "old", &auth)
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(ctx.session_id, "team", "new", &auth)
+        .await
+        .unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    // Simulate a crash after SQLite commit but before journal rotation.
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    let entry = recovered
+        .get_entry(ctx.session_id, "entry", None, None, &auth)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.context, "base\nfirst");
+    assert_eq!(
+        recovered.sessions.read().await[&ctx.session_id]
+            .entries
+            .values()
+            .next()
+            .unwrap()
+            .history
+            .len(),
+        1
+    );
+    assert_eq!(
+        recovered.sessions.read().await[&ctx.session_id].shelf_description("team"),
+        "new"
+    );
+    // Writes accepted after the snapshot must still replay.
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "entry",
+            None,
+            None,
+            &auth,
+            "second",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.journal.flush().unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "entry", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "base\nfirst\nsecond"
+    );
+}
+
+#[tokio::test]
+async fn deletion_and_restore_preserve_other_queued_entries_across_recovery() {
+    let ctx = TestContext::new("checkpoint-delete-restore").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    for name in ["keep", "remove"] {
+        ctx.state
+            .add_entry(
+                ctx.session_id,
+                name,
+                "",
+                &[],
+                name,
+                "main",
+                "default",
+                &auth,
+            )
+            .await
+            .unwrap();
+    }
+    let deleted = ctx
+        .state
+        .delete_entry(ctx.session_id, "remove", None, None, &auth)
+        .await
+        .unwrap();
+    // A different journal generation now follows the snapshot watermark.
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "keep",
+            None,
+            None,
+            &auth,
+            "after rotation",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.journal.flush().unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert!(
+        recovered
+            .get_entry(ctx.session_id, "remove", None, None, &auth)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "keep\nafter rotation"
+    );
+    ctx.state
+        .restore_deleted_entry(ctx.session_id, &deleted.entry_key, &auth)
+        .await
+        .unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "remove", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "remove"
+    );
+    assert_eq!(
+        recovered
+            .get_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "keep\nafter rotation"
+    );
+}
+
+#[tokio::test]
+async fn failed_checkpoint_preserves_memory_and_recoverable_journal() {
+    let ctx = TestContext::new("checkpoint-failure").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "keep",
+            "",
+            &[],
+            "unpersisted",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_checkpoint BEFORE INSERT ON journal_checkpoint BEGIN SELECT RAISE(ABORT, 'test snapshot failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .delete_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .is_err()
+    );
+    ctx.journal.flush().unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    for state in [&ctx.state, &recovered] {
+        assert_eq!(
+            state
+                .get_entry(ctx.session_id, "keep", None, None, &auth)
+                .await
+                .unwrap()
+                .unwrap()
+                .context,
+            "unpersisted"
+        );
+    }
+}
+
+#[tokio::test]
+async fn session_creation_uses_stored_metadata_and_concurrent_calls_preserve_cache() {
+    let ctx = TestContext::new("session-metadata").await.unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute("INSERT INTO sessions(name, owner, labels, visibility, purpose) VALUES('configured', 'owner', 'one,two', 'private', 'custom')", []).unwrap();
+    let (first, second) = tokio::join!(
+        ctx.state.create_session("configured"),
+        ctx.state.create_session("configured")
+    );
+    let first = first.unwrap();
+    assert_eq!(first, second.unwrap());
+    assert_eq!(first.owner, "owner");
+    assert_eq!(first.labels, ["one", "two"]);
+    assert_eq!(first.visibility, "private");
+    assert_eq!(first.purpose, "custom");
+    let auth = writer(first.session_id, "writer");
+    ctx.state
+        .add_entry(
+            first.session_id,
+            "keep",
+            "",
+            &[],
+            "content",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    ctx.state.create_session("configured").await.unwrap();
+    assert_eq!(
+        ctx.state
+            .get_entry(first.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .unwrap()
+            .context,
+        "content"
+    );
+}
+
+#[tokio::test]
+async fn session_delete_failure_keeps_runtime_state_and_credentials() {
+    let ctx = TestContext::new("delete-session-failure").await.unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'test delete failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .delete_session("session-under-test")
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.state
+            .sessions
+            .read()
+            .await
+            .contains_key(&ctx.session_id)
+    );
+    assert!(ctx.state.cert_grants.read().await.contains_key("writer"));
+}
+
+#[test]
+fn archive_keys_do_not_collide_for_identical_paths_and_milliseconds() {
+    assert_ne!(
+        deleted_entry_key("same", "main", "default", "1000"),
+        deleted_entry_key("same", "main", "default", "1000")
+    );
+}
+
+#[tokio::test]
+async fn targeted_archive_and_restore_failures_roll_back_memory_and_sqlite() {
+    let ctx = TestContext::new("archive-restore-rollback").await.unwrap();
+    let auth = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "keep",
+            "",
+            &[],
+            "content",
+            "main",
+            "default",
+            &auth,
+        )
+        .await
+        .unwrap();
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_archive BEFORE INSERT ON deleted_message_packs BEGIN SELECT RAISE(ABORT, 'test archive failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .delete_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.state
+            .get_entry(ctx.session_id, "keep", None, None, &auth)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    connection
+        .execute_batch("DROP TRIGGER reject_archive;")
+        .unwrap();
+    let deleted = ctx
+        .state
+        .delete_entry(ctx.session_id, "keep", None, None, &auth)
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(ctx.session_id, "main", "current description", &auth)
+        .await
+        .unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_restore BEFORE DELETE ON deleted_message_packs BEGIN SELECT RAISE(ABORT, 'test restore failure'); END;").unwrap();
+    assert!(
+        ctx.state
+            .restore_deleted_entry(ctx.session_id, &deleted.entry_key, &auth)
+            .await
+            .is_err()
+    );
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    for state in [&ctx.state, &recovered] {
+        assert!(
+            state
+                .get_entry(ctx.session_id, "keep", None, None, &auth)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state.sessions.read().await[&ctx.session_id].shelf_description("main"),
+            "current description"
+        );
+    }
+    assert!(
+        database::load_deleted_entry(&deleted.entry_key)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn activity_order_handles_mixed_epoch_and_sqlite_timestamps_consistently() {
+    assert_eq!(activity_timestamp_key("1970-01-01 00:00:10"), Some(10));
+    assert!(activity_timestamp_key("9") < activity_timestamp_key("10"));
+    assert!(activity_timestamp_key("10") < activity_timestamp_key("2026-01-01 00:00:00"));
+    assert!(activity_timestamp_key("9") < activity_timestamp_key("2026-01-01 00:00:00"));
+    assert_eq!(activity_timestamp_key("invalid"), None);
+}
+
+#[tokio::test]
+async fn explicit_runtime_start_reactivates_all_sessions_without_changing_offline_loads() {
+    let ctx = TestContext::new("restart-session-lifecycle").await.unwrap();
+    let second = ctx.state.create_session("second-session").await.unwrap();
+    {
+        let mut sessions = ctx.state.sessions.write().await;
+        for session in sessions.values_mut() {
+            session.last_started_at = Some("0".into());
+        }
+    }
+    ctx.state.mark_sessions_stopped().await.unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    let recovered = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    let before = recovered.all_session_stats().await;
+    assert_eq!(before.len(), 2);
+    assert!(before.iter().all(|stats| !stats.is_active));
+    let connection = open_sqlite_connection().unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_second_start BEFORE UPDATE ON sessions WHEN NEW.name='second-session' AND NEW.is_active=1 BEGIN SELECT RAISE(ABORT, 'test startup failure'); END;").unwrap();
+    assert!(recovered.mark_sessions_started().await.is_err());
+    assert!(
+        recovered
+            .all_session_stats()
+            .await
+            .iter()
+            .all(|stats| !stats.is_active)
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE is_active=1",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    connection
+        .execute_batch("DROP TRIGGER reject_second_start;")
+        .unwrap();
+    recovered.mark_sessions_started().await.unwrap();
+    assert!(
+        recovered
+            .all_session_stats()
+            .await
+            .iter()
+            .all(|stats| stats.is_active)
+    );
+    let sessions = recovered.sessions.read().await;
+    let connection = open_sqlite_connection().unwrap();
+    for session_id in [ctx.session_id, second.session_id] {
+        let session = &sessions[&session_id];
+        let started = session.last_started_at.as_ref().unwrap();
+        assert!(started.parse::<u64>().unwrap() > 0);
+        let stored: (bool, String) = connection
+            .query_row(
+                "SELECT is_active, last_started_at FROM sessions WHERE id=?1",
+                [session_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(stored, (true, started.clone()));
+    }
 }

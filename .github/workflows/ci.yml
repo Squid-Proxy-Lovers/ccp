@@ -15,20 +15,40 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
       - uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --workspace --locked --release
 
-      - name: Server tests
-        run: cargo test -p server --lib -- --test-threads=1
+      - name: Workspace tests
+        run: cargo test --workspace --locked -- --test-threads=1
 
-      - name: Client tests
-        run: cargo test -p client --lib
+      - name: CLI integration tests
+        run: bash tests/run.sh --skip-build
 
-      - name: Protocol tests
-        run: cargo test -p protocol
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MCP bridge
+        run: python -m pip install -e ./mcp
+
+      - name: MCP bridge tests
+        run: python3 -m unittest discover -s mcp/tests -v
+
+      - name: Live MCP integration
+        run: python3 tests/mcp_live.py
+
+      - name: Operations script tests
+        run: python3 -m unittest discover -s tests -p 'test_operations.py' -v
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Admin dashboard regression tests
+        run: node tests/admin_dashboard.mjs
 
       - name: No secrets tracked
         run: |
@@ -42,22 +62,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
 
   fmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  # Build release binaries for all platforms on every push to main and on tags.
+  # Build release binaries for Unix platforms on PRs, main pushes, and tags.
   # Tagged pushes also create a GitHub release with the binaries attached.
   build:
     needs: [test, clippy, fmt]
@@ -65,49 +85,98 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04
             platform: linux-x86_64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             platform: linux-aarch64
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-15-intel
             platform: darwin-x86_64
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-15
             platform: darwin-aarch64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build Linux binaries and verify Bookworm runtime
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-build-linux.sh '${{ matrix.target }}'
 
-      - name: Build
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build macOS binaries
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --locked --release -p server -p client --target ${{ matrix.target }}
+          target/${{ matrix.target }}/release/client --version
+          target/${{ matrix.target }}/release/server --version
 
       - name: Package binaries
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/server dist/ccp-server-${{ matrix.platform }}
-          cp target/${{ matrix.target }}/release/client dist/ccp-client-${{ matrix.platform }}
+          binary_dir="target/${{ matrix.target }}/release"
+          if [ '${{ runner.os }}' = Linux ]; then
+            binary_dir="target/bookworm/${{ matrix.target }}/release"
+          fi
+          cp "$binary_dir/server" dist/ccp-server-${{ matrix.platform }}
+          cp "$binary_dir/client" dist/ccp-client-${{ matrix.platform }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.platform }}
           path: dist/
 
+  windows-client:
+    needs: [test, clippy, fmt]
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --release -p client
+      - run: cargo test --locked -p client --lib -- --test-threads=1
+      - name: Check PowerShell scripts and client invocation
+        shell: pwsh
+        run: |
+          Get-ChildItem scripts -Filter *.ps1 | ForEach-Object {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | Format-List
+              throw "PowerShell syntax errors in $($_.Name)"
+            }
+          }
+          & target/release/client.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "Client version invocation failed" }
+      - run: Copy-Item target/release/client.exe ccp-client-windows-x86_64.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-windows-x86_64
+          path: ccp-client-windows-x86_64.exe
+
+  mcp-artifact:
+    needs: [test, clippy, fmt]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build
+      - run: python -m build --sdist --outdir dist mcp
+      - run: cp dist/ccp_mcp_server-*.tar.gz dist/ccp-mcp.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-package
+          path: dist/ccp-mcp.tar.gz
+
   release:
-    needs: [build]
+    needs: [build, windows-client, mcp-artifact]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -125,7 +194,7 @@ jobs:
           generate_release_notes: true
 
   docker:
-    needs: [test]
+    needs: [test, clippy, fmt]
     runs-on: ubuntu-latest
     permissions:
       packages: write

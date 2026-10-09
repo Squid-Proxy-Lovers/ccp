@@ -1,40 +1,31 @@
-# ccp-protocol
+# CCP protocol
 
-This is the shared wire-format crate for the Cephalopod Coordination Protocol. It defines every type that travels between client and server, and it handles serialization so neither side has to think about it.
+The `protocol` crate defines shared Serde request/response enums and domain records such as `MessageEntry`, `EntrySummary`, `MessageHistoryEntry`, `SessionMetadata`, `AgentStatus`, and `TransferBundle`.
 
-## What's in here
+## Active HTTP contract
 
-- `PROTOCOL_VERSION` constant for wire compatibility checks between client and server.
-- `Handshake`/`HandshakeOk`/`HandshakeRejected` for version negotiation on connect.
-- Request and response enums that map to every command the protocol supports (add shelf, add book, add entry, search, list, delete, restore, export, import, etc.).
-- Bincode serialization for all of these types. The client and server both depend on this crate and use the same codec, so they can't drift out of sync.
-- Shared domain types like `Entry`, `Shelf`, `Book`, `HistoryRecord`, and access-level enums.
+Session discovery uses `GET /v1/sessions`. Operations use `POST /v1/request` with a JSON envelope:
 
-## How to use it
+```json
+{"subscribed_session_ids":[42],"request":{"List":{"session_id":42}}}
+```
 
-You don't run this crate directly. Add it as a dependency in your `Cargo.toml`:
+Responses use Serde's externally tagged enum representation, such as `{"EntrySummaries":[]}` or `{"Error":{"code":"Forbidden","message":"read denied"}}`. Client CLI output unwraps these payloads; it is not the wire response format.
+
+The active transport is plaintext HTTP. A subscription is locally saved metadata and each operation declares its selected session. Legacy `ListSessions`, `CreateSession`, and `Subscribe` enum variants are retained, but the HTTP dispatcher rejects them; discovery and session management use their HTTP routes. `CreateSession` is managed by the admin API, not an unrestricted protocol operation.
+
+`PROTOCOL_VERSION` is 2, reflecting incompatible changes since version 1. Legacy `Handshake`, `HandshakeOk`, `HandshakeRejected`, and Bincode `encode`/`decode` remain available. The HTTP client does not perform a handshake or negotiate this version; HTTP deployments must use compatible request/response types. Bincode helpers are not used by the current HTTP transport.
+
+## Use and check
 
 ```toml
 [dependencies]
-ccp-protocol = { path = "../protocol" }
+protocol = { path = "../protocol" }
 ```
 
-Then import whatever you need. The public API is the set of request/response enums and the encode/decode functions.
-
-## Building
-
-```bash
+```sh
 cargo build -p protocol
-```
-
-Or from this directory:
-
-```bash
-cargo build
-```
-
-Tests:
-
-```bash
 cargo test -p protocol
 ```
+
+Wire-format changes and database schema changes have separate version constants. See [CONTRIBUTING.md](../../CONTRIBUTING.md) before changing either.

@@ -21,7 +21,7 @@ impl ServerState {
             .get(&session_id)
             .with_context(|| format!("unknown session id {session_id}"))?;
 
-        let shelves: Vec<ShelfOverview> = session
+        let mut shelves: Vec<ShelfOverview> = session
             .shelves
             .iter()
             .map(|(shelf_name, cached_shelf)| {
@@ -44,8 +44,16 @@ impl ServerState {
             })
             .collect();
 
+        shelves.sort_by(|a, b| a.shelf_name.cmp(&b.shelf_name));
+
         let mut sorted_entries: Vec<_> = session.entries.values().collect();
-        sorted_entries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        sorted_entries.sort_by(|a, b| {
+            b.updated_at
+                .parse::<u64>()
+                .unwrap_or(0)
+                .cmp(&a.updated_at.parse::<u64>().unwrap_or(0))
+                .then_with(|| a.path.key().cmp(&b.path.key()))
+        });
         let recent_entries: Vec<RecentEntry> = sorted_entries
             .into_iter()
             .take(10)
@@ -60,12 +68,16 @@ impl ServerState {
 
         let mut label_counts: HashMap<String, usize> = HashMap::new();
         for entry in session.entries.values() {
-            for label in &entry.labels {
+            for label in entry
+                .labels
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+            {
                 *label_counts.entry(label.clone()).or_insert(0) += 1;
             }
         }
         let mut label_pairs: Vec<_> = label_counts.into_iter().collect();
-        label_pairs.sort_by(|a, b| b.1.cmp(&a.1));
+        label_pairs.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         let frequent_labels: Vec<String> = label_pairs
             .into_iter()
             .take(10)

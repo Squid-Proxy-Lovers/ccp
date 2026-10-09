@@ -216,11 +216,18 @@ fn fuzzy_similarity(left: &str, right: &str) -> f64 {
 }
 
 fn snippet_around(text: &str, start: usize, len: usize, radius: usize) -> String {
-    let lower = start.saturating_sub(radius);
-    let upper = text
+    let mut lower = start.saturating_sub(radius).min(text.len());
+    let mut upper = text
         .len()
         .min(start.saturating_add(len).saturating_add(radius));
-    text.get(lower..upper).unwrap_or(text).replace('\n', "\\n")
+    // Keep the window bounded even when a byte offset lands inside UTF-8.
+    while lower < text.len() && !text.is_char_boundary(lower) {
+        lower += 1;
+    }
+    while upper > lower && !text.is_char_boundary(upper) {
+        upper -= 1;
+    }
+    text[lower..upper].replace('\n', "\\n")
 }
 
 fn search_task_limiter() -> &'static Arc<Semaphore> {
@@ -231,4 +238,20 @@ fn search_task_limiter() -> &'static Arc<Semaphore> {
             .max(2);
         Arc::new(Semaphore::new(concurrency))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utf8_snippets_stay_bounded_at_non_character_offsets() {
+        let context = format!("{}needle{}", "🦑".repeat(200), "🦑".repeat(200));
+        let snippets = build_context_snippets(&context, &SearchQuery::new("needle").unwrap());
+        assert_eq!(snippets.len(), 1);
+        assert!(snippets[0].contains("needle"));
+        assert!(snippets[0].len() <= 206);
+        let prefix = build_context_snippets(&context, &SearchQuery::new("missing").unwrap());
+        assert!(prefix[0].len() <= 100);
+    }
 }
