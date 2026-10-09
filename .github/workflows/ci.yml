@@ -32,6 +32,8 @@ jobs:
         run: cargo build --release --workspace --locked
       - name: Library tests
         run: cargo test --workspace --lib --locked -- --test-threads=1
+      - name: Docker installer regressions
+        run: python3 tests/docker_install.py
       - name: CLI integration
         run: bash tests/run.sh --skip-build
       - name: No secrets tracked

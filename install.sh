@@ -347,31 +347,72 @@ if [ "$MODE" = "docker" ]; then
         exit 1
     fi
 
-    step "Pulling CCP server image..."
-    docker pull "ghcr.io/${REPO}:latest" 2>/dev/null || {
-        warn "No prebuilt image found. Building from Dockerfile..."
-        if [ ! -f "docker-compose.yml" ]; then
-            err "Run this from the repo root, or use the default install mode instead."
+    if ! docker info >/dev/null 2>&1; then
+        err "Docker is not running or the current user cannot access it."
+        exit 1
+    fi
+
+    image="ghcr.io/${REPO}:latest"
+    build_image="$FROM_SOURCE"
+    if [ "$build_image" = false ]; then
+        step "Pulling CCP server image..."
+        if ! docker pull "$image"; then
+            warn "Image pull failed (registry access, network, or platform availability). Building from source."
+            build_image=true
+        fi
+    fi
+
+    if [ "$build_image" = true ]; then
+        build_dir="$REPO_ROOT"
+        temporary_build=false
+        if [ ! -f "$build_dir/Dockerfile" ] || [ ! -f "$build_dir/Cargo.toml" ]; then
+            if ! command -v git &>/dev/null; then
+                err "Git is required to build outside a checkout. Install Git or run from the repo root."
+                exit 1
+            fi
+            build_dir="$(mktemp -d)" || exit 1
+            temporary_build=true
+            if ! git clone --depth 1 "https://github.com/${REPO}.git" "$build_dir"; then
+                rm -rf "$build_dir"
+                err "Could not download the source."
+                exit 1
+            fi
+        fi
+        image="cephalopod-coordination-protocol-server:local"
+        step "Building CCP server image..."
+        if ! docker build -t "$image" "$build_dir"; then
+            if [ "$temporary_build" = true ]; then rm -rf "$build_dir"; fi
+            err "Container build failed."
             exit 1
         fi
-        docker compose build
-    }
+        if [ "$temporary_build" = true ]; then rm -rf "$build_dir"; fi
+    fi
 
     step "Starting CCP server ${BOLD}(session: $SESSION_NAME)${RESET}"
-    CCP_SESSION_NAME="$SESSION_NAME" docker compose up -d
+    if ! docker run -d --name ccp-server --restart unless-stopped \
+        -e "CCP_SESSION_NAME=$SESSION_NAME" \
+        -e "CCP_AUTH_PORT=${CCP_AUTH_PORT:-1337}" \
+        -e "CCP_MTLS_PORT=${CCP_MTLS_PORT:-1338}" \
+        -e "CCP_ADVERTISE_HOST=${CCP_ADVERTISE_HOST:-127.0.0.1}" \
+        -p "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_AUTH_PORT:-1337}:${CCP_AUTH_PORT:-1337}" \
+        -p "${CCP_PUBLISH_HOST:-127.0.0.1}:${CCP_MTLS_PORT:-1338}:${CCP_MTLS_PORT:-1338}" \
+        -v ccp-server-data:/var/lib/ccp/server "$image"; then
+        err "Container startup failed. Check Docker's error above; stop and remove an existing ccp-server container before retrying."
+        exit 1
+    fi
 
     echo ""
-    ok "Server running."
+    ok "Server container started."
     echo ""
     info "Check logs for enrollment tokens:"
-    echo -e "  ${DIM}docker compose logs -f ccp-server${RESET}"
+    echo -e "  ${DIM}docker logs -f ccp-server${RESET}"
     echo ""
     info "Issue tokens:"
-    echo -e "  ${DIM}docker compose exec ccp-server server issue-token $SESSION_NAME read${RESET}"
-    echo -e "  ${DIM}docker compose exec ccp-server server issue-token $SESSION_NAME read_write${RESET}"
+    echo -e "  ${DIM}docker exec ccp-server server issue-token \"$SESSION_NAME\" read${RESET}"
+    echo -e "  ${DIM}docker exec ccp-server server issue-token \"$SESSION_NAME\" read_write${RESET}"
     echo ""
-    info "Stop:"
-    echo -e "  ${DIM}docker compose down${RESET}"
+    info "Stop and remove the container (the data volume is retained):"
+    echo -e "  ${DIM}docker stop ccp-server && docker rm ccp-server${RESET}"
     exit 0
 fi
 
