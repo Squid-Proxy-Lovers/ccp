@@ -10,8 +10,8 @@ import os
 import re
 import shutil
 import signal
-import sqlite3
 import socket
+import sqlite3
 import subprocess
 import time
 from dataclasses import dataclass
@@ -147,7 +147,8 @@ def _run_client(*args: str, env_overrides: dict[str, str] | None = None) -> str:
     env = os.environ.copy()
     if env_overrides:
         env.update(env_overrides)
-    process = subprocess.run(
+    # Execute trusted local command argv without a shell; tool text stays in arguments.
+    process = subprocess.run(  # noqa: S603
         [*command.argv, *args],
         env=env,
         capture_output=True,
@@ -216,9 +217,7 @@ def _cert_warning_for_expiry(expires_at: int | None) -> str | None:
             f"client certificate expired at unix={expires_at}; "
             "request a new enrollment token and re-enroll"
         )
-    warning_window = int(
-        os.environ.get("CCP_CERT_WARNING_WINDOW_SECONDS", "0")
-    )
+    warning_window = int(os.environ.get("CCP_CERT_WARNING_WINDOW_SECONDS", "0"))
     if warning_window <= 0:
         return None
     if expires_at - now <= warning_window:
@@ -362,7 +361,9 @@ def _describe_runtime_record(record: dict[str, Any]) -> dict[str, Any]:
             "default_ttl_seconds": int(os.environ.get("CCP_ENROLLMENT_TOKEN_TTL_SECONDS", "3600")),
         },
         "cert_policy": {
-            "client_cert_ttl_seconds": int(os.environ.get("CCP_CLIENT_CERT_TTL_SECONDS", str(3650 * 24 * 60 * 60))),
+            "client_cert_ttl_seconds": int(
+                os.environ.get("CCP_CLIENT_CERT_TTL_SECONDS", str(3650 * 24 * 60 * 60))
+            ),
             "warning_window_seconds": int(os.environ.get("CCP_CERT_WARNING_WINDOW_SECONDS", "0")),
             "ca_ttl_days": int(os.environ.get("CCP_CA_CERT_TTL_DAYS", "3650")),
         },
@@ -415,11 +416,7 @@ def _filter_records(records: list[dict[str, Any]], filter_text: str | None) -> l
     if not filter_text:
         return records
     needle = filter_text.lower()
-    return [
-        record
-        for record in records
-        if needle in json.dumps(record, sort_keys=True).lower()
-    ]
+    return [record for record in records if needle in json.dumps(record, sort_keys=True).lower()]
 
 
 def _rename_session_metadata(record: dict[str, Any], new_session_name: str) -> None:
@@ -505,11 +502,12 @@ def _build_runtime_record(
     }
 
 
-def _start_subprocess(command: LocalCommand, session_name: str, record: dict[str, Any]) -> subprocess.Popen[str]:
+def _start_subprocess(
+    command: LocalCommand, session_name: str, record: dict[str, Any]
+) -> subprocess.Popen[str]:
     runtime_dir = Path(record["runtime_dir"])
     runtime_dir.mkdir(parents=True, exist_ok=True)
     Path(record["data_dir"]).mkdir(parents=True, exist_ok=True)
-    log_handle = Path(record["log_path"]).open("a", encoding="utf-8")
 
     env = os.environ.copy()
     env.update(
@@ -527,7 +525,6 @@ def _start_subprocess(command: LocalCommand, session_name: str, record: dict[str
         "args": [*command.argv, session_name],
         "cwd": str(SERVER_DIR),
         "env": env,
-        "stdout": log_handle,
         "stderr": subprocess.STDOUT,
         "text": True,
     }
@@ -536,11 +533,9 @@ def _start_subprocess(command: LocalCommand, session_name: str, record: dict[str
     else:
         kwargs["start_new_session"] = True
 
-    try:
-        process = subprocess.Popen(**kwargs)
-    finally:
-        log_handle.close()
-    return process
+    with Path(record["log_path"]).open("a", encoding="utf-8") as log_handle:
+        kwargs["stdout"] = log_handle
+        return subprocess.Popen(**kwargs)
 
 
 def _run_server_admin(record: dict[str, Any], *args: str) -> dict[str, Any]:
@@ -556,7 +551,8 @@ def _run_server_admin(record: dict[str, Any], *args: str) -> dict[str, Any]:
             "CCP_AUTO_ISSUE_INITIAL_TOKENS": "0",
         }
     )
-    process = subprocess.run(
+    # Execute trusted local command argv without a shell; tool text stays in arguments.
+    process = subprocess.run(  # noqa: S603
         [*command.argv, *args],
         cwd=str(SERVER_DIR),
         env=env,
@@ -573,7 +569,9 @@ def _run_server_admin(record: dict[str, Any], *args: str) -> dict[str, Any]:
     return json.loads(output)
 
 
-def _wait_for_server_ready(record: dict[str, Any], timeout_seconds: float = SERVER_READY_TIMEOUT_SECONDS) -> None:
+def _wait_for_server_ready(
+    record: dict[str, Any], timeout_seconds: float = SERVER_READY_TIMEOUT_SECONDS
+) -> None:
     pid = record.get("pid")
     deadline = time.monotonic() + timeout_seconds
     auth_host = "127.0.0.1"
@@ -591,9 +589,7 @@ def _wait_for_server_ready(record: dict[str, Any], timeout_seconds: float = SERV
             return
         time.sleep(0.1)
 
-    raise CCPServerError(
-        f"managed CCP server did not become ready within {timeout_seconds:.1f}s"
-    )
+    raise CCPServerError(f"managed CCP server did not become ready within {timeout_seconds:.1f}s")
 
 
 def _signal_process(pid: int, signum: int) -> None:
@@ -756,7 +752,9 @@ def enroll(token: str, redeem_url: str | None = None) -> dict[str, Any]:
     if redeem_url is None:
         servers = running_servers()
         if len(servers) != 1:
-            raise CCPClientError("redeem_url is required unless exactly one managed server is running")
+            raise CCPClientError(
+                "redeem_url is required unless exactly one managed server is running"
+            )
         redeem_url = servers[0].get("auth_redeem_url")
     if not redeem_url:
         raise CCPClientError("missing auth_redeem_url for enrollment")
@@ -1229,7 +1227,8 @@ def server_health(session: str) -> dict[str, Any]:
     """
     server_cmd = _resolve_server_command()
     try:
-        output = subprocess.run(
+        # Execute the resolved local server argv without a shell.
+        output = subprocess.run(  # noqa: S603
             [*server_cmd.argv, "health", session],
             capture_output=True,
             text=True,
@@ -1241,9 +1240,9 @@ def server_health(session: str) -> dict[str, Any]:
             return data
         raise CCPServerError("server health returned non-object payload")
     except subprocess.CalledProcessError as e:
-        raise CCPServerError(f"server health check failed: {e.stderr}")
+        raise CCPServerError(f"server health check failed: {e.stderr}") from e
     except json.JSONDecodeError as e:
-        raise CCPServerError(f"failed to parse server health response: {e}")
+        raise CCPServerError(f"failed to parse server health response: {e}") from e
 
 
 @mcp.tool()
@@ -1290,7 +1289,8 @@ def get_entry_at(
 def sessions_resource() -> str:
     """Enrolled sessions available to this client."""
 
-    return json.dumps(sessions(), indent=2, sort_keys=True)
+    # FastMCP 2.x turns a decorated tool into a FunctionTool, not a callable.
+    return json.dumps(_load_session_summaries(), indent=2, sort_keys=True)
 
 
 @mcp.resource("ccp://help")

@@ -17,7 +17,7 @@ ccp-server my-session
 Or build from source:
 
 ```bash
-cargo build --release -p server
+cargo build --release --locked -p server
 ./target/release/server my-session
 ```
 
@@ -33,7 +33,7 @@ ccp-server issue-token <session-name> admin --ttl 3600
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `CCP_SERVER_DATA_DIR` | `data/` | SQLite database and CA material location |
+| `CCP_SERVER_DATA_DIR` | `sessions/<session-slug>/` for new sessions | SQLite database and CA material; existing legacy `data/` storage is discovered |
 | `CCP_AUTH_BASE_URL` | `http://127.0.0.1:1337` | Public URL for the auth endpoint |
 | `CCP_MTLS_BASE_URL` | `https://localhost:1338` | Public address for mTLS connections |
 | `CCP_AUTH_LISTENER_ADDR` | `127.0.0.1:1337` | Bind address for the auth listener |

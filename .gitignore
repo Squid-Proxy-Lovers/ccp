@@ -37,3 +37,10 @@ runtime-journal.jsonl
 
 # Misc
 /dump/
+
+# Local quality tools
+/.lint-tools/
+/.ruff_cache/
+
+# Python source-distribution build output
+/mcp/build/

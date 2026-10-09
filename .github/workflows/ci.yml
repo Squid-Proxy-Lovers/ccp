@@ -25,24 +25,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Build reviewed dependencies
         run: cargo build --release --workspace --locked
-      - name: Library tests
-        run: cargo test --workspace --lib --locked -- --test-threads=1
+      - name: Workspace tests
+        run: make test
       - name: Docker installer regressions
-        run: python3 tests/docker_install.py
+        run: make installer-tests
       - name: CLI integration
         run: bash tests/run.sh --skip-build
-      - name: No secrets tracked
-        run: |
-          SECRETS=$(git ls-files '*.pem' '*.sqlite3' '*.key' '*.bin')
-          if [ -n "$SECRETS" ]; then
-            echo "Secret files tracked: $SECRETS"
-            exit 1
-          fi
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ccp-smoke-binaries
@@ -54,45 +50,72 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
-      - run: cargo clippy --workspace --locked -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - run: make lint-rust
 
   fmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache: false
           build-warnings: ""
-      - run: cargo fmt --all -- --check
+      - run: make fmt
 
   msrv:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           toolchain: "1.88.0"
           build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - run: cargo +1.88.0 check --workspace --locked
+
+  source-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: make tools
+      - run: make lint-python lint-shell lint-workflows lint-secrets
+      - name: Quality gate regressions
+        run: make quality-tests
+      - name: Secret history
+        run: .lint-tools/bin/gitleaks git --redact --no-banner --config .gitleaks.toml
 
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
-      - run: cargo install cargo-audit --version 0.22.2 --locked
-      - run: cargo audit
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
-      - run: python -m pip install ./mcp pip-audit==2.10.1
-      - run: python -m pip_audit
+      - run: make tools
+      - run: python -m pip install -e ./mcp
+      - run: make security
 
   compat:
     needs: [test]
@@ -101,9 +124,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ccp-smoke-binaries
@@ -156,6 +181,8 @@ jobs:
             fastmcp: ">=4,<5"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
@@ -172,7 +199,7 @@ jobs:
         run: python tests/mcp_smoke.py
 
   build:
-    needs: [test, clippy, fmt, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, msrv, audit, compat, mcp]
     strategy:
       matrix:
         include:
@@ -191,10 +218,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           target: ${{ matrix.target }}
           build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
@@ -224,19 +254,22 @@ jobs:
           pattern: binaries-*
           path: dist
           merge-multiple: true
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+      # v3.0.3; retain the existing asset-update behavior on tag reruns.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # zizmor: ignore[superfluous-actions]
         with:
           files: dist/*
           generate_release_notes: true
 
   docker:
-    needs: [test, clippy, fmt, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, msrv, audit, compat, mcp]
     runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         if: github.event_name == 'push'
         with:
@@ -256,7 +289,7 @@ jobs:
         run: |
           docker run --rm -d --name ccp-ci-smoke -e CCP_AUTH_LISTENER_ADDR=127.0.0.1:1337 -e CCP_MTLS_LISTENER_ADDR=127.0.0.1:1338 ghcr.io/squid-proxy-lovers/ccp:latest dependency-smoke
           trap 'docker rm -f ccp-ci-smoke >/dev/null 2>&1 || true' EXIT
-          for attempt in $(seq 1 40); do
+          for _attempt in $(seq 1 40); do
             if docker exec ccp-ci-smoke server health dependency-smoke; then
               exit 0
             fi

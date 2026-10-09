@@ -69,7 +69,7 @@ Flow:
 5. The client sends:
    - `POST /auth/redeem`
    - JSON body: `{"token":"...","csr_pem":"..."}`
-6. The server atomically consumes the token.
+6. The server validates the token and its expiry. Each valid redemption issues a new client identity.
 7. The server signs the CSR and returns JSON containing:
    - session metadata
    - access level

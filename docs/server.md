@@ -86,7 +86,7 @@ Enrollment flow:
 3. client generates a CSR locally
 4. client sends JSON:
    - `{"token":"...","csr_pem":"..."}`
-5. server atomically validates and consumes the token
+5. server validates the token and its expiry
 6. server signs the CSR with the session CA
 7. server records the issued cert and returns JSON containing:
    - session metadata
@@ -125,9 +125,8 @@ Redemption rules:
 
 - token must exist
 - token must not be expired
-- token must not be consumed
 
-If redemption fails after the token is consumed, the token stays invalid and a new one must be issued.
+Tokens remain reusable until expiry; successful redemptions issue distinct client certificates. Protect tokens while they remain valid.
 
 ## Certificate Lifecycle
 
