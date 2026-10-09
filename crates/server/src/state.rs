@@ -383,6 +383,10 @@ impl SessionCache {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Mirrors the stored entry fields."
+    )]
     fn build_entry(
         &self,
         path: EntryPath,
@@ -565,12 +569,14 @@ impl SessionCache {
     }
 }
 
+type AppendLocks = Mutex<HashMap<(i64, String), Arc<Mutex<()>>>>;
+
 pub struct ServerState {
     sessions: RwLock<HashMap<i64, SessionCache>>,
     auth_tokens: RwLock<HashMap<String, AuthGrant>>,
     cert_grants: RwLock<HashMap<String, CertGrant>>,
     revoked_cert_common_names: RwLock<HashSet<String>>,
-    append_locks: Mutex<HashMap<(i64, String), Arc<Mutex<()>>>>,
+    append_locks: AppendLocks,
     journal: Arc<JournalHandle>,
 }
 

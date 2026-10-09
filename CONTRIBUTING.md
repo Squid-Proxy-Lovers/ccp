@@ -1,91 +1,125 @@
 # Contributing to CCP
 
-Contributions should be made as GitHub pull requests. Each PR gets reviewed by a maintainer and either merged or given feedback. This applies to everyone, including maintainers.
+Submit changes as GitHub pull requests, including maintainer changes. For an
+existing issue, coordinate with its owner before starting. Discuss new protocol
+features before implementing them.
 
-If you want to work on an open issue, comment on it first so nobody else picks it up at the same time.
+## Setup
 
-## Setting up
+Install Rust through rustup, Python 3.13, Git, and Make. The MCP package also
+supports Python 3.10+; CI tests both the minimum and current supported environments.
 
 ```bash
 git clone https://github.com/squid-proxy-lovers/ccp.git
 cd ccp
-cargo build --release
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -e ./mcp
+make tools
 ```
 
-Run the test suite before submitting anything:
+`make tools` installs exact Python tool versions from `requirements-lint.txt` and
+native binaries from `tools/lint-tools.json`. Native downloads are SHA-256 checked
+before installation in `.lint-tools/bin`; Linux and macOS support x86_64 and
+ARM64. These are development tools, not runtime dependencies.
+
+Rustup selects the compiler in `rust-toolchain.toml`. Rust 1.88 is the supported
+minimum. Builds and tests use `Cargo.lock` with `--locked`.
+
+## Before opening a PR
 
 ```bash
-cargo test -p server --lib -- --test-threads=1
-cargo test -p client --lib
-bash tests/run.sh --skip-build
+make lint-fast
+make test
+make quality-tests
+make installer-tests
+make integration
+make mcp-smoke
+make compat
+make security
 ```
 
-## Codebase layout
+`make lint-fast` needs installed tools and cached Cargo dependencies, and performs
+no advisory-network requests. Warm runs are quick; the initial Rust compilation
+can take longer. `make security` needs network access to current advisory databases
+and audits the active Python environment, so install the MCP package in that venv.
+The audit verifies that CCP is installed from this checkout, then excludes that
+local package from the advisory lookup. Every installed third-party version,
+including transitive runtime and quality-tool dependencies, is audited strictly.
+The audit does not resolve a different dependency set.
+
+The [test guide](tests/README.md) explains individual suites, opt-in load tests,
+and old/new compatibility checks. Use `make help` for targeted commands. CI runs
+the source, security, test, MSRV, MCP compatibility, and container checks before
+producing release artifacts.
+
+## Quality policy
+
+| Area | Required checks |
+| --- | --- |
+| Rust | rustfmt; Clippy for every workspace target with warnings as errors |
+| Python | Ruff correctness, imports, bugbear, modernization, simplification, security, and formatting |
+| Shell | ShellCheck for Git-visible Bash and POSIX scripts, including extensionless scripts |
+| Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
+| Secrets | Gitleaks CLI on working source and Git history, with redacted output |
+| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit |
+
+The Rust policy lives in the workspace manifest and is inherited by every crate.
+It also rejects debug macros, TODO/unimplemented macros, and unsafe operations
+implicitly performed inside unsafe functions. Python targets 3.10-compatible
+syntax; test assertions are allowed.
+
+Fix findings before submission. When an intentional invariant or API shape needs
+an exception, keep it local and explain the reason. Prefer Rust `#[expect(...,
+reason = "...")]`, which detects stale exemptions, and specific Python `noqa`
+codes with nearby explanations. Avoid whole-file or whole-workspace suppressions.
+Do not enable entire opinionated rule groups just to increase the rule count.
+
+Dependency vulnerabilities fail the audit. Existing maintenance notices and
+duplicate versions are handled through dependency review rather than forcing
+unrelated migrations. The license allowlist records accepted dependencies; new
+licenses or sources need explicit review. Bincode 1.3 is retained for wire-format
+compatibility, with its maintenance status tracked separately.
+
+## Repository layout
 
 ```text
-crates/protocol/     shared wire format types (client + server depend on this)
-crates/server/       the CCP server (Rust, SQLite, mTLS)
-crates/client/       CLI client (Rust)
-mcp/                 FastMCP bridge for Claude/Cursor/Codex (Python)
-tests/               integration tests + benchmarks
-docs/                design docs and format specs
+crates/protocol/   shared wire types and Bincode codec
+crates/server/     mTLS server, enrollment, SQLite, and journal
+crates/client/     Rust library and CLI
+mcp/              Python FastMCP bridge
+tests/            unit/integration support, smoke tests, and benchmarks
+scripts/          development quality helpers
+docs/             architecture and format contracts
 ```
 
 ## Pull requests
 
-- Branch from `main`. Rebase onto current `main` before submitting if your branch has fallen behind.
-- Please keep commits small. Each one should compile and pass tests on its own.
-- Add tests for new functionality or bug fixes.
-- CI runs tests, clippy, and format checks on every PR. Make sure those pass before requesting review.
-- Run `cargo fmt --all` and `cargo clippy --workspace` before pushing.
+- Branch from current `main`; keep one coherent purpose and reviewable commits.
+- Describe the problem, resulting behavior, and checks actually run.
+- Include a regression test for a behavioral fix. Documentation-only edits need relevant link/command checks.
+- Preserve public CLI, response, wire, and persisted-data contracts in maintenance changes.
+- Keep generated credentials, databases, local environments, and build outputs out of Git.
+- Keep PRs as drafts while required checks or design decisions are outstanding.
 
-## What we're looking for
+## Dependencies and versions
 
-- Bug fixes with a test that proves the fix
-- Performance improvements with benchmark numbers
-- New protocol features (open an issue first to discuss the design)
-- Documentation fixes
-- Test coverage for untested paths
+Dependabot opens weekly reviewed PRs for Cargo, Python, Actions, Docker, and the
+Rust toolchain. Updates do not merge automatically. Cargo updates remain within
+manifest ranges; Python major upgrades require separate review. When changing
+the development compiler, update the Docker builder and verify the minimum compiler.
 
-## What we're not looking for
+For dependency maintenance, run the old/new client and persistence checks as well
+as the current CLI/MCP suites. Replacing Bincode requires an explicitly versioned
+protocol migration. Weekly audits detect new advisories even without a source change.
 
-- Cosmetic refactors with no functional change
-- Dependencies we don't need
-- Features that break backward compatibility without discussion
+CCP uses semver. Patch releases preserve protocol/API compatibility; new features
+or incompatible pre-1.0 changes require an appropriate minor version. Track wire
+compatibility with `PROTOCOL_VERSION` in `crates/protocol/src/lib.rs`, and database
+compatibility with `SCHEMA_VERSION` in `crates/server/src/init.rs`. Change those
+when the corresponding contract changes, and document migration requirements.
 
-## Dependency updates
+## Security reports
 
-Dependabot opens weekly update PRs for Cargo, the MCP package, GitHub Actions,
-Docker images, and the Rust toolchain. Cargo updates are limited to the existing
-manifest ranges; Python major upgrades require a separate review. Updates are
-reviewed PRs and do not merge automatically.
-
-Rust 1.88 is the supported minimum. The pinned development/CI compiler is in
-`rust-toolchain.toml`; when changing it, update the Docker builder version too.
-Cargo's resolver prefers dependencies compatible with the minimum compiler.
-Build with `--locked` so validation and release artifacts use the reviewed lockfile.
-
-Before accepting dependency updates, run the existing unit/CLI tests, the MCP
-smoke test, and the old/new client and persisted-data compatibility check. CI also
-checks the minimum compiler and audits Rust/Python dependencies; the weekly audit
-detects newly published advisories even when there is no source change.
-
-Keep the protocol, database schema, CLI commands and public response shapes
-compatible in maintenance updates. Bincode 1.3 remains in use to preserve the
-version-1 wire format. RustSec reports it as unmaintained, without a known
-vulnerability; replacing the serializer requires an explicitly versioned protocol
-migration, rather than a routine dependency update.
-
-## Versioning
-
-CCP follows [semver](https://semver.org/). We're at `0.x.y` which means the protocol and API can still change between minor versions.
-
-- `0.1.x` patch: bug fixes, doc corrections, no protocol changes
-- `0.2.0` minor: new features, new protocol messages, new CLI commands
-- `1.0.0` major: protocol and API are stable, backward compatibility is guaranteed from that point
-
-`PROTOCOL_VERSION` in `crates/protocol/src/lib.rs` and `SCHEMA_VERSION` in `crates/server/src/init.rs` track wire format and database compatibility separately from the crate version. Bump those when your change affects what goes over the wire or what's stored in SQLite.
-
-## Security
-
-If you find a security vulnerability, do not open a public issue. See [SECURITY.md](SECURITY.md) for reporting instructions.
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md), rather
+than opening a public issue.

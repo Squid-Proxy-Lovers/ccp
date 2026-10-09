@@ -139,6 +139,10 @@ struct AuthSessionMetadata {
 }
 
 impl TestServer {
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "Serializes test environment for the server lifetime; spawned server tasks do not acquire this lock."
+    )]
     pub async fn start() -> anyhow::Result<Self> {
         Lazy::force(&CRYPTO_PROVIDER_READY);
         let guard = TEST_ENV_LOCK
@@ -602,6 +606,10 @@ impl EnrolledClient {
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Test helper mirrors the entry and parent metadata fields."
+    )]
     pub async fn add_with_labels_and_library_metadata_in_location(
         &self,
         name: &str,

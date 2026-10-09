@@ -11,7 +11,7 @@ bash install.sh
 Or build from source:
 
 ```bash
-cargo build --release -p client
+cargo build --release --locked -p client
 ```
 
 ## Enrolling

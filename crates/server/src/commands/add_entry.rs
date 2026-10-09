@@ -7,6 +7,10 @@ use protocol::DuplicateWarning;
 use super::super::*;
 
 impl ServerState {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserves the public entry API and its explicit metadata fields."
+    )]
     pub async fn add_entry(
         &self,
         session_id: i64,

@@ -116,7 +116,7 @@ Each item in an entry's `history` array:
 
 ## Integrity
 
-The `bundle_sha256` field is a lowercase hex SHA-256 digest of the JSON-serialized `entries` array. The server computes the hash independently on import and rejects the bundle if it doesn't match. This catches file corruption and tampering.
+The `bundle_sha256` field is a lowercase hex SHA-256 digest of the JSON-serialized `entries` array. The server computes the hash independently on import and rejects the bundle if it doesn't match. This detects mismatches and file corruption. It is an unkeyed checksum, not proof of origin: a sender can change the entries and recompute the digest.
 
 ## Conflict policies
 

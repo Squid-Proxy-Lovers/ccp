@@ -83,6 +83,10 @@ pub enum JournalEntry {
     },
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The bounded writer queue owns complete journal records."
+)]
 enum JournalCommand {
     Append(JournalEntry),
     Shutdown(mpsc::SyncSender<anyhow::Result<()>>),
