@@ -20,7 +20,8 @@ def free_port() -> int:
 
 
 def run(binary: Path, env: dict[str, str], *args: str) -> str:
-    result = subprocess.run(
+    # Test binary and argv are supplied separately; no shell is used.
+    result = subprocess.run(  # noqa: S603
         [str(binary), *args], env=env, text=True, capture_output=True, timeout=30
     )
     if result.returncode:
@@ -38,8 +39,10 @@ class Server:
         # The existing listener does not enable SO_REUSEADDR. Allow the OS's
         # TIME_WAIT interval when reopening the same endpoints after shutdown.
         deadline = time.monotonic() + 90
-        ports = [int(self.env[key].rsplit(":", 1)[1]) for key in
-                 ("CCP_AUTH_LISTENER_ADDR", "CCP_MTLS_LISTENER_ADDR")]
+        ports = [
+            int(self.env[key].rsplit(":", 1)[1])
+            for key in ("CCP_AUTH_LISTENER_ADDR", "CCP_MTLS_LISTENER_ADDR")
+        ]
         while True:
             sockets = []
             try:
@@ -48,17 +51,22 @@ class Server:
                     sockets.append(sock)
                     sock.bind(("127.0.0.1", port))
                 break
-            except OSError:
+            except OSError as error:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError("previous server endpoints did not become available")
+                    raise RuntimeError(
+                        "previous server endpoints did not become available"
+                    ) from error
                 time.sleep(0.2)
             finally:
                 for sock in sockets:
                     sock.close()
         self.log = tempfile.TemporaryFile(mode="w+")
-        self.process = subprocess.Popen(
-            [str(self.binary), self.session], env=self.env,
-            stdout=self.log, stderr=subprocess.STDOUT,
+        # Start the explicitly selected test binary without shell interpretation.
+        self.process = subprocess.Popen(  # noqa: S603
+            [str(self.binary), self.session],
+            env=self.env,
+            stdout=self.log,
+            stderr=subprocess.STDOUT,
         )
         try:
             deadline = time.monotonic() + 20
@@ -77,7 +85,9 @@ class Server:
             raise
 
     def token(self) -> str:
-        return json.loads(run(self.binary, self.env, "issue-token", self.session, "read_write"))["token"]
+        return json.loads(run(self.binary, self.env, "issue-token", self.session, "read_write"))[
+            "token"
+        ]
 
     def __exit__(self, *_):
         if self.process.poll() is None:
@@ -91,11 +101,14 @@ class Server:
 
 
 def server_env(data: Path, auth: int, mtls: int) -> dict[str, str]:
-    return dict(os.environ, CCP_SERVER_DATA_DIR=str(data),
-                CCP_AUTH_LISTENER_ADDR=f"127.0.0.1:{auth}",
-                CCP_MTLS_LISTENER_ADDR=f"127.0.0.1:{mtls}",
-                CCP_AUTH_BASE_URL=f"http://127.0.0.1:{auth}",
-                CCP_MTLS_BASE_URL=f"https://localhost:{mtls}")
+    return dict(
+        os.environ,
+        CCP_SERVER_DATA_DIR=str(data),
+        CCP_AUTH_LISTENER_ADDR=f"127.0.0.1:{auth}",
+        CCP_MTLS_LISTENER_ADDR=f"127.0.0.1:{mtls}",
+        CCP_AUTH_BASE_URL=f"http://127.0.0.1:{auth}",
+        CCP_MTLS_BASE_URL=f"https://localhost:{mtls}",
+    )
 
 
 def check(args):
@@ -113,14 +126,44 @@ def check(args):
         location = ["--shelf", "notes", "--book", "records"]
 
         def content(binary, client_env):
-            return json.loads(run(binary, client_env, "get", session, "entry", *location))["context"]
+            return json.loads(run(binary, client_env, "get", session, "entry", *location))[
+                "context"
+            ]
 
         with Server(old_server, env, auth) as server:
             for binary, client_env in [(old_client, old_env), (args.client, new_env)]:
-                run(binary, client_env, "enroll", "--redeem-url", f"http://127.0.0.1:{auth}/auth/redeem", "--token", server.token())
+                run(
+                    binary,
+                    client_env,
+                    "enroll",
+                    "--redeem-url",
+                    f"http://127.0.0.1:{auth}/auth/redeem",
+                    "--token",
+                    server.token(),
+                )
             run(old_client, old_env, "add-shelf", session, "notes", "compatibility notes")
-            run(old_client, old_env, "add-book", session, "--shelf", "notes", "records", "saved records")
-            run(old_client, old_env, "add-entry", session, *location, "--labels", "dependency,compatibility", "entry", "existing entry", "baseline content")
+            run(
+                old_client,
+                old_env,
+                "add-book",
+                session,
+                "--shelf",
+                "notes",
+                "records",
+                "saved records",
+            )
+            run(
+                old_client,
+                old_env,
+                "add-entry",
+                session,
+                *location,
+                "--labels",
+                "dependency,compatibility",
+                "entry",
+                "existing entry",
+                "baseline content",
+            )
             assert "baseline content" in content(args.client, new_env)
             run(args.client, new_env, "append", session, "entry", *location, "new client append")
             assert "new client append" in content(old_client, old_env)
@@ -136,11 +179,15 @@ def check(args):
         with Server(old_server, env, auth):
             assert "old client append" in content(old_client, old_env)
             assert "old client append" in content(args.client, new_env)
-    print("PASS: old/new TLS clients, server upgrade/downgrade, existing enrollments and persisted content")
+    print(
+        "PASS: old/new TLS clients, server upgrade/downgrade, existing enrollments and persisted content"
+    )
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ["server", "client", "old-server", "old-client"]:
-        parser.add_argument(f"--{name}", type=lambda s: Path(s).resolve(), required=not name.startswith("old-"))
+        parser.add_argument(
+            f"--{name}", type=lambda s: Path(s).resolve(), required=not name.startswith("old-")
+        )
     check(parser.parse_args())

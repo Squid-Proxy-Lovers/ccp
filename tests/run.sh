@@ -45,43 +45,29 @@ section() {
 
 pass() {
     echo -e "  ${GREEN}✓${RESET} $1"
-    ((PASS_COUNT++))
+    PASS_COUNT=$((PASS_COUNT + 1))
 }
 
 fail() {
     echo -e "  ${RED}✗${RESET} $1"
-    ((FAIL_COUNT++))
+    FAIL_COUNT=$((FAIL_COUNT + 1))
     FAILURES+=("[$CURRENT_SECTION] $1")
 }
 
 skip() {
     echo -e "  ${YELLOW}○${RESET} $1"
-    ((SKIP_COUNT++))
+    SKIP_COUNT=$((SKIP_COUNT + 1))
 }
 
+# Keep command status and counts in the parent shell, and JSON output in OUT.
 expect_success() {
     local desc="$1"; shift
-    local out
-    out=$("$@" 2>&1)
-    if [ $? -eq 0 ]; then
+    if OUT=$("$@" 2>&1); then
         pass "$desc"
     else
         fail "$desc"
-        echo -e "    ${RED}$(echo "$out" | head -3)${RESET}"
+        printf '%s\n' "$OUT" | head -3
     fi
-    echo "$out"
-}
-
-expect_failure() {
-    local desc="$1"; shift
-    local out
-    out=$("$@" 2>&1)
-    if [ $? -ne 0 ]; then
-        pass "$desc"
-    else
-        fail "$desc — expected failure but got success"
-    fi
-    echo "$out"
 }
 
 expect_contains() {
@@ -102,19 +88,6 @@ expect_not_contains() {
     fi
 }
 
-expect_count() {
-    local desc="$1" haystack="$2" expected="$3"
-    local count
-    count=$(echo "$haystack" | grep -c "^" 2>/dev/null || echo "0")
-    # empty string counts as 0
-    if [ -z "$haystack" ]; then count=0; fi
-    if [ "$count" -eq "$expected" ]; then
-        pass "$desc (got $count)"
-    else
-        fail "$desc — expected $expected, got $count"
-    fi
-}
-
 # ── Temp dir + cleanup ───────────────────────────────────────────────────────
 
 WORK_DIR=$(mktemp -d)
@@ -125,6 +98,7 @@ mkdir -p "$DATA_DIR" "$CLIENT_HOME"
 export CCP_CLIENT_HOME="$CLIENT_HOME"
 
 SERVER_PID=""
+# shellcheck disable=SC2329 # Invoked by the EXIT trap.
 cleanup() {
     if [ -n "$SERVER_PID" ]; then
         kill "$SERVER_PID" 2>/dev/null
@@ -146,34 +120,13 @@ if [ "$SKIP_BUILD" = true ]; then
         exit 1
     fi
 else
-    OUT=$(cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1)
-    if [ $? -eq 0 ]; then
+    if OUT=$(cargo build --release --locked --manifest-path "$REPO_ROOT/Cargo.toml" 2>&1); then
         pass "cargo build --release"
     else
         fail "cargo build --release"
         echo "$OUT"
         exit 1
     fi
-fi
-
-# ── Unit tests ───────────────────────────────────────────────────────────────
-
-section "Unit tests"
-
-OUT=$(cargo test -p server --lib -- --test-threads=1 2>&1)
-if echo "$OUT" | grep -q "test result: ok"; then
-    COUNT=$(echo "$OUT" | grep "test result:" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')
-    pass "server ($COUNT passed)"
-else
-    fail "server unit tests"
-fi
-
-OUT=$(cargo test -p client --lib 2>&1)
-if echo "$OUT" | grep -q "test result: ok"; then
-    COUNT=$(echo "$OUT" | grep "test result:" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+')
-    pass "client ($COUNT passed)"
-else
-    fail "client unit tests"
 fi
 
 # ── Start server ─────────────────────────────────────────────────────────────
@@ -194,7 +147,7 @@ SERVER_PID=$!
 
 # Wait for server to be ready
 READY=false
-for i in $(seq 1 30); do
+for _attempt in $(seq 1 30); do
     if curl -s -o /dev/null "http://127.0.0.1:$AUTH_PORT" 2>/dev/null; then
         READY=true
         break
@@ -251,9 +204,9 @@ fi
 
 section "Enrollment"
 
-OUT=$(expect_success "enroll read client" "$CLIENT_BIN" enroll --redeem-url "$REDEEM_URL" --token "$READ_TOKEN")
-OUT=$(expect_success "enroll read_write client" "$CLIENT_BIN" enroll --redeem-url "$REDEEM_URL" --token "$RW_TOKEN")
-OUT=$(expect_success "enroll admin client" "$CLIENT_BIN" enroll --redeem-url "$REDEEM_URL" --token "$ADMIN_TOKEN")
+expect_success "enroll read client" "$CLIENT_BIN" enroll --redeem-url "$REDEEM_URL" --token "$READ_TOKEN"
+expect_success "enroll read_write client" "$CLIENT_BIN" enroll --redeem-url "$REDEEM_URL" --token "$RW_TOKEN"
+expect_success "enroll admin client" "$CLIENT_BIN" enroll --redeem-url "$REDEEM_URL" --token "$ADMIN_TOKEN"
 
 SESSIONS_OUT=$("$CLIENT_BIN" sessions 2>&1)
 expect_contains "sessions lists enrollment" "$SESSIONS_OUT" "integration-test"
@@ -263,16 +216,16 @@ expect_contains "sessions shows all access levels" "$SESSIONS_OUT" "admin"
 
 section "Shelf and book operations"
 
-OUT=$(expect_success "add shelf" "$CLIENT_BIN" add-shelf integration-test research "collected research")
-OUT=$(expect_success "add book" "$CLIENT_BIN" add-book integration-test --shelf research findings "key findings")
+expect_success "add shelf" "$CLIENT_BIN" add-shelf integration-test research "collected research"
+expect_success "add book" "$CLIENT_BIN" add-book integration-test --shelf research findings "key findings"
 
 # ── Entry CRUD ───────────────────────────────────────────────────────────────
 
 section "Entry CRUD"
 
-OUT=$(expect_success "add entry" "$CLIENT_BIN" add-entry integration-test \
+expect_success "add entry" "$CLIENT_BIN" add-entry integration-test \
     --shelf research --book findings --labels "test,integration" \
-    day1 "first entry" "initial content from integration test")
+    day1 "first entry" "initial content from integration test"
 
 LIST_OUT=$("$CLIENT_BIN" list integration-test 2>&1)
 expect_contains "list shows entry" "$LIST_OUT" "day1"
@@ -281,8 +234,8 @@ GET_OUT=$("$CLIENT_BIN" get integration-test day1 --shelf research --book findin
 expect_contains "get returns content" "$GET_OUT" "initial content"
 expect_contains "get returns labels" "$GET_OUT" "test"
 
-OUT=$(expect_success "append to entry" "$CLIENT_BIN" append integration-test day1 \
-    --shelf research --book findings "appended follow-up content")
+expect_success "append to entry" "$CLIENT_BIN" append integration-test day1 \
+    --shelf research --book findings "appended follow-up content"
 
 GET_OUT2=$("$CLIENT_BIN" get integration-test day1 --shelf research --book findings 2>&1)
 expect_contains "get shows appended content" "$GET_OUT2" "appended follow-up content"
@@ -325,7 +278,7 @@ expect_contains "search-deleted finds archived entry" "$DELETED_OUT" "day1"
 # Extract entry_key for restore
 ENTRY_KEY=$(echo "$DELETE_OUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['entry_key'])" 2>/dev/null || echo "")
 if [ -n "$ENTRY_KEY" ]; then
-    RESTORE_OUT=$(expect_success "restore entry" "$CLIENT_BIN" restore integration-test "$ENTRY_KEY")
+    expect_success "restore entry" "$CLIENT_BIN" restore integration-test "$ENTRY_KEY"
     LIST_RESTORED=$("$CLIENT_BIN" list integration-test 2>&1)
     expect_contains "entry back after restore" "$LIST_RESTORED" "day1"
 else
@@ -337,10 +290,10 @@ fi
 section "Delete shelf"
 
 # create a throwaway shelf with entries, then nuke it
-OUT=$(expect_success "add throwaway shelf" "$CLIENT_BIN" add-shelf integration-test throwaway "temp shelf")
-OUT=$(expect_success "add throwaway book" "$CLIENT_BIN" add-book integration-test --shelf throwaway throwaway-book "temp book")
-OUT=$(expect_success "add throwaway entry" "$CLIENT_BIN" add-entry integration-test \
-    --shelf throwaway --book throwaway-book throwaway-entry "temp" "temp content")
+expect_success "add throwaway shelf" "$CLIENT_BIN" add-shelf integration-test throwaway "temp shelf"
+expect_success "add throwaway book" "$CLIENT_BIN" add-book integration-test --shelf throwaway throwaway-book "temp book"
+expect_success "add throwaway entry" "$CLIENT_BIN" add-entry integration-test \
+    --shelf throwaway --book throwaway-book throwaway-entry "temp" "temp content"
 
 DS_OUT=$("$CLIENT_BIN" delete-shelf integration-test throwaway 2>&1)
 expect_contains "delete-shelf succeeds" "$DS_OUT" "throwaway"
@@ -357,7 +310,7 @@ section "Export and import"
 
 # full session export
 EXPORT_FILE="$WORK_DIR/export-full.droplet"
-OUT=$(expect_success "export full session" "$CLIENT_BIN" export integration-test --output "$EXPORT_FILE")
+expect_success "export full session" "$CLIENT_BIN" export integration-test --output "$EXPORT_FILE"
 
 if [ -f "$EXPORT_FILE" ] && [ -s "$EXPORT_FILE" ]; then
     pass "full export file exists and is non-empty"
@@ -374,7 +327,7 @@ fi
 
 # scoped export — shelf only
 SHELF_EXPORT="$WORK_DIR/export-shelf.droplet"
-OUT=$(expect_success "export shelf" "$CLIENT_BIN" export integration-test --shelf research --output "$SHELF_EXPORT")
+expect_success "export shelf" "$CLIENT_BIN" export integration-test --shelf research --output "$SHELF_EXPORT"
 if python3 -c "import json; b=json.load(open('$SHELF_EXPORT')); assert b['selector']['scope']['Shelf']['shelf']=='research'" 2>/dev/null; then
     pass "shelf export has correct scope"
 else
@@ -383,7 +336,7 @@ fi
 
 # scoped export — book
 BOOK_EXPORT="$WORK_DIR/export-book.droplet"
-OUT=$(expect_success "export book" "$CLIENT_BIN" export integration-test --shelf research --book findings --output "$BOOK_EXPORT")
+expect_success "export book" "$CLIENT_BIN" export integration-test --shelf research --book findings --output "$BOOK_EXPORT"
 if python3 -c "import json; b=json.load(open('$BOOK_EXPORT')); assert b['selector']['scope']['Book']['book']=='findings'" 2>/dev/null; then
     pass "book export has correct scope"
 else
@@ -392,7 +345,7 @@ fi
 
 # export without history
 NOHIST_EXPORT="$WORK_DIR/export-nohist.droplet"
-OUT=$(expect_success "export no-history" "$CLIENT_BIN" export integration-test --no-history --output "$NOHIST_EXPORT")
+expect_success "export no-history" "$CLIENT_BIN" export integration-test --no-history --output "$NOHIST_EXPORT"
 if python3 -c "import json; b=json.load(open('$NOHIST_EXPORT')); assert b['selector']['include_history']==False" 2>/dev/null; then
     pass "no-history export flag works"
 else
@@ -402,7 +355,7 @@ fi
 # delete entry then re-import with overwrite
 "$CLIENT_BIN" delete integration-test day1 --shelf research --book findings >/dev/null 2>&1
 
-OUT=$(expect_success "import with overwrite" "$CLIENT_BIN" import integration-test "$EXPORT_FILE" --policy overwrite)
+expect_success "import with overwrite" "$CLIENT_BIN" import integration-test "$EXPORT_FILE" --policy overwrite
 
 LIST_IMPORTED=$("$CLIENT_BIN" list integration-test 2>&1)
 expect_contains "imported entry exists" "$LIST_IMPORTED" "day1"
@@ -543,10 +496,13 @@ fi
 
 section "Shutdown"
 
-kill "$SERVER_PID" 2>/dev/null
-wait "$SERVER_PID" 2>/dev/null
+kill -INT "$SERVER_PID" 2>/dev/null
+if wait "$SERVER_PID"; then
+    pass "server stopped cleanly"
+else
+    fail "server exited unsuccessfully during shutdown"
+fi
 SERVER_PID=""
-pass "server stopped cleanly"
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

@@ -285,7 +285,7 @@ TOMLEOF
         if ! python3 -c "import json; cfg=json.load(open('$claude_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
             local tmp
             tmp="$(mktemp)"
-            python3 -c "
+            if python3 -c "
 import json, os
 with open('$claude_config') as f:
     cfg = json.load(f)
@@ -295,7 +295,11 @@ if os.path.isfile('$INSTALL_DIR/ccp-server'):
 cfg.setdefault('mcpServers', {})['ccp'] = {'command': '$mcp_cmd', 'env': env}
 with open('$tmp', 'w') as f:
     json.dump(cfg, f, indent=2)
-" 2>/dev/null && mv "$tmp" "$claude_config" && ok "Added to $claude_config" || warn "Could not update $claude_config"
+" 2>/dev/null && mv "$tmp" "$claude_config"; then
+                ok "Added to $claude_config"
+            else
+                warn "Could not update $claude_config"
+            fi
         else
             ok "$claude_config already configured"
         fi
@@ -311,7 +315,7 @@ with open('$tmp', 'w') as f:
         elif ! python3 -c "import json; cfg=json.load(open('$cursor_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
             local tmp
             tmp="$(mktemp)"
-            python3 -c "
+            if python3 -c "
 import json, os
 with open('$cursor_config') as f:
     cfg = json.load(f)
@@ -321,7 +325,11 @@ if os.path.isfile('$INSTALL_DIR/ccp-server'):
 cfg.setdefault('mcpServers', {})['ccp'] = {'command': '$mcp_cmd', 'env': env}
 with open('$tmp', 'w') as f:
     json.dump(cfg, f, indent=2)
-" 2>/dev/null && mv "$tmp" "$cursor_config" && ok "Added to $cursor_config" || warn "Could not update $cursor_config"
+" 2>/dev/null && mv "$tmp" "$cursor_config"; then
+                ok "Added to $cursor_config"
+            else
+                warn "Could not update $cursor_config"
+            fi
         else
             ok "$cursor_config already configured"
         fi
@@ -448,7 +456,7 @@ if [ "$MODE" = "client" ]; then
     configure_mcp
 elif [ "$MODE" = "both" ]; then
     echo ""
-    printf "${CYAN}>>>${RESET} Install the MCP bridge for Claude/Cursor/Codex? [y/N] "
+    printf '%b>>>%b Install the MCP bridge for Claude/Cursor/Codex? [y/N] ' "$CYAN" "$RESET"
     read -r INSTALL_MCP_ANSWER </dev/tty 2>/dev/null || INSTALL_MCP_ANSWER="n"
     case "$INSTALL_MCP_ANSWER" in
         [yY]|[yY][eE][sS])

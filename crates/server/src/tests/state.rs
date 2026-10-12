@@ -45,6 +45,10 @@ fn admin(session_id: i64, common_name: &str) -> ConnectionAuthContext {
 }
 
 impl TestContext {
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "Serializes process-global test environment; server tasks do not acquire this lock."
+    )]
     async fn new(test_name: &str) -> anyhow::Result<Self> {
         let env_guard = test_env_lock()
             .lock()

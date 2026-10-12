@@ -236,6 +236,10 @@ pub(super) fn persist_deleted_entry(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors the existing transfer audit row."
+)]
 pub(super) fn persist_transfer_log(
     session_id: i64,
     direction: &str,

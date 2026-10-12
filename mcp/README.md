@@ -4,6 +4,8 @@ FastMCP bridge that gives Claude, Cursor, Codex, and other MCP-compatible agents
 
 ## Install
 
+Requires Python 3.10+ and FastMCP 2.14.7 through 4.x.
+
 ```bash
 bash install.sh --client
 ```
@@ -50,3 +52,10 @@ Agents get read, search, creation, and append. Destructive operations and server
 | `CCP_CLIENT_BIN` | Path to the ccp-client binary |
 | `CCP_SERVER_BIN` | Path to the ccp-server binary (full install only) |
 | `CCP_CLIENT_HOME` | Client enrollment storage directory |
+
+## Development verification
+
+From the repository root, use the setup in [CONTRIBUTING.md](../CONTRIBUTING.md).
+`make lint-python` checks the bridge and smoke scripts; `make mcp-smoke` exercises
+real tool calls through the CLI and a temporary TLS server. CI repeats that smoke
+across the supported Python/FastMCP matrix.

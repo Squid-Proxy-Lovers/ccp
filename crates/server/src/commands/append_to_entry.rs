@@ -5,6 +5,10 @@
 use super::super::*;
 
 impl ServerState {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Preserves the public append API and attribution fields."
+    )]
     pub async fn append_to_entry(
         &self,
         session_id: i64,
