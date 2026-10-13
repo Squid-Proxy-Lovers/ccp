@@ -10,6 +10,39 @@ The CCP server is a Rust coordination service for inter-agent communication. It 
 - in-memory runtime state for the hot path
 - optional FastMCP management through the Python bridge
 
+## Deployment
+
+The [root README](../README.md#install) covers binary and Docker installation.
+Binaries install to `~/.local/bin` by default; override it with `--install-dir`.
+To build the server and client from source explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --from-source
+```
+
+For Docker, the installer pulls the published GHCR image directly. A failed pull
+stops installation; it does not fall back to a source build. Choose
+`--docker --from-source` to build locally instead. Data stays in the
+`ccp-server-data` volume, and the installer does not replace an existing container
+automatically. Inspect the running server with:
+
+```bash
+docker logs -f ccp-server
+```
+
+For a separate checkout-based Compose deployment:
+
+```bash
+docker compose up -d --build
+docker compose logs -f ccp-server
+```
+
+Before remote deployment, configure the session and advertised addresses using
+the [configuration variables](#configuration-surface). Enrollment uses HTTP;
+protect remote enrollment with HTTPS or a trusted tunnel. Normal protocol traffic
+uses mTLS. See the [nightly guide](nightly-builds.md) for the nightly channel and
+version pinning.
+
 ## Design Goals
 
 - fast runtime reads and writes from memory
@@ -158,7 +191,9 @@ server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
 server health <session>
 ```
 
-This utility is the trusted path for issuing enrollment tokens.
+Use the same server data directory when issuing tokens as when starting the
+server (`CCP_SERVER_DATA_DIR` overrides the default). This utility is the trusted
+path for issuing enrollment tokens.
 
 Other admin controls:
 
