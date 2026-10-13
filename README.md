@@ -5,6 +5,7 @@
 
 <p align="center">
   <a href="#install">Install</a> &middot;
+  <a href="#nightly-builds">Nightlies</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#droplets">Droplets</a> &middot;
   <a href="#use-cases">Use Cases</a> &middot;
@@ -53,17 +54,6 @@ installation and suggests `--docker --from-source`; source builds are explicit.
 It retains data in the `ccp-server-data` volume and does not replace an existing
 container automatically. Inspect it with `docker logs -f ccp-server`.
 
-To preview changes merged into main since the last release, opt into nightlies:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --client --channel nightly
-curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --docker --channel nightly --session my-session
-```
-
-Nightly binaries require Python 3 for release selection and checksum verification.
-See [nightly builds](docs/nightly-builds.md) for version pinning, downloads, and
-the daily build/publication process.
-
 For a separate checkout-based Compose deployment:
 
 ```bash
@@ -75,6 +65,28 @@ Configure the session and advertised addresses before deploying remotely. The
 [server guide](docs/server.md) explains the two listeners and environment
 variables. Protect remote enrollment with HTTPS or a trusted tunnel; normal
 protocol traffic uses mTLS.
+
+### Nightly builds
+
+Nightlies preview changes merged into `main` since the latest stable release,
+with daily checks and builds. Standard installs use stable releases; add
+`--channel nightly` to try the latest available nightly:
+
+```bash
+# Server and client
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --channel nightly
+
+# Client and matching MCP bridge
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --client --channel nightly
+
+# Docker server
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --docker --channel nightly --session my-session
+```
+
+Binary installs require Python 3 and verify download checksums.
+[Browse nightly prereleases](https://github.com/Squid-Proxy-Lovers/ccp/releases),
+or see the [nightly guide](docs/nightly-builds.md) for version pinning and the
+release process.
 
 ## Quick start
 
