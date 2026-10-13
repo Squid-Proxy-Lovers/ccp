@@ -15,6 +15,9 @@ INSTALL_DIR="${HOME}/.local/bin"
 SESSION_NAME="my-session"
 MODE="both"
 FROM_SOURCE=false
+CHANNEL="stable"
+RELEASE_VERSION=""
+RELEASE_STAGE=""
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -72,6 +75,13 @@ while [[ $# -gt 0 ]]; do
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         --session)     SESSION_NAME="$2"; shift 2 ;;
         --from-source) FROM_SOURCE=true; shift ;;
+        --channel|--version)
+            if [ $# -lt 2 ] || [[ "$2" == --* ]] || [ -z "$2" ]; then
+                err "$1 requires a value."; exit 1
+            fi
+            if [ "$1" = "--channel" ]; then CHANNEL="$2"; else RELEASE_VERSION="$2"; fi
+            shift 2
+            ;;
         -h|--help)
             cat <<EOF
 Usage: bash install.sh [--client | --docker] [OPTIONS]
@@ -84,12 +94,34 @@ Options:
   --install-dir <path>   Binary install directory (default: ~/.local/bin)
   --session <name>       Docker session name (default: my-session)
   --from-source          Build from repo instead of downloading release binaries
+  --channel <channel>    stable (default) or nightly
+  --version <tag>        Pin an exact nightly release (requires --channel nightly)
 EOF
             exit 0
             ;;
         *) err "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+case "$CHANNEL" in
+    stable|nightly) ;;
+    *) err "Unknown channel: $CHANNEL (choose stable or nightly)."; exit 1 ;;
+esac
+if [ -n "$RELEASE_VERSION" ]; then
+    if [ "$CHANNEL" != "nightly" ] || ! [[ "$RELEASE_VERSION" =~ ^nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{12}$ ]]; then
+        err "--version requires --channel nightly and a nightly-YYYY-MM-DD-<12-character SHA> tag."
+        exit 1
+    fi
+fi
+if [ "$CHANNEL" = "nightly" ] && [ "$FROM_SOURCE" = true ]; then
+    err "Choose --channel nightly for published builds or --from-source for your checkout."
+    exit 1
+fi
+
+cleanup_release() {
+    if [ -n "$RELEASE_STAGE" ]; then rm -rf "$RELEASE_STAGE"; fi
+}
+trap cleanup_release EXIT
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -140,6 +172,91 @@ download_binary() {
         exit 1
     fi
     chmod +x "$dest"
+}
+
+download_release_file() {
+    local url="$1" dest="$2"
+    if command -v curl &>/dev/null; then
+        curl -fsSL "$url" -o "$dest"
+    elif command -v wget &>/dev/null; then
+        wget -q "$url" -O "$dest"
+    else
+        err "Need curl or wget to download nightlies."
+        return 1
+    fi
+}
+
+install_nightly_binaries() {
+    if ! command -v python3 &>/dev/null; then
+        err "Python 3 is required to select and verify nightly builds."
+        exit 1
+    fi
+    RELEASE_STAGE="$(mktemp -d)" || exit 1
+    local page=1 selection platform asset base
+    if [ -z "$RELEASE_VERSION" ]; then
+        while true; do
+            if ! download_release_file "https://api.github.com/repos/${REPO}/releases?per_page=100&page=$page" "$RELEASE_STAGE/releases.json"; then
+                err "Could not discover nightly releases."
+                exit 1
+            fi
+            selection="$(python3 - "$RELEASE_STAGE/releases.json" <<'PY'
+import json, re, sys
+releases = json.load(open(sys.argv[1]))
+if not isinstance(releases, list):
+    sys.exit("Invalid GitHub release response")
+candidates = [item for item in releases if item.get("prerelease") and not item.get("draft")
+              and re.fullmatch(r"nightly-\d{4}-\d{2}-\d{2}-[0-9a-f]{12}", item.get("tag_name", ""))]
+print(max(candidates, key=lambda item: item["published_at"])["tag_name"] if candidates
+      else ("more" if releases else "none"))
+PY
+            )" || exit 1
+            case "$selection" in
+                more) page=$((page + 1)) ;;
+                none) err "No published nightly is available yet."; exit 1 ;;
+                *) RELEASE_VERSION="$selection"; break ;;
+            esac
+        done
+    fi
+    platform="$(detect_platform)" || exit 1
+    base="https://github.com/${REPO}/releases/download/${RELEASE_VERSION}"
+    step "Downloading nightly ${BOLD}$RELEASE_VERSION${RESET} for $platform"
+    local assets=("ccp-client-$platform" "ccp-mcp.tar.gz" "build-info.json")
+    if [ "$MODE" = "both" ]; then assets+=("ccp-server-$platform"); fi
+    for asset in SHA256SUMS "${assets[@]}"; do
+        if ! download_release_file "$base/$asset" "$RELEASE_STAGE/$asset"; then
+            err "Nightly download failed: $asset. No binaries installed."
+            exit 1
+        fi
+    done
+    if ! python3 - "$RELEASE_STAGE" "$RELEASE_VERSION" "${assets[@]}" <<'PY'
+import hashlib, json, pathlib, re, sys
+stage, tag = pathlib.Path(sys.argv[1]), sys.argv[2]
+checksums = {}
+for line in (stage / "SHA256SUMS").read_text().splitlines():
+    match = re.fullmatch(r"([0-9a-f]{64})  ([a-zA-Z0-9_.-]+)", line)
+    if not match or match[2] in checksums:
+        sys.exit("Invalid nightly checksum manifest")
+    checksums[match[2]] = match[1]
+for name in sys.argv[3:]:
+    if hashlib.sha256((stage / name).read_bytes()).hexdigest() != checksums.get(name):
+        sys.exit(f"Nightly checksum mismatch: {name}")
+source = json.loads((stage / "build-info.json").read_text())["source_sha"]
+if not re.fullmatch(r"[0-9a-f]{40}", source) or not tag.endswith("-" + source[:12]):
+    sys.exit("Nightly metadata does not match the selected release")
+PY
+    then
+        err "Nightly verification failed. No binaries installed."
+        exit 1
+    fi
+    # Verify every component before replacing any installed binary.
+    for asset in "ccp-client" "ccp-server"; do
+        if [ "$asset" = "ccp-server" ] && [ "$MODE" = "client" ]; then continue; fi
+        if ! chmod +x "$RELEASE_STAGE/$asset-$platform" || ! cp "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset"; then
+            err "Could not install $asset."
+            exit 1
+        fi
+    done
+    cp "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" || exit 1
 }
 
 build_from_source() {
@@ -198,6 +315,18 @@ install_mcp_bridge() {
     local mcp_home="$HOME/.ccp-mcp"
     local venv_dir="$mcp_home/venv"
     local mcp_src
+
+    if [ "$CHANNEL" = "nightly" ]; then
+        step "Installing MCP bridge from $RELEASE_VERSION"
+        if [ ! -d "$venv_dir" ] && ! python3 -m venv "$venv_dir"; then
+            err "Could not create the MCP environment."; exit 1
+        fi
+        if ! "$venv_dir/bin/pip" install --quiet --upgrade --force-reinstall "$RELEASE_STAGE/ccp-mcp.tar.gz"; then
+            err "Nightly MCP installation failed."; exit 1
+        fi
+        ok "MCP bridge installed in $venv_dir"
+        return
+    fi
 
     # find the mcp package — either in the repo or clone it
     if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/mcp" ]; then
@@ -361,6 +490,9 @@ if [ "$MODE" = "docker" ]; then
     fi
 
     image="ghcr.io/${REPO}:latest"
+    if [ "$CHANNEL" = "nightly" ]; then
+        image="ghcr.io/${REPO}:${RELEASE_VERSION:-nightly}"
+    fi
     if [ "$FROM_SOURCE" = false ]; then
         step "Pulling CCP server image..."
         if ! docker pull "$image"; then
@@ -432,6 +564,8 @@ mkdir -p "$INSTALL_DIR"
 
 if [ "$FROM_SOURCE" = true ]; then
     build_from_source
+elif [ "$CHANNEL" = "nightly" ]; then
+    install_nightly_binaries
 else
     if [ "$MODE" = "client" ]; then
         download_binary "ccp-client" "$INSTALL_DIR/ccp-client"
@@ -439,6 +573,10 @@ else
         download_binary "ccp-server" "$INSTALL_DIR/ccp-server"
         download_binary "ccp-client" "$INSTALL_DIR/ccp-client"
     fi
+fi
+
+if [ "$CHANNEL" != "nightly" ]; then
+    rm -f "$INSTALL_DIR/ccp-nightly.json" || exit 1
 fi
 
 echo ""

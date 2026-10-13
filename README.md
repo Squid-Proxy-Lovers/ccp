@@ -53,6 +53,17 @@ installation and suggests `--docker --from-source`; source builds are explicit.
 It retains data in the `ccp-server-data` volume and does not replace an existing
 container automatically. Inspect it with `docker logs -f ccp-server`.
 
+To preview changes merged into main since the last release, opt into nightlies:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --client --channel nightly
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --docker --channel nightly --session my-session
+```
+
+Nightly binaries require Python 3 for release selection and checksum verification.
+See [nightly builds](docs/nightly-builds.md) for version pinning, downloads, and
+the daily build/publication process.
+
 For a separate checkout-based Compose deployment:
 
 ```bash

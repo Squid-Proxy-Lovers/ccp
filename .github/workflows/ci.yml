@@ -7,15 +7,20 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    - cron: "0 13 * * 1"
+    - cron: "37 6 * * *"
   workflow_dispatch:
+    inputs:
+      nightly:
+        description: Publish a nightly from main after all checks pass
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name == 'schedule' || inputs.nightly) && 'nightly' || 'checks' }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' && !inputs.nightly }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,11 +42,14 @@ jobs:
         run: make test
       - name: Docker installer regressions
         run: make installer-tests
+      - name: Nightly packaging and publication regressions
+        run: make nightly-tests
       - name: CLI integration
         run: bash tests/run.sh --skip-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ccp-smoke-binaries
+          retention-days: 1
           path: |
             target/release/server
             target/release/client
@@ -240,10 +248,37 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.platform }}
+          retention-days: 1
           path: dist/
 
-  release:
+  package:
     needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: binaries-*
+          path: dist
+          merge-multiple: true
+      - name: Package matching MCP source and build metadata
+        run: |
+          git archive --format=tar.gz --prefix=ccp-mcp/ "${GITHUB_SHA}:mcp" > dist/ccp-mcp.tar.gz
+          python scripts/nightly.py prepare --dist dist --sha "$GITHUB_SHA"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: dist/
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: [package]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -251,9 +286,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: binaries-*
+          name: release-assets
           path: dist
-          merge-multiple: true
       # v3.0.3; retain the existing asset-update behavior on tag reruns.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # zizmor: ignore[superfluous-actions]
         with:
@@ -264,30 +298,20 @@ jobs:
     needs: [test, clippy, fmt, source-lint, msrv, audit, compat, mcp]
     runs-on: ubuntu-latest
     permissions:
-      packages: write
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        if: github.event_name == 'push'
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
-          load: ${{ github.event_name != 'push' }}
-          tags: |
-            ghcr.io/squid-proxy-lovers/ccp:latest
-            ghcr.io/squid-proxy-lovers/ccp:${{ github.sha }}
+          load: true
+          tags: ccp-ci:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
       - name: Container startup and health
-        if: github.event_name != 'push'
         run: |
-          docker run --rm -d --name ccp-ci-smoke -e CCP_AUTH_LISTENER_ADDR=127.0.0.1:1337 -e CCP_MTLS_LISTENER_ADDR=127.0.0.1:1338 ghcr.io/squid-proxy-lovers/ccp:latest dependency-smoke
+          docker run --rm -d --name ccp-ci-smoke -e CCP_AUTH_LISTENER_ADDR=127.0.0.1:1337 -e CCP_MTLS_LISTENER_ADDR=127.0.0.1:1338 "ccp-ci:$GITHUB_SHA" dependency-smoke
           trap 'docker rm -f ccp-ci-smoke >/dev/null 2>&1 || true' EXIT
           for _attempt in $(seq 1 40); do
             if docker exec ccp-ci-smoke server health dependency-smoke; then
@@ -296,3 +320,70 @@ jobs:
             sleep 0.25
           done
           exit 1
+      - name: Save tested image for publication
+        run: docker save "ccp-ci:$GITHUB_SHA" | gzip > "$RUNNER_TEMP/ccp-image.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: docker-image
+          path: ${{ runner.temp }}/ccp-image.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  docker-publish:
+    needs: [docker, package]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image
+          path: image
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested image to existing tags
+        run: |
+          docker load --input image/ccp-image.tar.gz
+          docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
+          docker push "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
+          docker tag "ccp-ci:$GITHUB_SHA" ghcr.io/squid-proxy-lovers/ccp:latest
+          docker push ghcr.io/squid-proxy-lovers/ccp:latest
+
+  nightly:
+    needs: [package, docker]
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.nightly))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: docker-image
+          path: image
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish or resume the nightly
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/nightly.py publish --dist dist --image image/ccp-image.tar.gz
