@@ -1,5 +1,7 @@
 # Nightly builds
 
+[Documentation index](README.md) · [Stable install](../README.md#install)
+
 Nightlies preview changes merged into `main` since the latest stable release.
 CI runs daily at **06:37 UTC** using the pinned Rust compiler and locked Cargo
 dependencies. A new source commit gets a dated GitHub prerelease and Docker image
@@ -29,7 +31,7 @@ already exists. `~/.local/bin/ccp-nightly.json` records the source commit and
 compiler; `--install-dir` changes its directory along with the binaries.
 Switching to a stable or source installation clears this nightly stamp.
 
-Checksums detect corrupted downloads; they are not independent signatures.
+Checksums detect corrupted downloads. Authenticity depends on the release source.
 Nightly tags identify a source commit independently of the package's semver.
 Use the build metadata to identify the exact nightly commit.
 
@@ -79,9 +81,9 @@ remains available; rerunning the workflow repairs the alias from that image.
 Use a dated tag when matching a specific client/server/MCP build.
 
 Maintainers can run CI manually on **main** with the **nightly** input enabled.
-Manual runs without that input perform checks only. Scheduling takes effect once
-the workflow is merged into main; GitHub may delay scheduled starts. Dated
-releases/images are retained without automatic deletion.
+Manual runs without that input perform checks only. The schedule runs on main;
+GitHub may delay scheduled starts. Dated releases/images are retained without
+automatic deletion.
 Intermediate CI artifacts are retained for one day; distribution uses GitHub
 Releases and GHCR. After intermediates expire, rerun the complete workflow.
 

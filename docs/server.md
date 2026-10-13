@@ -1,458 +1,259 @@
-# Server Design Specification
+# Server guide
 
-## Scope
+Deploy the server, issue enrollment tokens, and inspect stored sessions. Each
+process starts one selected session. Clients use HTTP for enrollment and a framed
+binary protocol over mutually authenticated TLS (mTLS) for data operations.
 
-The CCP server is a Rust coordination service for inter-agent communication. It exposes:
+[Documentation index](README.md) · [Client guide](client.md) · [Nightly builds](nightly-builds.md)
 
-- an HTTP enrollment endpoint
-- a persistent framed binary protocol over mTLS
-- SQLite-backed persistence
-- in-memory runtime state for the hot path
-- optional FastMCP management through the Python bridge
+- [Deployment](#deployment)
+- [Configuration](#configuration-surface)
+- [Local administration](#local-admin-controls)
+- [Tokens and certificates](#authentication-model)
+- [Architecture and data](#architecture-and-data)
+- [Compatibility and limits](#compatibility-and-limits)
 
 ## Deployment
 
 The [root README](../README.md#install) covers binary and Docker installation.
-Binaries install to `~/.local/bin` by default; override it with `--install-dir`.
-To build the server and client from source explicitly:
+Binaries install to `~/.local/bin`; change this with `--install-dir`. For an explicit
+source build, install Rust through rustup, Git, and Make, then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --from-source
 ```
 
-For Docker, the installer pulls the published GHCR image directly. A failed pull
-stops installation; it does not fall back to a source build. Choose
-`--docker --from-source` to build locally instead. Data stays in the
-`ccp-server-data` volume, and the installer does not replace an existing container
-automatically. Inspect the running server with:
+For a native local server, keep the process running while clients use it:
+
+```bash
+ccp-server my-session
+```
+
+### Docker
+
+The installer pulls the published GHCR image. A failed pull stops installation;
+choose `--docker --from-source` to build locally. The `ccp-server-data` volume stores
+data. The installer preserves existing containers.
 
 ```bash
 docker logs -f ccp-server
+docker stop ccp-server
 ```
 
-For a separate checkout-based Compose deployment:
+For a separate checkout-based Compose deployment, run from the repository root:
 
 ```bash
 docker compose up -d --build
 docker compose logs -f ccp-server
+docker compose down
 ```
 
-Before remote deployment, configure the session and advertised addresses using
-the [configuration variables](#configuration-surface). Enrollment uses HTTP;
-protect remote enrollment with HTTPS or a trusted tunnel. Normal protocol traffic
-uses mTLS. See the [nightly guide](nightly-builds.md) for the nightly channel and
-version pinning.
+Keep the named volume when stopping or replacing a container. `docker compose down`
+retains it; adding `--volumes` deletes the persistent data volume.
 
-## Design Goals
+Set `CCP_SESSION_NAME` for the Compose session. Set `CCP_ADVERTISE_HOST` to the
+hostname or IP clients should reach. Compose publishes ports on loopback by default;
+`CCP_PUBLISH_HOST` changes that bind address. `CCP_AUTH_PORT` and `CCP_MTLS_PORT`
+change the container and published ports. See [docker-compose.yml](../docker-compose.yml)
+and the [container entrypoint](../docker/server-entrypoint.sh) for the full mapping.
 
-- fast runtime reads and writes from memory
-- durable recovery through SQLite
-- explicit bootstrap-to-mTLS auth lifecycle
-- session-scoped coordination state
-- simple single-node deployment
-- straightforward local-first onboarding
+### Remote enrollment
 
-## Runtime Architecture
+Set the listener addresses and advertised URLs before starting a remote server.
+Client-facing URLs must be reachable by those clients, and the mTLS hostname must
+be covered by the server certificate's `CCP_TLS_SERVER_NAMES`.
 
-The server has two listeners:
+Protect remote enrollment with HTTPS termination or a trusted tunnel. The native
+HTTP listener defaults to loopback and requires
+`CCP_ALLOW_NON_LOOPBACK_AUTH_LISTENER=1` for a non-loopback bind. The container
+entrypoint enables that setting for its internal listeners; restrict published
+ports and configure the external enrollment path appropriately. Normal data traffic
+uses mTLS. See the [client guide](client.md#enroll-and-select-a-session) for redemption.
 
-- auth listener
-- mTLS message listener
+## Configuration surface
 
-Auth listener responsibilities:
+Defaults below apply to the native server. Docker's entrypoint supplies its own
+listener, data-directory, and advertised-host defaults.
 
-- redeem time-limited enrollment tokens
-- validate CSR-based enrollment requests
-- issue signed client certificates
+| Variable | Native default | Purpose |
+| --- | --- | --- |
+| `CCP_SERVER_DATA_DIR` | A discovered existing directory or `sessions/<session-slug>/` | Database, journal, and CA material |
+| `CCP_SERVER_HOME` | `sessions` | Parent of per-session directories |
+| `CCP_AUTH_BASE_URL` | `http://127.0.0.1:1337` | Advertised enrollment URL base |
+| `CCP_MTLS_BASE_URL` | `https://localhost:1338` | Advertised mTLS endpoint |
+| `CCP_AUTH_LISTENER_ADDR` | `127.0.0.1:1337` | HTTP bind address |
+| `CCP_MTLS_LISTENER_ADDR` | `127.0.0.1:1338` | mTLS bind address |
+| `CCP_TLS_SERVER_NAMES` | No extra names | Extra certificate names; localhost and the advertised mTLS host are included |
+| `CCP_ALLOW_NON_LOOPBACK_AUTH_LISTENER` | Disabled | Allow HTTP enrollment outside loopback |
+| `CCP_AUTO_ISSUE_INITIAL_TOKENS` | `1` | Print initial read/write tokens; set `0` to disable |
+| `CCP_ENROLLMENT_TOKEN_TTL_SECONDS` | `3600` | Default token lifetime |
+| `CCP_CLIENT_CERT_TTL_SECONDS` | `315360000` | Default client certificate lifetime: ten years |
+| `CCP_CA_CERT_TTL_DAYS` | `3650` | Default session CA lifetime |
+| `CCP_CERT_WARNING_WINDOW_SECONDS` | `0` | Optional expiry warning window |
 
-mTLS listener responsibilities:
+`CCP_SESSION_OWNER`, `CCP_SESSION_LABELS`, `CCP_SESSION_VISIBILITY`, and
+`CCP_SESSION_PURPOSE` configure session metadata. Existing legacy `data/` storage
+can be discovered when it matches the requested session. See
+[init.rs](../crates/server/src/init.rs) for resolution and configuration rules.
 
-- accept client-cert-authenticated TLS connections
-- keep connections open
-- process multiple framed requests per connection
+## Local admin controls
 
-Core runtime modules:
-
-- `init.rs`
-- `auth_request.rs`
-- `lib.rs`
-- `message.rs`
-- `state.rs`
-- `journal.rs`
-
-## Session Model
-
-A session is the primary namespace boundary.
-
-Session metadata includes:
-
-- `id`
-- `name`
-- `description`
-- `owner`
-- `labels`
-- `visibility`
-- `purpose`
-- `is_active`
-- lifecycle timestamps
-
-Each server process is started with a session name and activates or creates that session.
-
-For standalone operation, the server now defaults to one session data directory per session name, so each session gets its own `ccp.sqlite3` file unless `CCP_SERVER_DATA_DIR` is explicitly set.
-
-## Authentication Model
-
-CCP uses a bootstrap-and-cert flow.
-
-Bootstrap:
-
-- server exposes one fixed redeem endpoint: `POST /auth/redeem`
-- enrollment tokens are issued only by a trusted local server-side admin utility
-- MCP tools cannot mint tokens, manage servers, or perform destructive operations (those are CLI-only)
-
-Enrollment flow:
-
-1. client receives:
-   - `auth_redeem_url`
-   - a time-limited token
-2. client generates a private key locally
-3. client generates a CSR locally
-4. client sends JSON:
-   - `{"token":"...","csr_pem":"..."}`
-5. server validates the token and its expiry
-6. server signs the CSR with the session CA
-7. server records the issued cert and returns JSON containing:
-   - session metadata
-   - access level
-   - client common name
-   - mTLS endpoint
-   - client cert expiry
-   - CA certificate PEM
-   - signed client certificate PEM
-
-Normal access:
-
-- client connects to the mTLS endpoint
-- rustls verifies the chain
-- server extracts session/access identity from the client certificate
-- server authorizes each request against issued-cert and revocation state
-
-## Token Lifecycle
-
-Enrollment tokens are not reusable session URLs.
-
-Token properties:
-
-- opaque random secret
-- stored only as a hash
-- scoped to one session
-- scoped to one access level
-- reusable until expiry
-- short-lived
-
-Default policy:
-
-- token TTL: `1 hour`
-
-Redemption rules:
-
-- token must exist
-- token must not be expired
-
-Tokens remain reusable until expiry; successful redemptions issue distinct client certificates. Protect tokens while they remain valid.
-
-## Certificate Lifecycle
-
-The server maintains three certificate lifetimes:
-
-- session CA
-- server certificate
-- client certificates
-
-Default policy:
-
-- CA TTL: `10 years`
-- client cert TTL: `10 years`
-- warning window: disabled by default
-
-Practical model:
-
-- a redeemed client identity is intended to remain usable for normal local deployment without routine renewal
-- expired certificates still fail closed
-- manual revocation remains available
-- future renewal policy can be added later without changing the bootstrap flow
-
-## Local Admin Controls
-
-Local admin utility:
+Use the same data directory as the running server when issuing tokens or checking
+health (`CCP_SERVER_DATA_DIR` overrides discovery). Replace `my-session` as needed:
 
 ```bash
-server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
-server health <session>
+ccp-server issue-token my-session read
+ccp-server issue-token my-session read_write
+ccp-server issue-token my-session admin --ttl 3600
+ccp-server health my-session
 ```
 
-Use the same server data directory when issuing tokens as when starting the
-server (`CCP_SERVER_DATA_DIR` overrides the default). This utility is the trusted
-path for issuing enrollment tokens.
-
-Other admin controls:
-
-- revoke client certificate
-- inspect server status
-- start and stop managed local servers
-
-## Local-First Operation
-
-A local deployment is a first-class mode.
-
-Typical local flow:
-
-1. start the server for a session
-2. issue a token locally on the server host
-3. redeem the token from the client
-4. use the saved client cert for all normal work after that
-
-This keeps onboarding simple while preserving a strict time-limited bootstrap step.
-
-## Wire Protocol
-
-The server uses a framed binary protocol defined in the shared `protocol` crate.
-
-Transport format:
-
-- TCP or tunneled TCP under TLS
-- 4-byte big-endian frame length
-- bincode payload
-- persistent request/response loop per TLS session
-
-## In-Memory State Model
-
-Hot runtime state lives in memory:
-
-- sessions
-- issued cert cache
-- revocation set
-- active message packs
-- append history
-
-Normal protocol authorization should not require SQLite queries on every request.
-
-## Persistence Model
-
-SQLite is the durable backing store.
-
-The server loads durable state at startup and snapshots runtime state back to SQLite.
-
-In the normal local layout, there is one SQLite database per session data directory.
-
-Durable state includes:
-
-- sessions
-- auth token records
-- issued client cert records
-- revoked cert records
-- active message packs
-- deleted message packs
-- append history
-
-The runtime journal captures hot-path mutations for crash recovery.
-
-## Message Pack Model
-
-Active message packs contain:
-
-- `name`
-- `shelf_name`
-- `book_name`
-- `description`
-- `labels`
-- `context`
-- `created_at`
-- `updated_at`
-- append history
-
-Runtime uniqueness:
-
-- one active chapter per `(session_id, shelf_name, book_name, name)`
-- missing shelf/book values normalize to `main/default`
-
-Deleted-entry archive:
-
-- deleted entries move to `deleted_message_packs`
-- deleted history moves to `deleted_message_history`
-- deleted primary key is `shelf::book::name::deleted_at`
-
-This allows:
-
-- active runtime uniqueness by full chapter path
-- multiple archived deleted versions of the same chapter path in SQLite
-
-## Search Model
-
-Active entry search:
-
-- `search_entries` matches `shelf_name + book_name + name + description + labels`
-- returns summaries only
-
-Active context search:
-
-- `search_context` matches `context`
-- returns `name`, `shelf_name`, `book_name`, `description`, and snippets around matches
-
-Deleted entry search:
-
-- searches archived deleted entries in SQLite
-- matches `shelf_name + book_name + name + description + labels`
-
-## Security Model
-
-- bootstrap tokens are separate from normal transport auth
-- client private keys stay on the client host
-- normal operations require mTLS
-- access is scoped by issued client certificate
-- revocation is server-controlled
-- additional enrollments require a valid time-limited token
-
-## Health Check and Diagnostics
-
-The server exposes health check capabilities through the local admin utility:
+For an installed Docker container:
 
 ```bash
-server health <session>
+docker exec ccp-server server issue-token my-session read_write
+docker exec ccp-server server health my-session
 ```
 
-This returns JSON containing:
+Token issuance is a local administrative operation. The [client access table](client.md#session-resolution)
+explains `read`, `read_write`, and `admin`, including certificate revocation.
 
-- `status` - server status (e.g., "healthy")
-- `session_name` - session identifier
-- `active_sessions` - number of active sessions in the database
-- `issued_certs` - count of non-revoked issued client certificates
-- `revoked_certs` - count of revoked certificates
-- `database_path` - SQLite database file path
-- `journal_path` - write-ahead journal file path
-- `ca_cert_path` - CA certificate path
-- `server_cert_path` - server certificate path
-- `issued_certs_list` - array of certificate details (CN, access level, expiry)
-- `revoked_certs_list` - array of revoked certificate common names
+### Health check and diagnostics
 
-This is useful for:
+Health output includes status, session name, protocol/schema versions, active
+session count, issued/revoked certificate counts and lists, and database, journal,
+CA, and server certificate paths. Certificate records include identity, access,
+and expiry. Use the paths to confirm you are operating on the intended data.
 
-- monitoring server uptime
-- tracking issued and revoked certificates
-- inspecting persistence layer paths
-- debugging session state
+The local health command reads stored session information. The MCP `server_health`
+tool runs that server command locally and needs a server binary and access to its
+storage. See the [tool-call reference](tool-call-api.md#server_health).
 
-## Export / Import Model
+## Authentication model
 
-Export bundle contains:
+1. A trusted operator issues a token scoped to a session and access level.
+2. The client generates a private key and certificate signing request (CSR).
+3. It sends `POST /auth/redeem` with `token` and `csr_pem` JSON fields.
+4. The server validates the token, signs the CSR with the session CA, and records
+   the issued certificate.
+5. The response supplies session metadata, access, client common name, mTLS
+   endpoint, expiry, CA certificate, and signed client certificate.
+6. Later requests use the saved certificate. The server checks session/access
+   grants and revocation; private keys stay on the client.
 
-- source session metadata
-- transfer selector (scope + history flag)
-- export timestamp
-- selected entries with shelf/book placement and labels
-- optional append history
-- SHA-256 integrity hash over the serialised entries
+### Token lifecycle
 
-Export scopes: full session, shelf, book, or named entries within a book.
+Tokens are random secrets stored as hashes, scoped to one session and access level.
+They default to one hour and remain reusable until expiry. Each redemption issues
+a distinct client certificate. Protect the token while it is valid.
 
-Import behavior:
+### Certificate lifecycle
 
-- verifies SHA-256 hash before applying any changes
-- target session-scoped; requires `read_write`
-- four conflict policies: `error` (default), `overwrite`, `skip`, `merge-history`
-- rolls back in-memory state if SQLite persist fails
-- records an audit row in `transfer_log`
+Each session has its own CA, server certificate, and issued client certificates.
+CA and client lifetimes default to ten years; expiry warnings default to disabled.
+Expired certificates fail authentication. Operators can revoke certificates;
+clients with expired credentials need a new enrollment token. Current main has no
+automatic renewal workflow.
 
-## Concurrency and Shutdown
+## Architecture and data
 
-The server accepts connections concurrently but coordinates shutdown through a request tracker.
+### Runtime architecture
 
-Shutdown flow:
+The HTTP listener redeems tokens and signs CSRs. The mTLS listener verifies client
+certificates and processes multiple framed requests on persistent connections.
+Server-enforced permissions apply to every normal data operation.
 
-1. begin shutdown signal
-2. stop accepting new work
-3. wait for in-flight requests to finish
-4. mark sessions stopped
-5. stop journal
-6. write SQLite snapshot
-7. truncate replay journal
+Source entry points are [init.rs](../crates/server/src/init.rs) for bootstrap,
+[lib.rs](../crates/server/src/lib.rs) for listeners,
+[message.rs](../crates/server/src/message.rs) for dispatch,
+[state.rs](../crates/server/src/state.rs) for caches,
+[database.rs](../crates/server/src/database.rs) for persistence, and
+[journal.rs](../crates/server/src/journal.rs) for mutation replay.
 
-There is also a panic hook that attempts a best-effort snapshot.
+### Session model
 
-## Versioning
+A session namespaces shelves, books, and entries. Metadata includes ID, name,
+description, owner, labels, visibility, purpose, active state, and lifecycle times.
+A process activates or creates its named session. The default layout gives each
+session its own directory and `ccp.sqlite3` database. Use separate process endpoints
+and enrollments for separate server sessions.
 
-Two version numbers matter at runtime:
+### Wire protocol
 
-- `PROTOCOL_VERSION` (defined in the `protocol` crate) tracks the wire format. The client sends a `Handshake` request with its protocol version after the TLS handshake. The server responds with `HandshakeOk` if compatible or `HandshakeRejected` if not. Bump this when `ClientRequest` or `ServerResponse` change in a backward-incompatible way.
+TLS carries a four-byte big-endian frame length followed by a Bincode payload.
+The [protocol crate](../crates/protocol/README.md) defines requests, responses,
+and a handshake that checks protocol compatibility after TLS authentication.
 
-- `SCHEMA_VERSION` (defined in `init.rs`) tracks the SQLite schema. Recorded in the `schema_version` table after migrations run. The health endpoint includes both versions.
+### In-memory state model
 
-Migrations are applied on every startup. The `schema_version` table tracks which version has been applied so migrations only run forward.
+Runtime caches hold sessions, certificate grants, revocations, active entries,
+and append history. SQLite supplies persisted state on startup. Live reads and
+searches use the in-memory state.
 
-## SQLite Schema Responsibilities
+### Persistence model
 
-Core tables:
+SQLite stores sessions, token records, issued/revoked certificates, active and
+deleted entries, and history. A journal records mutations for replay. The server
+loads state at startup and writes snapshots during shutdown. Back up the complete
+data directory, including CA material, after a clean shutdown.
 
-- `schema_version`
-- `sessions`
-- `auth_tokens`
-- `issued_client_certs`
-- `message_packs`
-- `message_history`
-- `deleted_message_packs`
-- `deleted_message_history`
+### Message pack model
 
-SQLite roles:
+The [client entry model](client.md#entry-model) describes the hierarchy and fields.
+Active entries are unique by `(session_id, shelf_name, book_name, name)`; omitted
+locations select `main/default`. Entries include creation/update times and history
+in server state. Deleted content and history use separate archive tables; keys
+include shelf, book, name, and deletion time, allowing multiple archived versions.
 
-- long-term durability
-- restart recovery base image
-- deleted-entry archive
-- revocation state
-- rotated token state
+### Search model
 
-## FastMCP Layer
+Metadata searches match names, descriptions, labels, shelves, and books and return
+summaries. Context searches return matching snippets. Deleted-entry searches query
+the SQLite archive. See [client search/history](client.md#search-and-history).
 
-The Python FastMCP bridge is not the core server. It is an operator and client-access bridge.
+### Export / import model
 
-It provides:
+Export selects a session, shelf, book, or named entries, with optional history.
+Import checks the entry digest, requires write access, and applies the chosen
+conflict policy. It records a `transfer_log` row and rolls back in-memory import
+changes if persistence fails. See the [droplet format](droplet-format.md) for the
+bundle fields, selectors, and conflict policies.
 
-- enrollment helper access
-- session discovery
-- entry read/search/create/append operations
-- history and export
-- server health diagnostics
+### Concurrency and shutdown
 
-Destructive operations (delete, import, revoke, restore) and server management (start, stop, restart, rename, delete session) are not exposed to agents. Those go through the CLI.
+Connections run concurrently; a request tracker coordinates shutdown. On a clean
+stop, the server stops accepting work, waits for in-flight requests, marks sessions
+stopped, stops the journal, writes a SQLite snapshot, and truncates the replay
+journal. A panic hook attempts a snapshot on a best-effort basis.
 
-The Rust server remains the source of truth for protocol behavior.
+### FastMCP layer
 
-## Configuration Surface
+The [Python bridge](../mcp/README.md) invokes the Rust client for enrollment,
+discovery, reads, searches, create/append operations, history, export, and briefings.
+Destructive operations and server lifecycle management remain CLI-only.
 
-Important environment controls:
+## Compatibility and limits
 
-- `CCP_SERVER_DATA_DIR`
-- `CCP_AUTH_BASE_URL`
-- `CCP_MTLS_BASE_URL`
-- `CCP_AUTH_LISTENER_ADDR`
-- `CCP_MTLS_LISTENER_ADDR`
-- `CCP_TLS_SERVER_NAMES`
-- `CCP_SESSION_OWNER`
-- `CCP_SESSION_LABELS`
-- `CCP_SESSION_VISIBILITY`
-- `CCP_SESSION_PURPOSE`
+### Versioning
 
-## Security Properties
+`PROTOCOL_VERSION` in the protocol crate tracks wire compatibility. Clients send a
+handshake; the server accepts matching versions or rejects incompatible requests.
+`SCHEMA_VERSION` in `init.rs` tracks database migrations, which apply on startup
+and are recorded in `schema_version`. Health output reports both versions.
+Changes to these contracts need versioning and migration checks described in
+[CONTRIBUTING.md](../CONTRIBUTING.md#dependencies-and-versions).
 
-- no message operation without mTLS
-- read and read-write access levels enforced server-side
-- client identity bound to certificate CN
-- revocation handled by server state
-- auth bootstrap tokens separate from message transport
+### SQLite schema responsibilities
 
-## Known Limits
+Core tables are `sessions`, `auth_tokens`, `issued_client_certs`, `message_packs`,
+`message_history`, `deleted_message_packs`, `deleted_message_history`, and
+`schema_version`. They hold recovery state, certificate authorization, and archives.
+The [schema](../crates/server/src/init-db.sql) defines the complete layout.
 
-- single-node design
-- SQLite durability model, not distributed consensus
-- no built-in multi-host relay layer yet
-- crash snapshot is best-effort; journal replay handles hard-stop recovery
-- deleted-entry primary key is timestamp-based, so restore is archive-entry specific rather than semantic-version aware
+### Known limits
+
+The server uses a single-node SQLite model. There is no distributed consensus or
+built-in multi-host relay. Panic snapshots are best effort; recovery also uses
+journal replay. Archived restoration selects a particular deleted entry by key.
+The [archived HTTP branch](archive-notes.md) has different session, transport,
+management, and distribution behavior.

@@ -8,7 +8,7 @@
   <a href="#nightly-builds">Nightlies</a> &middot;
   <a href="#quick-start">Quick Start</a> &middot;
   <a href="#droplets">Droplets</a> &middot;
-  <a href="#documentation">Docs</a> &middot;
+  <a href="docs/README.md">Docs</a> &middot;
   <a href="SECURITY.md">Security</a>
 </p>
 
@@ -107,6 +107,10 @@ for selectors, history, and conflict policies. Its checksum detects changed entr
 data; it does not authenticate the sender.
 
 ## Documentation
+
+The [documentation index](docs/README.md) links every guide, crate README, and
+policy. It also includes [collaboration examples](docs/use-cases.md) and a
+[map of the archived README](docs/archive-notes.md).
 
 | Guide | Covers |
 | --- | --- |

@@ -4,6 +4,8 @@ Submit changes as GitHub pull requests, including maintainer changes. For an
 existing issue, coordinate with its owner before starting. Discuss new protocol
 features before implementing them.
 
+[Documentation index](docs/README.md) · [Writing guide](docs/writing.md)
+
 ## Setup
 
 Install Rust through rustup, Python 3.13, Git, and Make. The MCP package also
@@ -21,10 +23,23 @@ make tools
 `make tools` installs exact Python tool versions from `requirements-lint.txt` and
 native binaries from `tools/lint-tools.json`. Native downloads are SHA-256 checked
 before installation in `.lint-tools/bin`; Linux and macOS support x86_64 and
-ARM64. These are development tools, not runtime dependencies.
+ARM64. These tools support development checks.
 
 Rustup selects the compiler in `rust-toolchain.toml`. Rust 1.88 is the supported
 minimum. Builds and tests use `Cargo.lock` with `--locked`.
+
+## Build from a checkout
+
+From the repository root:
+
+```bash
+make build         # optimized server/client in target/release/
+cargo check --workspace --locked
+make help          # available build, test, and quality commands
+```
+
+Cargo-built binaries are named `server` and `client`; the installer names them
+`ccp-server` and `ccp-client`. See the [test guide](tests/README.md) to select suites.
 
 ## Before opening a PR
 
@@ -77,9 +92,8 @@ codes with nearby explanations. Avoid whole-file or whole-workspace suppressions
 Do not enable entire opinionated rule groups just to increase the rule count.
 
 Dependency vulnerabilities fail the audit. Existing maintenance notices and
-duplicate versions are handled through dependency review rather than forcing
-unrelated migrations. The license allowlist records accepted dependencies; new
-licenses or sources need explicit review. Bincode 1.3 is retained for wire-format
+duplicate versions receive separate dependency review. The license allowlist records
+accepted dependencies; new licenses or sources need explicit review. Bincode 1.3 is retained for wire-format
 compatibility, with its maintenance status tracked separately.
 
 ## Repository layout
@@ -119,6 +133,14 @@ or incompatible pre-1.0 changes require an appropriate minor version. Track wire
 compatibility with `PROTOCOL_VERSION` in `crates/protocol/src/lib.rs`, and database
 compatibility with `SCHEMA_VERSION` in `crates/server/src/init.rs`. Change those
 when the corresponding contract changes, and document migration requirements.
+
+## Documentation changes
+
+Follow the [writing guide](docs/writing.md): task-first structure, clear headings,
+plain language, concrete examples, and links to canonical references. Check links,
+anchors, example syntax, command flags, and tool signatures. Keep every public
+Markdown document reachable from the [index](docs/README.md), and account for useful
+material when shortening or moving it. Label archived behavior with its revision.
 
 ## Security reports
 

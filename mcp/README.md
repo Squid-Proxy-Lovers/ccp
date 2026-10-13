@@ -1,61 +1,60 @@
-# CCP MCP Bridge
+# MCP bridge
 
-FastMCP bridge that gives Claude, Cursor, Codex, and other MCP-compatible agents access to CCP. The bridge shells out to the Rust client binary for all protocol work.
+Use CCP from Claude, Cursor, Codex, or another MCP-compatible host. The Python
+FastMCP bridge invokes the Rust client for data operations.
+
+[Documentation index](../docs/README.md) · [Tool-call reference](../docs/tool-call-api.md)
 
 ## Install
 
-Requires Python 3.10+ and FastMCP 2.14.7 through 4.x.
+Requires Python 3.10+ and FastMCP 2.14.7 through 4.x. From a repository checkout:
 
 ```bash
 bash install.sh --client
 ```
 
-This installs the client binary, sets up the Python venv, and auto-configures your agent's MCP settings.
+The installer adds the client binary, creates a Python environment, and configures
+supported agent hosts. For installation without a checkout or for nightlies, see
+[the README](../README.md#install) and [nightly guide](../docs/nightly-builds.md).
+Enroll with the server using the [client instructions](../docs/client.md#enroll-and-select-a-session).
 
-## How agents learn CCP
+## Agent workflow
 
-When an agent connects, it gets two things:
+The bridge supplies MCP instructions telling agents to search before writing,
+share useful findings, and read `ccp://help`. That resource describes the data model,
+workflow, tools, and organization examples. Host behavior determines when an agent
+reads and follows those instructions.
 
-1. The MCP `instructions` field tells it CCP is shared memory, to search before writing, and to read the help resource.
-2. The `ccp://help` resource has a full guide: data model, workflow, every tool, and tips for organizing data effectively.
+## Tools and resources
 
-Agents don't need to be prompted about CCP. The MCP instructions and help resource give them enough context to start using it on their own.
+| Group | Tools |
+| --- | --- |
+| Read | `list_entries`, `get_entry`, `get_history`, `get_entry_at`, `export_bundle` |
+| Search | `find_entries`, `find_shelves`, `find_books`, `search_context`, `search_deleted_entries` |
+| Write | `add_shelf`, `add_book`, `add_entry`, `append_entry` |
+| Session and diagnostics | `enroll`, `sessions`, `brief_me`, `server_status`, `server_health` |
 
-## Resources
+The [tool-call reference](../docs/tool-call-api.md) documents all arguments and
+response shapes. `ccp://sessions` lists this client's enrolled sessions;
+`ccp://help` supplies usage guidance.
 
-- `ccp://help` how to use CCP, data model, tool reference, tips
-- `ccp://sessions` enrolled sessions for this client
-
-## Available tools
-
-Agents get read, search, creation, and append. Destructive operations and server management are CLI-only.
-
-### Read
-`list_entries`, `get_entry`, `get_history`, `get_entry_at`, `export_bundle`
-
-### Search
-`find_entries`, `find_shelves`, `find_books`, `search_context`, `search_deleted_entries`
-
-### Write
-`add_shelf`, `add_book`, `add_entry`, `append_entry`
-
-### Session
-`enroll`, `sessions`, `brief_me`, `server_status`, `server_health`
-
-### CLI-only (not exposed to agents)
-`delete_entry`, `delete_shelf`, `restore_entry`, `import_bundle`, `revoke_certificate`, `start_server`, `stop_server`, `restart_server`, `rename_session`, `delete_session`
+Delete, delete-shelf, restore, import, revoke-cert, and server lifecycle operations
+remain CLI-only. See the [client reference](../docs/client.md#cli-reference).
 
 ## Environment variables
 
-| Variable | What it does |
-|---|---|
-| `CCP_CLIENT_BIN` | Path to the ccp-client binary |
-| `CCP_SERVER_BIN` | Path to the ccp-server binary (full install only) |
+| Variable | Purpose |
+| --- | --- |
+| `CCP_CLIENT_BIN` | Path to the client binary |
+| `CCP_SERVER_BIN` | Path to the server binary for local diagnostics |
 | `CCP_CLIENT_HOME` | Client enrollment storage directory |
+
+`server_status` resolves both binaries. `server_health` runs a local server command
+and needs access to the server's stored data. Installing a client for a remote server does not provide that data directory.
 
 ## Development verification
 
-From the repository root, use the setup in [CONTRIBUTING.md](../CONTRIBUTING.md).
-`make lint-python` checks the bridge and smoke scripts; `make mcp-smoke` exercises
-real tool calls through the CLI and a temporary TLS server. CI repeats that smoke
-across the supported Python/FastMCP matrix.
+Use [CONTRIBUTING.md](../CONTRIBUTING.md) from the repository root. `make lint-python`
+checks the bridge and smoke scripts; `make mcp-smoke` exercises actual tools through
+the CLI and a temporary TLS server. CI repeats the smoke across supported
+Python/FastMCP combinations.

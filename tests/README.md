@@ -1,5 +1,7 @@
 # Tests and verification
 
+[Documentation index](../docs/README.md)
+
 Start with [CONTRIBUTING.md](../CONTRIBUTING.md) to install Rust, the MCP package,
 and the pinned quality tools. Each command runs against local isolated test data.
 
@@ -41,7 +43,7 @@ library CRUD, append/history, searches, deletion/restoration, droplets, briefing
 temporal reads, access control, revocation, health, permissions, and shutdown.
 Command checks update counters in the parent shell and retain raw output for
 content assertions. The script exits unsuccessfully if any assertion fails.
-Library tests run through `make test`, rather than being repeated by this suite.
+Run library tests separately through `make test`.
 
 ## MCP and dependency compatibility
 
@@ -52,8 +54,7 @@ make compat
 
 The MCP smoke uses actual FastMCP transport, CLI processes, and the TLS server.
 It exercises discovery, help/session resources, enrollment, writes, append, read,
-and briefing. CI
-runs it across supported Python/FastMCP combinations.
+and briefing. CI runs it across supported Python/FastMCP combinations.
 
 The compatibility smoke enrolls clients, verifies the existing wire codec,
 reads/appends context, and reopens persisted data. For a dependency update, test
@@ -110,6 +111,5 @@ Results go to `tests/benchmark-results/`. Historical published results are retai
 in [recorded benchmarks](../docs/benchmarks.md).
 
 Report machine, revision, build settings, concurrency, and workload when sharing
-results. Benchmark throughput is evidence for that run, rather than a universal
-capacity guarantee. Benchmarks and the opt-in load tests are outside the quick
-quality gate.
+results. Interpret throughput using those run settings. Benchmarks and the opt-in
+load tests are outside the quick quality gate.
