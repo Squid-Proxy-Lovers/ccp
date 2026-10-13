@@ -13,7 +13,9 @@ cargo test --workspace --locked -- --list
 
 The normal workspace run currently executes **64 Rust cases**: 50 server, eight
 client, and six integration tests. The quality suite adds **seven Python cases**,
-and the installer suite adds **six Python cases**, for **77 automated test cases**. The CLI suite separately passes 59 assertions;
+and the Docker installer suite adds **six Python cases**. The nightly suite checks
+artifact integrity, publication recovery, and real-installer channel selection.
+The CLI suite separately passes 59 assertions;
 MCP and persistence compatibility are two end-to-end smoke suites.
 
 The workspace contains server and client library tests plus the Rust integration
@@ -71,6 +73,7 @@ schema versions match. A deliberate migration needs its own migration tests.
 ```bash
 make lint-fast
 make installer-tests
+make nightly-tests
 make security
 PATH="$PWD/.lint-tools/bin:$PATH" python -m unittest discover -s tests -p 'test_quality.py' -v
 ```

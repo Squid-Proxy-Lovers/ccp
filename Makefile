@@ -4,7 +4,10 @@ PYTHON ?= python3
 LINT_BIN ?= .lint-tools/bin
 export PATH := $(abspath $(LINT_BIN)):$(PATH)
 
-.PHONY: installer-tests quality-tests tools build test integration mcp-smoke compat lint lint-fast lint-rust lint-python lint-shell lint-workflows lint-secrets security fmt help
+.PHONY: nightly-tests installer-tests quality-tests tools build test integration mcp-smoke compat lint lint-fast lint-rust lint-python lint-shell lint-workflows lint-secrets security fmt help
+
+nightly-tests: ## Check nightly packaging, failure recovery, and channel installation.
+	$(PYTHON) -m unittest discover -s tests -p 'test_nightly.py' -v
 
 installer-tests: ## Run isolated Docker installer regressions.
 	$(PYTHON) tests/docker_install.py

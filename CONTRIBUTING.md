@@ -33,6 +33,7 @@ make lint-fast
 make test
 make quality-tests
 make installer-tests
+make nightly-tests
 make integration
 make mcp-smoke
 make compat
@@ -111,7 +112,7 @@ the development compiler, update the Docker builder and verify the minimum compi
 
 For dependency maintenance, run the old/new client and persistence checks as well
 as the current CLI/MCP suites. Replacing Bincode requires an explicitly versioned
-protocol migration. Weekly audits detect new advisories even without a source change.
+protocol migration. Daily nightly checks detect new advisories even without a source change.
 
 CCP uses semver. Patch releases preserve protocol/API compatibility; new features
 or incompatible pre-1.0 changes require an appropriate minor version. Track wire
