@@ -1,40 +1,38 @@
-# ccp-protocol
+# Protocol crate
 
-This is the shared wire-format crate for the Cephalopod Coordination Protocol. It defines every type that travels between client and server, and it handles serialization so neither side has to think about it.
+Shared Rust request/response types and Bincode encode/decode functions for the
+client and server. The crate also defines entries, summaries, history, session
+metadata, droplets, and conflict policies.
 
-## What's in here
+[Documentation index](../../docs/README.md) · [Server wire protocol](../../docs/server.md#wire-protocol)
 
-- `PROTOCOL_VERSION` constant for wire compatibility checks between client and server.
-- `Handshake`/`HandshakeOk`/`HandshakeRejected` for version negotiation on connect.
-- Request and response enums that map to every command the protocol supports (add shelf, add book, add entry, search, list, delete, restore, export, import, etc.).
-- Bincode serialization for all of these types. The client and server both depend on this crate and use the same codec, so they can't drift out of sync.
-- Shared domain types like `MessageEntry`, `EntrySummary`, `MessageHistoryEntry`, and `SessionMetadata`.
+## Compatibility
 
-## How to use it
+`PROTOCOL_VERSION` identifies the wire contract. `Handshake`, `HandshakeOk`, and
+`HandshakeRejected` negotiate compatibility when a client connects. Changes to
+request/response enums or their encoding can require a version bump; see
+[versioning requirements](../../CONTRIBUTING.md#dependencies-and-versions).
 
-You don't run this crate directly. Add it as a dependency in your `Cargo.toml`:
+Both binaries compile against these types. Independently deployed versions still
+need compatible wire contracts.
+
+## Use in Rust
+
+From a sibling crate, add the dependency to `Cargo.toml`:
 
 ```toml
 [dependencies]
 protocol = { path = "../protocol" }
 ```
 
-Then import whatever you need. The public API is the set of request/response enums and the encode/decode functions.
+Import the request/response enums, domain types, or encode/decode functions from
+[lib.rs](src/lib.rs). This crate builds as a library.
 
-## Building
+## Build and test
+
+From the repository root:
 
 ```bash
 cargo build --locked -p protocol
-```
-
-Or from this directory:
-
-```bash
-cargo build
-```
-
-Tests:
-
-```bash
 cargo test --locked -p protocol
 ```

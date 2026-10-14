@@ -1,9 +1,10 @@
 # Recorded benchmarks
 
-These results were previously published in the README. They are historical,
-machine-specific measurements, not a fresh benchmark of the current dependency
-set or a production capacity guarantee. The table does not record a source
-revision; rerun the harness when comparing changes.
+These historical measurements were previously published in the README. They
+describe the machines and workload below. The table has no source revision; rerun
+the harness against the revision and deployment you want to compare.
+
+[Documentation index](README.md)
 
 The recorded workload used 16 concurrent mTLS clients and 1,000 requests per
 client. See the [test guide](../tests/README.md#benchmarks) for locked release-build

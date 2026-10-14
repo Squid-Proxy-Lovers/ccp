@@ -1,18 +1,75 @@
-# Droplet File Format
+# Droplet guide and format
 
 A `.droplet` file is a JSON document containing CCP entries, their metadata, and optionally their full append history. It's produced by `ccp-client export` and consumed by `ccp-client import`.
 
-The file is plain JSON. The `.droplet` extension is a convention so tools and people can tell it apart from random JSON files.
+[Documentation index](README.md) · [Client guide](client.md)
+
+- [Export and import](#export-and-import)
+- [Top-level structure](#top-level-structure)
+- [Fields](#session)
+- [Integrity](#integrity)
+- [Conflict policies](#conflict-policies)
+
+## Export and import
+
+Export from a session you can read and import into a session where you have write
+access. The CLI prints JSON to stdout unless you provide `--output`:
+
+```bash
+# Full session
+ccp-client export my-session --output research.droplet
+# One shelf
+ccp-client export my-session --shelf recon --output recon.droplet
+# One book
+ccp-client export my-session --shelf recon --book endpoints --output endpoints.droplet
+# Named entries in a book; repeat --entry to select more
+ccp-client export my-session --shelf recon --book endpoints --entry routes --output routes.droplet
+# Content without append history
+ccp-client export my-session --shelf recon --no-history --output recon-clean.droplet
+```
+
+Enroll in the target session before importing. Choose a conflict policy deliberately:
+
+```bash
+ccp-client import another-session research.droplet
+ccp-client import another-session research.droplet --policy overwrite
+ccp-client import another-session research.droplet --policy skip
+ccp-client import another-session research.droplet --policy merge-history
+```
+
+The default `error` policy aborts on collisions. `overwrite` replaces existing
+entries; `skip` keeps them. `merge-history` keeps existing content and adds missing
+history records by operation ID. A book selector requires a shelf; entry selectors
+require both. Keep history when handing off append attribution or temporal context.
+
+The `.droplet` extension identifies the JSON bundle. The server verifies the entry
+digest before import, rolls back in-memory import changes if persistence fails,
+and records the transfer. Only import bundles from sources you trust.
+
 
 ## Top-level structure
 
+This complete example exports an empty session. The digest covers its empty entry
+array. Examples of entries and history follow below.
+
 ```json
 {
-  "session": { ... },
-  "selector": { ... },
+  "session": {
+    "session_name": "my-session",
+    "session_id": 1,
+    "description": "Research context",
+    "owner": "",
+    "labels": [],
+    "visibility": "private",
+    "purpose": "Research"
+  },
+  "selector": {
+    "scope": "Session",
+    "include_history": true
+  },
   "exported_at": "1775031101",
-  "entries": [ ... ],
-  "bundle_sha256": "a1b2c3..."
+  "entries": [],
+  "bundle_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 }
 ```
 
@@ -72,7 +129,7 @@ Each entry in the `entries` array:
   "book_name": "findings",
   "shelf_description": "collected research",
   "book_description": "key findings",
-  "history": [ ... ]
+  "history": []
 }
 ```
 
@@ -116,7 +173,7 @@ Each item in an entry's `history` array:
 
 ## Integrity
 
-The `bundle_sha256` field is a lowercase hex SHA-256 digest of the JSON-serialized `entries` array. The server computes the hash independently on import and rejects the bundle if it doesn't match. This detects mismatches and file corruption. It is an unkeyed checksum, not proof of origin: a sender can change the entries and recompute the digest.
+The `bundle_sha256` field is a lowercase hex SHA-256 digest of the JSON-serialized `entries` array. The server computes the hash independently on import and rejects the bundle if it doesn't match. This detects mismatches and file corruption. A sender can change the entries and recompute the digest, so authenticity depends on trusting the sender separately.
 
 ## Conflict policies
 

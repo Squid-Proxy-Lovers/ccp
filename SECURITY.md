@@ -1,4 +1,6 @@
-# Security Policy
+# Security policy
+
+[Documentation index](docs/README.md)
 
 ## Reporting a vulnerability
 

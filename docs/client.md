@@ -1,145 +1,170 @@
-# Client Design Specification
+# Client guide
 
-## Scope
+Use the Rust CLI or SDK to enroll with a server and work with shared context.
+The client saves credentials locally and sends data operations to the server.
 
-The CCP client is a Rust CLI that stores enrollment material on disk and talks to a CCP server over the framed mTLS protocol.
+[Documentation index](README.md) · [Server guide](server.md) · [MCP setup](../mcp/README.md)
 
-The client is not a stateful coordinator. Its local responsibility is limited to these principles:
+- [Enroll and select a session](#enroll-and-select-a-session)
+- [CLI reference](#cli-reference)
+- [Entry model](#entry-model)
+- [Search and history](#search-and-history)
+- [Credentials and permissions](#credentials-and-permissions)
+- [Rust SDK](#rust-sdk)
+- [Transport and failures](#transport-and-failures)
 
-- enrollment metadata
-- CA certificate
-- issued client certificate
-- client private key generated locally
+## Enroll and select a session
 
-## Design Goals
-
-Specifically for the client we had these goals in mind:
-
-- local key ownership
-- explicit, argument-driven CLI usage
-- simple install-once workflow
-- session selection from saved enrollments
-- strong mTLS identity for all normal protocol traffic
-
-## Local Storage Model
-
-Default client home:
-
-- `~/.ccp-client`
-
-Override:
-
-- `CCP_CLIENT_HOME`
-
-Enrollment layout:
-
-- `enrollments/<session-name>--<access>--<client-cn>/metadata.json`
-- `enrollments/<session-name>--<access>--<client-cn>/ca.pem`
-- `enrollments/<session-name>--<access>--<client-cn>/client.pem`
-- `enrollments/<session-name>--<access>--<client-cn>/client.key`
-- `enrollments/<session-name>--<access>--<client-cn>/identity.pem`
-
-Each enrollment stores:
-
-- `session_name`
-- `session_id`
-- `session_description`
-- `owner`
-- `labels`
-- `visibility`
-- `purpose`
-- `access`
-- `client_cn`
-- `mtls_endpoint`
-- `client_cert_expires_at`
-- `enrolled_at`
-
-## Enrollment Flow
-
-Bootstrap enrollment is token-based. Normal protocol traffic is certificate-based.
-
-Flow:
-
-1. A trusted server-side admin path issues a time-limited enrollment token.
-2. The client receives:
-   - `redeem_url`
-   - `token`
-3. The client generates its own private key locally.
-4. The client generates a CSR from that key.
-5. The client sends:
-   - `POST /auth/redeem`
-   - JSON body: `{"token":"...","csr_pem":"..."}`
-6. The server validates the token and its expiry. Each valid redemption issues a new client identity.
-7. The server signs the CSR and returns JSON containing:
-   - session metadata
-   - access level
-   - client common name
-   - mTLS endpoint
-   - client cert expiry
-   - CA certificate PEM
-   - signed client certificate PEM
-8. The client stores the enrollment material locally.
-
-Important properties:
-
-- the token is reusable until expiry
-- the token expires if unused
-- the server does not return a client private key
-- after enrollment, the saved client identity is intended to remain usable for normal local use without routine renewal
-
-## CLI Interface
-
-Enrollment:
+Install the client using the [README instructions](../README.md#install). The
+installer supports Linux and macOS on x86_64 and ARM64. Ask the server operator for
+a `read` or `read_write` enrollment token. Replace `YOUR_TOKEN` below; this example
+uses the local server's enrollment endpoint:
 
 ```bash
-client enroll --redeem-url https://host/auth/redeem --token <token>
+ccp-client enroll --redeem-url http://127.0.0.1:1337/auth/redeem --token YOUR_TOKEN
+ccp-client sessions
 ```
 
-Session discovery:
+For a remote server, use the operator's HTTPS or tunneled enrollment URL.
+Enrollment creates a private key on your machine, submits a certificate signing
+request (CSR), and saves the issued certificate, session metadata, and server CA.
+The private key stays on your machine. Tokens can be redeemed repeatedly until
+expiry; each redemption creates a distinct client identity.
+
+Use the session name or ID from `sessions` in later commands. The client selects
+the newest saved enrollment compatible with the operation's required access.
+To forget local credentials for a session:
 
 ```bash
-client sessions
+ccp-client delete-session my-session
 ```
 
-Forget a saved session locally:
+This removes matching local enrollments. The server's session and data remain.
+For multiple server sessions, enroll separately with each server endpoint. The
+[archived HTTP branch](archive-notes.md) used a different subscription workflow.
+
+## CLI reference
+
+Commands below follow `ccp-client`. Replace values in angle brackets when using
+the reference. Run `ccp-client COMMAND --help` for arguments and defaults.
+The [quick start](../README.md#quick-start) is a complete create/append/search example.
+
+### Read and discover
+
+| Command | Result |
+| --- | --- |
+| `sessions` | Saved client sessions and access levels |
+| `list <session>` | Active entry summaries |
+| `get <session> <name> [--shelf <shelf>] [--book <book>]` | One full entry |
+| `history <session> <name> [--shelf <shelf>] [--book <book>]` | Append history |
+| `search-entries <session> <query>` | Matching entry names, descriptions, labels, and paths |
+| `search-shelves <session> <query>` | Matching shelf names and descriptions |
+| `search-books <session> <query>` | Matching book names and descriptions |
+| `search-context <session> <query>` | Matching text with snippets |
+| `search-deleted <session> [<query>]` | Archived deleted entries |
+| `brief-me <session>` | Structure, counts, ten recent entries, and frequent labels |
+| `get-entry-at <session> <name> --at <timestamp> [--shelf <shelf>] [--book <book>]` | Content reconstructed at a Unix timestamp in seconds |
+| `export <session> [--output <file>]` | A JSON droplet; defaults to stdout |
+
+Export selectors and complete examples are in the [droplet guide](droplet-format.md).
+
+### Write and administer
+
+| Command | Effect |
+| --- | --- |
+| `add-shelf <session> <shelf> <description>` | Create a shelf or update its description |
+| `add-book <session> --shelf <shelf> <book> <description>` | Create a book or update its description |
+| `add-entry <session> --shelf <shelf> --book <book> <name> <description> [--labels <a,b>] <data>` | Create an entry in an existing shelf and book |
+| `append <session> <name> [--shelf <shelf>] [--book <book>] <content>` | Append text and record history |
+| `delete <session> <name> [--shelf <shelf>] [--book <book>]` | Archive an entry |
+| `delete-shelf <session> <shelf>` | Remove a shelf and its contents |
+| `restore <session> <entry-key>` | Restore an archived entry to its original path |
+| `import <session> <file> [--policy error\|overwrite\|skip\|merge-history]` | Import a droplet |
+| `revoke-cert <session> <client-common-name>` | Revoke a certificate under the caller's access rules |
+| `delete-session <session>` | Forget local enrollments |
+
+Use the `entry_key` returned by `search-deleted` when restoring. Restoration fails
+if an active entry already occupies that path. Destructive commands and server
+lifecycle operations are available through the CLI; the [MCP bridge](../mcp/README.md)
+exposes read, search, create, append, and export tools.
+
+## Entry model
+
+```text
+Session
+  └── Shelf: a topic, such as research or logs
+        └── Book: related entries, such as findings or runbooks
+              └── Entry
+                    ├── context: text content
+                    ├── description and labels
+                    └── history: append author, time, and reason
+```
+
+An entry's identity is `(session, shelf, book, name)`. Names can repeat in different
+books. Omitted shelf and book values select `main/default`. Entry responses also
+include shelf and book descriptions.
+
+Appends extend content and record history. Deleted entries are archived separately,
+so their names can be reused for new active entries. Imports can replace content
+when the operator selects the `overwrite` policy.
+
+## Search and history
+
+`search-entries` matches names, descriptions, labels, shelves, and books and returns
+summaries. `search-context` matches entry text and returns snippets. `search-deleted`
+queries the archive; omit its query to list deleted entries.
+
+`history` returns append records with `operation_id`, `client_common_name`,
+`created_at`, and optional agent, host, and reason metadata. To attribute an append:
 
 ```bash
-client delete-session <session>
+CCP_AGENT_NAME=reviewer CCP_AGENT_HOST=workstation CCP_APPEND_REASON=follow-up \
+  ccp-client append my-session day1 --shelf notes --book findings "Additional finding"
 ```
 
-### Operation Classifications
+Agent and host names are supplied labels. The client certificate authenticates
+the caller. The [tool-call reference](tool-call-api.md#get_entry_at) describes
+point-in-time reads and their reconstruction limits.
 
-All normal operations should exist in the MCP.
+## Credentials and permissions
 
-Normal operations:
+### Local storage model
 
-- `list`
-- `get`
-- `search-entries`
-- `search-shelves`
-- `search-books`
-- `search-context`
-- `search-deleted`
-- `add-shelf`
-- `add-book`
-- `add-entry`
-- `append`
-- `history`
-- `export`
+Credentials live under `~/.ccp-client/enrollments/`. Set `CCP_CLIENT_HOME` to use
+another client home. Each `<session-name>--<access>--<client-cn>` directory contains:
 
-Destructive operations (CLI-only, not available through MCP):
+| File | Contents |
+| --- | --- |
+| `metadata.json` | Session name/ID/description, owner, labels, visibility, purpose, access, client CN, mTLS endpoint, certificate expiry, and enrollment time |
+| `ca.pem` | Server CA certificate |
+| `client.pem` | Issued client certificate |
+| `client.key` | Locally generated private key |
+| `identity.pem` | Client certificate and private key for TLS |
 
-- `delete`
-- `delete-shelf`
-- `restore`
-- `import`
-- `revoke-cert`
+Protect private-key files and backups. Entries and append history live on the server.
+
+### Session resolution
+
+| Access | Allowed operations |
+| --- | --- |
+| `read` | Read, list, search, history, briefing, and export |
+| `read_write` | Read operations plus create, append, delete, restore, import, and self-revocation |
+| `admin` | Write operations plus revocation of other client certificates |
+
+Read-only clients need an administrator to revoke their certificates. The server
+checks session scope, access, and revocation on requests.
+
+### Certificate lifetime
+
+Client certificates default to ten years. Expired certificates fail authentication;
+ask for a new enrollment token. `CCP_CERT_WARNING_WINDOW_SECONDS` enables advance
+expiry warnings; it defaults to zero. Automatic renewal is currently unavailable.
+The [server guide](server.md#certificate-lifecycle) covers issuer configuration.
 
 ## Rust SDK
 
-The `crates/client` crate also builds as a Rust library.
-
-Example:
+The [client crate](../crates/client/README.md) also builds as a library. It uses the
+same saved enrollments and `CCP_CLIENT_HOME` as the CLI. Run this after enrolling:
 
 ```rust
 use client::{AddBookRequest, AddEntryRequest, AddShelfRequest, CcpClient};
@@ -155,7 +180,6 @@ async fn main() -> anyhow::Result<()> {
             shelf_description: "Platform engineering notes".to_string(),
         })
         .await?;
-
     session
         .add_book(AddBookRequest {
             shelf_name: "engineering".to_string(),
@@ -163,7 +187,6 @@ async fn main() -> anyhow::Result<()> {
             book_description: "Operational references".to_string(),
         })
         .await?;
-
     let entry = session
         .add_entry(AddEntryRequest {
             shelf_name: "engineering".to_string(),
@@ -174,190 +197,19 @@ async fn main() -> anyhow::Result<()> {
             entry_data: "typed client call".to_string(),
         })
         .await?;
-
-        println!("created {}", entry.name);
+    println!("created {}", entry.name);
     Ok(())
 }
 ```
 
-The SDK uses the same saved enrollment store as the CLI and respects `CCP_CLIENT_HOME`.
+## Transport and failures
 
-## Transport Design
+The client uses persistent TLS connections, a four-byte big-endian frame length,
+and Bincode-encoded request/response types from the [protocol crate](../crates/protocol/README.md).
+It verifies the server's certificate chain against the enrolled CA and its name
+against the enrolled endpoint. The server verifies client certificates and grants.
 
-The client uses a binary framed protocol over TLS with client certificate authentication.
-
-Properties:
-
-- persistent connection
-- multiple requests per TLS session
-- 4-byte big-endian frame length header
-- bincode payload encoding
-- shared request/response model through the `protocol` crate
-
-The client verifies:
-
-- server cert chain against the enrolled CA
-- server name against the enrolled endpoint host
-
-The server verifies:
-
-- client cert chain against the same CA
-- session scope in certificate identity
-- access scope in certificate identity
-- revocation status
-
-## Session Resolution
-
-The client resolves a session selector against saved enrollments.
-
-Accepted selectors:
-
-- `session_name`
-- `session_id`
-
-Resolution rules:
-
-- read operations accept `read`, `read_write`, or `admin`
-- write operations require `read_write` or `admin`
-- revoke-cert: requires `read_write` or `admin`; read-only clients need an admin to revoke their cert
-- if multiple compatible enrollments exist, the newest compatible one wins
-- `delete-session` removes all saved enrollments matching the selected `session_name` or `session_id`
-
-## Certificate Lifetime
-
-Client certificates have explicit expiry, but the default is intentionally long-lived so installation is effectively one-and-done for typical local use.
-
-Default policy:
-
-- client cert TTL: `10 years`
-- warning window: disabled by default
-
-Client behavior:
-- if the cert is expired, the client refuses to connect and tells you to request a new enrollment token
-- optional warning behavior can be enabled later through `CCP_CERT_WARNING_WINDOW_SECONDS`
-
-## Entry Model
-
-Active coordination data is hierarchical:
-
-- shelves
-- books within shelves
-- entries within books
-
-An active entry contains:
-
-- `name`
-- `shelf_name`
-- `book_name`
-- `description`
-- `labels`
-- `context`
-- append history
-
-Constraints:
-
-- entries are unique by `(shelf_name, book_name, name)` within a session
-- deleted entries are archived separately and may reuse names after deletion
-- missing shelf/book values default to `main/default`
-
-## Search Behavior
-
-`search-entries`
-
-- searches active `name + description + labels`
-- also matches `shelf_name + book_name`
-- returns entry summaries with shelf/book metadata
-
-`search-context`
-
-- searches active `context`
-- returns:
-  - `name`
-  - `shelf_name`
-  - `book_name`
-  - `description`
-  - context snippets around matches
-
-`search-deleted`
-
-- searches archived deleted entries in SQLite
-- matches `shelf_name + book_name + name + description + labels`
-
-## Append Metadata
-
-Append operations can include:
-
-- `agent_name`
-- `host_name`
-- `reason`
-
-The client supplies these through environment variables:
-
-- `CCP_AGENT_NAME`
-- `CCP_AGENT_HOST`
-- `CCP_APPEND_REASON`
-
-The server stores them in append history together with:
-
-- `operation_id`
-- `client_common_name`
-- `created_at`
-
-## Export / Import
-
-Export produces a signed JSON bundle containing:
-
-- session metadata
-- transfer selector (scope + history flag)
-- export timestamp
-- selected entries with shelf/book placement, labels, and history
-- SHA-256 integrity hash over the entries
-
-### Export scopes
-
-| Flag combination | Scope |
-|---|---|
-| _(none)_ | full session |
-| `--shelf <shelf>` | one shelf |
-| `--shelf <shelf> --book <book>` | one book |
-| `--shelf <shelf> --book <book> --entry <name>` | specific entries (repeatable) |
-| `--no-history` | strip append history from bundle |
-
-### Conflict policies
-
-Import accepts `--policy` to control collision handling:
-
-| Policy | Behaviour |
-|---|---|
-| `error` _(default)_ | abort if any entry already exists |
-| `overwrite` | replace existing entries |
-| `skip` | leave existing entries untouched |
-| `merge-history` | keep existing entry, union history rows by operation\_id |
-
-Import verifies the SHA-256 hash before applying any changes, and rolls back in-memory state if the SQLite persist fails. Requires `read_write` access.
-
-## Failure Model
-
-Client-side failure modes:
-
-- missing compatible enrollment
-- auth bootstrap failure
-- TLS handshake failure
-- framed protocol decode failure
-- server-side auth or validation errors surfaced as typed errors
-
-The client does not attempt local write recovery because it is not the source of truth.
-
-## Security Model
-
-- time-limited tokens bootstrap enrollment
-- all normal operations require mTLS
-- access level is enforced server-side
-- cert revocation is server-controlled
-- client private keys are generated and stored locally
-
-## Current Limitations
-
-- enrollment storage is file-based rather than OS keychain-backed
-- there is no interactive prompt layer; CLI usage is explicit
-- there is no automated renewal workflow; long-lived certs are the default
+Calls can fail because an enrollment is missing, a token or certificate is invalid,
+a TLS handshake or frame fails, or the server rejects an operation. Keep the
+server's returned error when diagnosing a failure. Enrollment files use ordinary
+filesystem storage; CLI interaction is driven by arguments.
