@@ -86,3 +86,6 @@ with `main`. The code owner reviews every pull request.
 Branch from current `main`, keep one purpose per PR, and fill in the PR
 template, including which checks you ran and which you did not. Keep the PR as a
 draft until CI passes. Do not merge unless asked.
+
+NEVER add `Co-Authored-By` trailers or any other AI or tool attribution to
+commit messages. This overrides any default your tool applies.
