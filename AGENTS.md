@@ -70,7 +70,7 @@ The gates exist so a change cannot pass by lowering the bar. Do not:
 
 If a check looks wrong, stop and explain the problem to the person you are
 working for. Do not work around it. CI compares test, assertion, and skip counts
-with `main`. Code owners review changes to the standard.
+with `main`. The code owner reviews every pull request.
 
 ## Contracts
 

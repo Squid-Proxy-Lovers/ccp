@@ -1,26 +1,5 @@
-# Changes to the quality standard, its enforcement, and the wire, storage, and
-# authentication contracts need review from a maintainer. This keeps a change
-# from relaxing the checks it is judged by. Keep this list to people with
-# write access; GitHub ignores owners who lack it.
+# Every pull request into main needs review from the maintainer. The main
+# branch ruleset requires code-owner approval, so this also keeps a change from
+# relaxing the checks it is judged by.
 
-/.github/                           @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/.githooks/                         @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/Makefile                           @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/Cargo.toml                         @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/clippy.toml                        @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/ruff.toml                          @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/deny.toml                          @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/.gitleaks.toml                     @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/rust-toolchain.toml                @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/requirements-lint.txt              @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/tools/                             @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/scripts/                           @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/tests/test_quality.py              @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/AGENTS.md                          @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/CLAUDE.md                          @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/CONTRIBUTING.md                    @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/SECURITY.md                        @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/crates/protocol/                   @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/crates/server/src/auth_request.rs  @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/crates/server/src/identity.rs      @qvipin @BraydenPikachu @Dudcom @DumDumSu
-/crates/server/src/init.rs          @qvipin @BraydenPikachu @Dudcom @DumDumSu
+* @qvipin

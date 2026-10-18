@@ -113,9 +113,8 @@ A change is ready for review when:
 - Every exception states its reason next to the code.
 - The PR description states what was verified, including what was not run.
 
-Changes to the standard itself (lint and tool configuration, workflows,
-`scripts/`, `tools/`, and agent instructions) and to the protocol, storage, and
-authentication contracts need a code-owner review; see `.github/CODEOWNERS`.
+Every pull request needs approval from the code owner in `.github/CODEOWNERS`
+and passing required checks before it merges into `main`.
 
 Dependency vulnerabilities fail the audit. Existing maintenance notices and
 duplicate versions receive separate dependency review. The license allowlist records
