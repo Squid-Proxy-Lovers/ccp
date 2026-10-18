@@ -1,0 +1,52 @@
+name: PR gates
+
+# Checks that compare a pull request with the branch it merges into. Label
+# changes re-run them so a maintainer can approve a reviewed test reduction.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-gates-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  test-integrity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Tests, assertions, and skips
+        env:
+          BASE_REF: origin/${{ github.base_ref }}
+          CCP_ALLOW_TEST_REDUCTION: ${{ contains(github.event.pull_request.labels.*.name, 'allow-test-reduction') && '1' || '0' }}
+        run: python scripts/check-test-integrity.py --base "$BASE_REF"
+
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+          cache: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: make tools
+      - name: Protocol API compatibility
+        env:
+          BASE: origin/${{ github.base_ref }}
+        run: make semver BASE="$BASE"

@@ -134,5 +134,72 @@ expect_success failure bash -c 'exit 7'
         subprocess.run([shutil.which("bash"), "-c", program], check=True, capture_output=True)  # noqa: S603
 
 
+class TestIntegrityGateTests(unittest.TestCase):
+    BASE = "#[test]\nfn checks() {\n    assert_eq!(1, 1);\n}\n"
+
+    def run_check(self, change, allow=False):
+        checker = load_script("check-test-integrity.py")
+        git = shutil.which("git")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "lib.rs").write_text(self.BASE)
+            # Fixed Git commands initialize and commit only the fixture repository.
+            for command in (
+                ["init", "--quiet"],
+                ["add", "lib.rs"],
+                ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "base"],
+            ):
+                subprocess.run([git, *command], cwd=root, check=True)  # noqa: S603
+            (root / "lib.rs").write_text(change)
+            environment = {"CCP_ALLOW_TEST_REDUCTION": "1"} if allow else {}
+            with (
+                patch.object(checker, "ROOT", root),
+                patch.object(sys, "argv", ["check", "--base", "HEAD"]),
+                patch.dict("os.environ", environment),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                checker.main()
+
+    def test_unchanged_and_added_checks_pass(self):
+        self.run_check(self.BASE)
+        self.run_check(self.BASE + "#[test]\nfn more() {\n    assert!(true);\n}\n")
+
+    def test_removed_assertion_fails(self):
+        with self.assertRaises(SystemExit):
+            self.run_check("#[test]\nfn checks() {}\n")
+
+    def test_new_ignore_fails_unless_reviewed(self):
+        ignored = self.BASE.replace("#[test]", "#[test]\n#[ignore]")
+        with self.assertRaises(SystemExit):
+            self.run_check(ignored)
+        self.run_check(ignored, allow=True)
+
+
+class CoverageGateTests(unittest.TestCase):
+    def run_check(self, percent):
+        checker = load_script("check-coverage.py")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "coverage.json"
+            report.write_text(json.dumps({"data": [{"totals": {"lines": {"percent": percent}}}]}))
+            baseline = root / "baseline.json"
+            baseline.write_text(json.dumps({"rust_line_percent": 60.0}))
+            with (
+                patch.object(checker, "BASELINE", baseline),
+                patch.object(checker, "ROOT", root),
+                patch.object(sys, "argv", ["check", str(report)]),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                checker.main()
+
+    def test_coverage_within_tolerance_passes(self):
+        self.run_check(59.9)
+        self.run_check(75.0)
+
+    def test_coverage_drop_fails(self):
+        with self.assertRaises(SystemExit):
+            self.run_check(59.0)
+
+
 if __name__ == "__main__":
     unittest.main()

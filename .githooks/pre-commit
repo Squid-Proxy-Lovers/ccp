@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fast local gate; CI runs the complete standard. Enable with `make hooks`.
+set -euo pipefail
+make --no-print-directory fmt lint-python lint-secrets
