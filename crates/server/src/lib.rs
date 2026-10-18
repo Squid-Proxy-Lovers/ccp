@@ -52,7 +52,15 @@ const TLS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const FRAME_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "another component may already have installed the process crypto provider"
+    )]
     let _ = ring::default_provider().install_default();
     let bootstrap = initialize_cpp_server(session_name).await?;
     let journal = Arc::new(JournalHandle::start(journal_path())?);
@@ -157,7 +165,10 @@ pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
                     }
                 });
             }
-            #[allow(unreachable_code)]
+            #[expect(
+                unreachable_code,
+                reason = "the accept loop only exits by returning; this fixes the task's Result type"
+            )]
             Ok::<(), anyhow::Error>(())
         }
     });
@@ -207,7 +218,10 @@ pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
                     }
                 });
             }
-            #[allow(unreachable_code)]
+            #[expect(
+                unreachable_code,
+                reason = "the accept loop only exits by returning; this fixes the task's Result type"
+            )]
             Ok::<(), anyhow::Error>(())
         }
     });
@@ -232,7 +246,15 @@ pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
     shutdown.begin_shutdown();
     auth_task.abort();
     mtls_task.abort();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "aborted listener tasks report cancellation, which shutdown expects"
+    )]
     let _ = auth_task.await;
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "aborted listener tasks report cancellation, which shutdown expects"
+    )]
     let _ = mtls_task.await;
     shutdown.wait_for_idle().await;
 
@@ -271,25 +293,39 @@ async fn read_full_auth_request(
         if n == 0 {
             bail!("auth connection closed before request complete");
         }
-        buf.extend_from_slice(&header_buf[..n]);
+        buf.extend_from_slice(
+            header_buf
+                .get(..n)
+                .context("auth read exceeded its buffer")?,
+        );
         if buf.len() > MAX_AUTH_REQUEST_SIZE {
             bail!("auth request exceeds max size");
         }
         if let Some(header_end) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             let header_len = header_end + 4;
-            let content_length = parse_content_length(&buf[..header_len]).unwrap_or(0);
+            let content_length = buf
+                .get(..header_len)
+                .and_then(parse_content_length)
+                .unwrap_or(0);
             let needed = header_len + content_length;
             while buf.len() < needed {
                 let to_read = (needed - buf.len()).min(header_buf.len());
+                let read_buf = header_buf
+                    .get_mut(..to_read)
+                    .context("auth read exceeded its buffer")?;
                 let n = tokio::select! {
                     _ = shutdown.changed() => bail!("shutdown during auth request read"),
-                    result = timeout(AUTH_REQUEST_READ_TIMEOUT, socket.read(&mut header_buf[..to_read])) => result,
+                    result = timeout(AUTH_REQUEST_READ_TIMEOUT, socket.read(read_buf)) => result,
                 }
                 .context("auth request read timed out")??;
                 if n == 0 {
                     bail!("auth connection closed before body complete");
                 }
-                buf.extend_from_slice(&header_buf[..n]);
+                buf.extend_from_slice(
+                    header_buf
+                        .get(..n)
+                        .context("auth read exceeded its buffer")?,
+                );
                 if buf.len() > MAX_AUTH_REQUEST_SIZE {
                     bail!("auth request exceeds max size");
                 }
@@ -299,13 +335,18 @@ async fn read_full_auth_request(
     }
 }
 
+#[cfg(test)]
+#[path = "tests/lib.rs"]
+mod tests;
+
 fn parse_content_length(headers: &[u8]) -> Option<usize> {
     let headers_str = std::str::from_utf8(headers).ok()?;
     for line in headers_str.lines() {
         let line = line.trim();
-        if line.to_lowercase().starts_with("content-length:") {
-            let value = line[15..].trim();
-            return value.parse().ok();
+        if let Some((name, value)) = line.split_once(':')
+            && name.eq_ignore_ascii_case("content-length")
+        {
+            return value.trim().parse().ok();
         }
     }
     None
@@ -529,6 +570,10 @@ where
 fn install_crash_persistence_hook(state: Arc<ServerState>) {
     let previous = panic::take_hook();
     panic::set_hook(Box::new(move |panic_info| {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "the panic hook must not panic; persistence here is best effort"
+        )]
         let _ = state.try_persist_snapshot_to_sqlite();
         previous(panic_info);
     }));
@@ -576,6 +621,10 @@ impl ShutdownCoordinator {
         if self.is_shutting_down.swap(true, Ordering::AcqRel) {
             return;
         }
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "no listeners remaining means there is nobody left to notify"
+        )]
         let _ = self.shutdown_tx.send(true);
         if self.active_requests.load(Ordering::Acquire) == 0 {
             self.idle_notify.notify_waiters();

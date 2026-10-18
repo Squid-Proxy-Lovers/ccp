@@ -111,10 +111,18 @@ impl TestContext {
 
 impl Drop for TestContext {
     fn drop(&mut self) {
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best-effort cleanup while dropping the test fixture"
+        )]
         let _ = self.journal.shutdown();
         unsafe {
             env::remove_var(SERVER_DATA_DIR_ENV);
         }
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best-effort cleanup while dropping the test fixture"
+        )]
         let _ = fs::remove_dir_all(&self.data_dir);
     }
 }
@@ -338,6 +346,10 @@ async fn journal_replay_restores_append_metadata() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 async fn search_and_restore_deleted_entry_round_trip() {
     let ctx = TestContext::new("delete-restore")
         .await
@@ -457,6 +469,10 @@ async fn search_and_restore_deleted_entry_round_trip() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 async fn export_and_import_preserve_shelf_and_book() {
     let ctx = TestContext::new("export-import-hierarchy")
         .await
@@ -889,10 +905,10 @@ async fn search_cache_evicts_when_exceeding_limit() {
     // fill up the cache past the 256-entry limit
     for i in 0..260 {
         let query = format!("unique-query-{i}");
-        let _ = ctx
-            .state
+        ctx.state
             .search_entries(ctx.session_id, &auth, &query)
-            .await;
+            .await
+            .expect("search should succeed");
     }
 
     // the cache should have been cleared and repopulated (not 260 entries)
@@ -1858,14 +1874,14 @@ async fn import_v2_flushes_query_caches() {
         .expect("add");
 
     // Prime the search caches.
-    let _ = ctx
-        .state
+    ctx.state
         .search_entries(ctx.session_id, &auth, "initial")
-        .await;
-    let _ = ctx
-        .state
+        .await
+        .expect("search should succeed");
+    ctx.state
         .search_context(ctx.session_id, &auth, "initial context")
-        .await;
+        .await
+        .expect("search should succeed");
 
     // Verify caches are populated.
     {

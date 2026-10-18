@@ -252,6 +252,10 @@ fn schema_version_is_recorded_after_init() {
     unsafe {
         std::env::remove_var(SERVER_DATA_DIR_ENV);
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best-effort cleanup of a temporary test directory"
+    )]
     let _ = std::fs::remove_dir_all(&data_dir);
 }
 
@@ -279,5 +283,27 @@ fn health_check_includes_version_info() {
     unsafe {
         std::env::remove_var(SERVER_DATA_DIR_ENV);
     }
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "best-effort cleanup of a temporary test directory"
+    )]
     let _ = std::fs::remove_dir_all(&data_dir);
+}
+
+#[test]
+fn common_name_prefers_comma_then_newline_terminators() {
+    assert_eq!(
+        extract_cn_from_pem("Subject: CN= ccp-client ,O=ccp\n"),
+        Some("ccp-client".to_string())
+    );
+    assert_eq!(
+        extract_cn_from_pem("Subject: CN=ccp-client\nIssuer: O=ccp, CN=root"),
+        Some("ccp-client\nIssuer: O=ccp".to_string())
+    );
+    assert_eq!(
+        extract_cn_from_pem("Subject: CN=ccp-ä\n"),
+        Some("ccp-ä".to_string())
+    );
+    assert_eq!(extract_cn_from_pem("Subject: CN=unterminated"), None);
+    assert_eq!(extract_cn_from_pem("no common name"), None);
 }

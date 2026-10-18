@@ -130,6 +130,10 @@ impl JournalHandle {
         })
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a send error only carries the unsent command; the writer's recorded failure is reported"
+    )]
     pub fn append(&self, entry: JournalEntry) -> anyhow::Result<()> {
         self.check_health()?;
         self.sender
@@ -139,6 +143,10 @@ impl JournalHandle {
         Ok(())
     }
 
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a send error only carries the unsent command; the writer's recorded failure is reported"
+    )]
     pub fn shutdown(&self) -> anyhow::Result<()> {
         let (ack_tx, ack_rx) = mpsc::sync_channel(1);
         self.sender
@@ -249,8 +257,16 @@ fn run_journal_writer(
                                 .and_then(|_| file.flush())
                                 .context("failed to flush journal on shutdown")
                             {
+                                #[expect(
+                                    clippy::let_underscore_must_use,
+                                    reason = "the requester may have stopped waiting for this acknowledgement"
+                                )]
                                 let _ = done.send(Err(error));
                             } else {
+                                #[expect(
+                                    clippy::let_underscore_must_use,
+                                    reason = "the requester may have stopped waiting for this acknowledgement"
+                                )]
                                 let _ = done.send(Ok(()));
                             }
                             return;
@@ -268,6 +284,10 @@ fn run_journal_writer(
             }
             JournalCommand::Shutdown(done) => {
                 let result = file.flush().context("failed to flush journal on shutdown");
+                #[expect(
+                    clippy::let_underscore_must_use,
+                    reason = "the requester may have stopped waiting for this acknowledgement"
+                )]
                 let _ = done.send(result);
                 return;
             }

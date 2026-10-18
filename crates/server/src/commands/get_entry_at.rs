@@ -50,9 +50,11 @@ impl ServerState {
             }
             appended_total.push_str(&hist.appended_content);
         }
-        let initial = if entry.context.ends_with(&appended_total) && !appended_total.is_empty() {
-            let prefix_len = entry.context.len() - appended_total.len();
-            let prefix = &entry.context[..prefix_len];
+        let prefix = entry
+            .context
+            .strip_suffix(appended_total.as_str())
+            .filter(|_| !appended_total.is_empty());
+        let initial = if let Some(prefix) = prefix {
             prefix.trim_end_matches('\n').to_string()
         } else if entry.history.is_empty() {
             entry.context.clone()

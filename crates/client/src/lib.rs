@@ -422,6 +422,10 @@ impl SessionClient {
 }
 
 pub async fn run_cli() -> anyhow::Result<()> {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "another component may already have installed the process crypto provider"
+    )]
     let _ = rustls::crypto::ring::default_provider().install_default();
     commands::run().await
 }

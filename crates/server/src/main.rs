@@ -4,6 +4,7 @@
 
 use std::io::{self, Write};
 
+use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 const SERVER_INPUT_FORMATS: &str = r#"Input formats:
@@ -86,7 +87,7 @@ async fn main() -> anyhow::Result<()> {
     server::run_server(
         cli.session_name
             .as_deref()
-            .expect("clap should require a session name when no subcommand is present"),
+            .context("clap should require a session name when no subcommand is present")?,
     )
     .await
 }
@@ -112,12 +113,24 @@ fn exit_with_cli_error(error: clap::Error, input_formats: &str) -> ! {
     //     server issue-token <session> <read|read_write> [--ttl <seconds>]
     let use_stderr = error.use_stderr();
     let exit_code = error.exit_code();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "printing help is best effort when the terminal has closed"
+    )]
     let _ = error.print();
     if use_stderr {
         let mut stderr = io::stderr();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "printing help is best effort when the terminal has closed"
+        )]
         let _ = writeln!(stderr, "\n{input_formats}");
     } else {
         let mut stdout = io::stdout();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "printing help is best effort when the terminal has closed"
+        )]
         let _ = writeln!(stdout, "\n{input_formats}");
     }
     std::process::exit(exit_code);

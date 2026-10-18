@@ -11,6 +11,10 @@ use protocol::{ConflictPolicy, ImportBundleResult, TransferBundle};
 use super::super::*;
 
 impl ServerState {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "legacy function predating the size and complexity limits; split it before extending"
+    )]
     pub async fn import_bundle(
         &self,
         session_id: i64,
@@ -271,11 +275,19 @@ impl ServerState {
             }
 
             let reason = error.to_string();
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "failure records are best effort; the original import error is returned"
+            )]
             let _ = self.journal.append(JournalEntry::TransferImportFailed {
                 session_id,
                 bundle_sha256: bundle.bundle_sha256.clone(),
                 reason: reason.clone(),
             });
+            #[expect(
+                clippy::let_underscore_must_use,
+                reason = "failure records are best effort; the original import error is returned"
+            )]
             let _ = super::super::database::persist_transfer_log(
                 session_id,
                 "import",

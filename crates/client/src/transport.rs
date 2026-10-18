@@ -235,8 +235,8 @@ pub(crate) async fn perform_export(
     {
         ServerResponse::ExportedBundle(bundle) => Ok(bundle),
         ServerResponse::Error(error) => {
-            let _ = error_response_to_anyhow(error)?;
-            unreachable!("error_response_to_anyhow always returns Err");
+            error_response_to_anyhow(error)?;
+            bail!("server returned an error response without details")
         }
         other => bail!("unexpected server response for export: {other:?}"),
     }

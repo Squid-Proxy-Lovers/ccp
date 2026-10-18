@@ -15,9 +15,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def source_files() -> list[Path]:
+    git = shutil.which("git")
+    if git is None:
+        raise SystemExit("git is required to list repository files")
     # The executable and arguments are fixed; Git returns repository-relative paths.
     result = subprocess.run(  # noqa: S603
-        [shutil.which("git"), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        [git, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
         cwd=ROOT,
         capture_output=True,
         check=True,

@@ -25,6 +25,11 @@ fn build_version_info(compatible: bool) -> ServerVersionInfo {
     }
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 pub async fn handle_message_request(
     state: &ServerState,
     auth_context: &ConnectionAuthContext,

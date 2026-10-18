@@ -13,6 +13,7 @@ import signal
 import socket
 import sqlite3
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -67,7 +68,7 @@ class CCPPermissionError(RuntimeError):
     """Raised when an operation requires elevated access."""
 
 
-def _require_server_admin():
+def _require_server_admin() -> None:
     """Gate for server management operations. Blocks if no server binary is configured."""
     if not os.environ.get("CCP_SERVER_BIN") and not DEFAULT_SERVER_BINARY.exists():
         raise CCPPermissionError(
@@ -313,7 +314,8 @@ def _query_session_id(db_path: Path, session_name: str) -> int | None:
 def _load_runtime_record(path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
-    return json.loads(path.read_text(encoding="utf-8"))
+    record: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    return record
 
 
 def _write_runtime_record(path: Path, record: dict[str, Any]) -> None:
@@ -528,7 +530,7 @@ def _start_subprocess(
         "stderr": subprocess.STDOUT,
         "text": True,
     }
-    if os.name == "nt":
+    if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
@@ -566,7 +568,8 @@ def _run_server_admin(record: dict[str, Any], *args: str) -> dict[str, Any]:
     output = process.stdout.strip()
     if not output:
         return {}
-    return json.loads(output)
+    result: dict[str, Any] = json.loads(output)
+    return result
 
 
 def _wait_for_server_ready(
@@ -1040,8 +1043,9 @@ def add_book(
     raise CCPClientError("client returned a non-object payload for add-book")
 
 
+# PLR0913: each parameter is part of the published MCP tool schema.
 @mcp.tool()
-def add_entry(
+def add_entry(  # noqa: PLR0913
     session: str,
     shelf_name: str,
     book_name: str,
@@ -1071,8 +1075,9 @@ def add_entry(
     raise CCPClientError("client returned a non-object payload for add-entry")
 
 
+# PLR0913: each parameter is part of the published MCP tool schema.
 @mcp.tool()
-def append_entry(
+def append_entry(  # noqa: PLR0913
     session: str,
     entry_name: str,
     content: str,
@@ -1155,8 +1160,9 @@ def get_history(
     raise CCPClientError("client returned a non-list payload for history")
 
 
+# PLR0913: each parameter is part of the published MCP tool schema.
 @mcp.tool()
-def export_bundle(
+def export_bundle(  # noqa: PLR0913
     session: str,
     output_path: str | None = None,
     shelf: str | None = None,

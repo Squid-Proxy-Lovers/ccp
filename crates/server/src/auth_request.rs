@@ -29,6 +29,11 @@ use crate::state::ServerState;
 
 #[cfg(test)]
 #[path = "tests/auth_request.rs"]
+#[expect(
+    unsafe_code,
+    clippy::undocumented_unsafe_blocks,
+    reason = "tests change process environment variables only while holding test_env_lock"
+)]
 mod tests;
 
 enum AuthError {
@@ -317,8 +322,12 @@ fn extract_auth_request(request: &str) -> anyhow::Result<Option<AuthRedeemReques
         return Ok(None);
     }
 
-    let body =
-        std::str::from_utf8(&bytes[header_len..]).context("request body is not valid UTF-8")?;
+    let body = std::str::from_utf8(
+        bytes
+            .get(header_len..)
+            .context("request header exceeds body")?,
+    )
+    .context("request body is not valid UTF-8")?;
     let payload: AuthRedeemRequest =
         serde_json::from_str(body).context("invalid auth redeem JSON body")?;
     if payload.token.trim().is_empty() {
