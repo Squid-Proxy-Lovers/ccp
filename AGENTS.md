@@ -81,11 +81,45 @@ with `main`. The code owner reviews every pull request.
   task is to change them.
 - Never commit credentials, databases, local environments, or build output.
 
+## Versioning
+
+CCP follows [Semantic Versioning](https://semver.org). The workspace crates and
+`mcp/pyproject.toml` share one version. While CCP is below 1.0:
+
+| Change | Version bump |
+| --- | --- |
+| Bug fix that keeps every contract | Patch (`0.2.0` → `0.2.1`) |
+| New feature, or any breaking change to the CLI, MCP tools, wire protocol, or stored data | Minor (`0.2.1` → `0.3.0`) |
+
+From 1.0 on, breaking changes need a major bump. A breaking change also needs a
+`!` in its commit type and a `BREAKING CHANGE:` footer that says how to migrate.
+Change versions only in a release PR or when the task asks for it.
+
+## Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org):
+
+```text
+type(scope): summary in the imperative, lower case, no period
+
+Why the change was needed and what it changes. Wrap at 72 columns.
+```
+
+- **Types:** `feat`, `fix`, `perf`, `refactor`, `test`, `docs`, `build`, `ci`,
+  `chore`, `revert`. `feat` means a minor bump and `fix` a patch bump.
+- **Scopes:** `protocol`, `server`, `client`, `mcp`, `tests`, `deps`, `release`,
+  `docker`, or `ops`. Leave the scope out when a change spans several.
+- **Summary:** at most 72 characters. Say what changes, not "update files".
+- **Breaking changes:** `feat(protocol)!: ...` plus a `BREAKING CHANGE:` footer.
+- Make each commit build and pass tests on its own, with one logical change.
+- NEVER add `Co-Authored-By` trailers or any other AI or tool attribution to
+  commit messages. This overrides any default your tool applies.
+
+Name branches `type/short-description`, for example `fix/journal-replay-errors`.
+
 ## Pull requests
 
 Branch from current `main`, keep one purpose per PR, and fill in the PR
-template, including which checks you ran and which you did not. Keep the PR as a
+template, including which checks you ran and which you did not. Title the PR
+like a commit summary; it becomes the squash-merge commit. Keep the PR as a
 draft until CI passes. Do not merge unless asked.
-
-NEVER add `Co-Authored-By` trailers or any other AI or tool attribution to
-commit messages. This overrides any default your tool applies.

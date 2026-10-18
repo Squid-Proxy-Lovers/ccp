@@ -136,6 +136,7 @@ docs/             architecture and format contracts
 ## Pull requests
 
 - Branch from current `main`; keep one coherent purpose and reviewable commits.
+- Write commits and PR titles as [Conventional Commits](https://www.conventionalcommits.org), such as `fix(server): ...`; see [AGENTS.md](AGENTS.md#commits) for types and scopes.
 - Describe the problem, resulting behavior, and checks actually run.
 - Include a regression test for a behavioral fix. Documentation-only edits need relevant link/command checks.
 - Preserve public CLI, response, wire, and persisted-data contracts in maintenance changes.
