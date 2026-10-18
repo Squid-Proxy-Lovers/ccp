@@ -44,16 +44,17 @@ Cargo-built binaries are named `server` and `client`; the installer names them
 ## Before opening a PR
 
 ```bash
-make lint-fast
-make test
-make quality-tests
-make installer-tests
+make check            # lint, types, dead code, coverage, CLI, test integrity, protocol API
+make installer-tests  # needs Docker
 make nightly-tests
-make integration
 make mcp-smoke
 make compat
-make security
+make security         # needs network
 ```
+
+Run `make hooks` once to check formatting, Python, and secrets before each commit.
+`make check` compares against `origin/main`; fetch first, or pass `BASE=<ref>`.
+Coverage needs the `llvm-tools` component: `rustup component add llvm-tools`.
 
 `make lint-fast` needs installed tools and cached Cargo dependencies, and performs
 no advisory-network requests. Warm runs are quick; the initial Rust compilation
@@ -73,23 +74,48 @@ producing release artifacts.
 
 | Area | Required checks |
 | --- | --- |
-| Rust | rustfmt; Clippy for every workspace target with warnings as errors |
-| Python | Ruff correctness, imports, bugbear, modernization, simplification, security, and formatting |
+| Rust | rustfmt; Clippy for every workspace target with warnings as errors; rustdoc warnings; no unused dependencies (cargo-machete) |
+| Rust safety | No `unwrap`, `expect`, `panic!`, `unreachable!`, or panicking index/slice outside tests; no discarded `Result`; no lossy casts; no `unsafe` without a reason |
+| Size | Functions at most 100 lines and cognitive complexity 25 (Rust); complexity 10, five arguments, and statement/branch limits (Python) |
+| Python | Ruff correctness, imports, bugbear, modernization, simplification, security, unused arguments, commented-out code, blind `except`, and formatting |
+| Python types and dead code | `mypy --strict` for the MCP package and scripts; vulture for unused code |
+| Tests | Rust line coverage may not fall below `tools/coverage-baseline.json`; no removed tests or assertions and no new skips without review |
+| Protocol API | cargo-semver-checks on the `protocol` crate against `main` |
 | Shell | ShellCheck for Git-visible Bash and POSIX scripts, including extensionless scripts |
 | Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
 | Secrets | Gitleaks CLI on working source and Git history, with redacted output |
 | Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit |
 
-The Rust policy lives in the workspace manifest and is inherited by every crate.
-It also rejects debug macros, TODO/unimplemented macros, and unsafe operations
-implicitly performed inside unsafe functions. Python targets 3.10-compatible
-syntax; test assertions are allowed.
+The Rust policy lives in the workspace manifest and `clippy.toml`, and every
+crate inherits it. Tests may unwrap, expect, panic, and index. Python targets
+3.10-compatible syntax; test assertions are allowed.
 
 Fix findings before submission. When an intentional invariant or API shape needs
-an exception, keep it local and explain the reason. Prefer Rust `#[expect(...,
+an exception, keep it local and explain the reason. An exception without a reason
+fails review. Prefer Rust `#[expect(...,
 reason = "...")]`, which detects stale exemptions, and specific Python `noqa`
 codes with nearby explanations. Avoid whole-file or whole-workspace suppressions.
 Do not enable entire opinionated rule groups just to increase the rule count.
+
+Functions marked as legacy for size or complexity predate the limits. Split them
+before adding to them; the expectation then fails and must be removed. Raise the
+coverage baseline when coverage improves; never lower it.
+
+### Definition of done
+
+A change is ready for review when:
+
+- `make check` and the CI checks for the PR pass.
+- New behaviour has tests, and fixed bugs have a regression test.
+- No check was weakened to pass: no removed or skipped tests or assertions, no
+  lowered thresholds, and no relaxed lint configuration. A reviewed reduction
+  needs the `allow-test-reduction` label from a maintainer.
+- Every exception states its reason next to the code.
+- The PR description states what was verified, including what was not run.
+
+Changes to the standard itself (lint and tool configuration, workflows,
+`scripts/`, `tools/`, and agent instructions) and to the protocol, storage, and
+authentication contracts need a code-owner review; see `.github/CODEOWNERS`.
 
 Dependency vulnerabilities fail the audit. Existing maintenance notices and
 duplicate versions receive separate dependency review. The license allowlist records

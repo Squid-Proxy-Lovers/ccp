@@ -28,6 +28,7 @@ you need to complete. These guides describe the current `main` branch.
 | Task | Guide |
 | --- | --- |
 | Set up the toolchain, run required checks, and submit changes | [Contributing](../CONTRIBUTING.md) |
+| Brief a coding agent on the repository standard | [Agent guide](../AGENTS.md) |
 | Select tests or run benchmarks | [Tests and verification](../tests/README.md) |
 | Read historical performance measurements | [Recorded benchmarks](benchmarks.md) |
 | Build the client crate | [Client crate](../crates/client/README.md) |
