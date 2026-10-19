@@ -1279,3 +1279,4 @@ fn historical_http_schemas_are_refused_without_mutating_their_data() {
 }
 
 mod admin_keys;
+mod invitations;

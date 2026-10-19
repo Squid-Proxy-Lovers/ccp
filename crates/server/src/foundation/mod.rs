@@ -11,11 +11,15 @@
 
 mod access;
 mod admin;
+mod invitation;
 mod model;
 mod store;
 
 pub use access::authorize;
 pub use admin::{AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
+pub use invitation::{
+    IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,
+};
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,
 };

@@ -6,6 +6,7 @@ use anyhow::{Context, bail};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
 
+mod invitations;
 mod keys;
 
 use super::access::{authenticated_client, permitted};
