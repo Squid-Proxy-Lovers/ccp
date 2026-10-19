@@ -283,8 +283,15 @@ fn replay(
     }
     let current: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM ccp_credential_grants b JOIN ccp_grants g ON g.id = b.grant_id
-         WHERE b.credential_id = ?1 AND g.id = ?2 AND g.workspace_id = ?3 AND g.revoked_at IS NULL)",
-        params![credential.to_string(), grant.to_string(), invite.workspace.to_string()], |row| row.get(0),
+         WHERE b.credential_id = ?1 AND g.id = ?2 AND g.workspace_id = ?3 AND g.revoked_at IS NULL
+         AND NOT EXISTS(SELECT 1 FROM ccp_binding_revocations v
+             WHERE v.credential_id = b.credential_id AND v.grant_id = b.grant_id))",
+        params![
+            credential.to_string(),
+            grant.to_string(),
+            invite.workspace.to_string()
+        ],
+        |row| row.get(0),
     )?;
     if !current {
         return Ok(Some(Redemption::Denied));

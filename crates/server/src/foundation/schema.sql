@@ -162,3 +162,58 @@ CREATE TABLE IF NOT EXISTS ccp_renewal_grants (
     FOREIGN KEY (grant_id, client_id)
         REFERENCES ccp_grants(id, client_id) ON DELETE RESTRICT
 );
+
+CREATE TABLE IF NOT EXISTS ccp_recovery_invitations (
+    id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES ccp_clients(id) ON DELETE RESTRICT,
+    workspace_id TEXT REFERENCES ccp_workspaces(id) ON DELETE RESTRICT,
+    token_hash BLOB NOT NULL UNIQUE CHECK (length(token_hash) = 32),
+    issuer_kind TEXT NOT NULL CHECK (issuer_kind IN ('admin', 'admin_key')),
+    issuer_id TEXT NOT NULL,
+    expires_at INTEGER NOT NULL CHECK (expires_at >= 0),
+    revoked_at INTEGER CHECK (revoked_at >= 0),
+    expired_at INTEGER CHECK (expired_at >= 0),
+    UNIQUE (id, client_id)
+);
+CREATE TABLE IF NOT EXISTS ccp_recovery_grants (
+    invitation_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    PRIMARY KEY (invitation_id, grant_id),
+    FOREIGN KEY (invitation_id, client_id)
+        REFERENCES ccp_recovery_invitations(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (grant_id, client_id)
+        REFERENCES ccp_grants(id, client_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS ccp_binding_revocations (
+    credential_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    revoked_at INTEGER NOT NULL CHECK (revoked_at >= 0),
+    recovery_invitation_id TEXT NOT NULL REFERENCES ccp_recovery_invitations(id) ON DELETE RESTRICT,
+    PRIMARY KEY (credential_id, grant_id),
+    FOREIGN KEY (credential_id, grant_id)
+        REFERENCES ccp_credential_grants(credential_id, grant_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS ccp_recovery_receipts (
+    invitation_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    public_key_hash BLOB NOT NULL CHECK (length(public_key_hash) = 32),
+    recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0),
+    UNIQUE (invitation_id, credential_id),
+    FOREIGN KEY (invitation_id, client_id)
+        REFERENCES ccp_recovery_invitations(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (credential_id, client_id)
+        REFERENCES ccp_credentials(id, client_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS ccp_recovery_receipt_grants (
+    invitation_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    PRIMARY KEY (invitation_id, grant_id),
+    FOREIGN KEY (invitation_id, credential_id)
+        REFERENCES ccp_recovery_receipts(invitation_id, credential_id) ON DELETE RESTRICT,
+    FOREIGN KEY (credential_id, grant_id)
+        REFERENCES ccp_credential_grants(credential_id, grant_id) ON DELETE RESTRICT
+);

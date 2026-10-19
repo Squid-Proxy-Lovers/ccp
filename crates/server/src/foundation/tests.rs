@@ -1283,3 +1283,5 @@ mod invitations;
 mod redemption;
 
 mod renewal;
+
+mod recovery;

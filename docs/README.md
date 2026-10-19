@@ -38,6 +38,7 @@ you need to complete. These guides describe the current `main` branch.
 | Understand unreleased scoped-key authentication | [Workspace admin keys](workspace-admin-keys.md) |
 | Understand unreleased initial enrollment policy | [Invitation state](workspace-invitation-state.md) |
 | Understand unreleased atomic invitation redemption | [Certificate enrollment](workspace-enrollment.md) |
+| Understand unreleased scoped/global client recovery | [Client recovery](workspace-recovery.md) |
 | Edit documentation | [Writing guide](writing.md) |
 
 ## Earlier versions

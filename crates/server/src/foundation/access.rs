@@ -172,7 +172,9 @@ fn client_allowed(
             "SELECT g.role, w.state FROM ccp_credential_grants b
              JOIN ccp_grants g ON g.id = b.grant_id AND g.client_id = b.client_id
              JOIN ccp_workspaces w ON w.id = g.workspace_id
-             WHERE b.credential_id = ?1 AND g.workspace_id = ?2 AND g.revoked_at IS NULL",
+             WHERE b.credential_id = ?1 AND g.workspace_id = ?2 AND g.revoked_at IS NULL
+             AND NOT EXISTS(SELECT 1 FROM ccp_binding_revocations v
+                 WHERE v.credential_id = b.credential_id AND v.grant_id = b.grant_id)",
             params![credential.to_string(), workspace.to_string()],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )

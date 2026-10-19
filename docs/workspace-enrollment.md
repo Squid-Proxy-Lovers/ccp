@@ -54,8 +54,10 @@ does not rewrite its role, attach a different credential or resurrect a revoked
 grant through an old invitation. Fresh targeted administrative readmission is
 separate from this ordinary path. Expired
 credentials and lost keys need the separate targeted-recovery flow; they cannot
-renew themselves through this ordinary identity-reuse path. Routine renewal is documented below. Targeted scoped/global recovery and
-readmission still require a separate fresh administrative invitation.
+renew themselves through this ordinary identity-reuse path. Routine renewal is
+documented below. Targeted scoped/global recovery uses a
+[fresh administrative recovery invitation](workspace-recovery.md). Explicit
+targeted readmission of revoked members remains subsequent work.
 
 ## Routine credential renewal
 
@@ -83,7 +85,8 @@ without another rotation. Request UUID or key changes conflict. The old
 credential must still be unexpired and not administratively revoked; the new
 credential must remain live, enabled, unsuperseded and bound to at least one
 currently readable captured workspace. Later admissions do not change the receipt
-or keep it usable after all captured access is revoked. A revoked captured grant never regains access,
+or keep it usable after all captured access is revoked. A revoked captured grant
+never regains access,
 even if its ID remains in the original public receipt. Global disable and the
 revocation of all readable bindings deny retry. Further renewal of the new
 credential ends retrieval through the previous receipt.
@@ -92,7 +95,8 @@ Schema 9 records supersession separately from administrative revocation. Future
 network integration needs a dedicated retry-only authorization path for a
 verified superseded peer; it must never admit that peer to ordinary operations.
 No such network endpoint or automatic client renewal scheduler exists yet.
-An already expired credential requires fresh targeted administrative recovery.
+An already expired credential requires
+[fresh targeted administrative recovery](workspace-recovery.md).
 
 ## Certificate identity and trust
 
@@ -125,9 +129,14 @@ on second-workspace admission, roll back failed audits, enforce quota under
 concurrent admission, return one result under concurrent retry, retain receipts
 across database reopening, and enforce current lifecycle/revocation/expiry.
 Native CLI/MCP compatibility remains separately tested. The new HTTPS and mTLS
-network flows, server-trust bootstrap, automated renewal, targeted recovery and browser UI remain
-unverified until their adapters are implemented.
+network flows, server-trust bootstrap, automated renewal, recovery network
+adapters and browser UI remain unverified until their adapters are implemented.
 
 Renewal tests cover current bound-scope capture, changed roles, archived reads,
 revocation/disable/expiry, exact retry, competing and identical concurrent
 rotations, audit/CA failure rollback, schema-8 upgrade and database reopening.
+
+Recovery can revoke a credential's binding in one workspace while retaining its
+other bindings. Both ordinary data authorization and renewal exclude revoked
+bindings. Returning an old public enrollment or renewal receipt cannot restore
+them. See [Client recovery](workspace-recovery.md) for the replacement contract.

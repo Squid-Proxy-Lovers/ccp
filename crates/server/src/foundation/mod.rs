@@ -14,6 +14,7 @@ mod admin;
 mod certificate;
 mod invitation;
 mod model;
+mod recovery;
 mod store;
 
 pub use access::authorize;
@@ -26,6 +27,10 @@ pub use invitation::{
 };
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,
+};
+pub use recovery::{
+    IssuedRecoveryInvitation, RecoveryInvitationRequest, RecoveryInvitationStatus, RecoveryReceipt,
+    RecoveryRedemptionRequest, RecoveryScope,
 };
 pub use store::AccessStore;
 

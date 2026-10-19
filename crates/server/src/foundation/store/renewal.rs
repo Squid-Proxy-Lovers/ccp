@@ -123,7 +123,10 @@ fn bound_grants(connection: &Connection, credential: Uuid) -> anyhow::Result<Vec
         .prepare(
             "SELECT g.id, g.workspace_id FROM ccp_credential_grants b
              JOIN ccp_grants g ON g.id = b.grant_id AND g.client_id = b.client_id
-             WHERE b.credential_id = ?1 AND g.revoked_at IS NULL ORDER BY g.id",
+             WHERE b.credential_id = ?1 AND g.revoked_at IS NULL
+             AND NOT EXISTS(SELECT 1 FROM ccp_binding_revocations v
+                 WHERE v.credential_id = b.credential_id AND v.grant_id = b.grant_id)
+             ORDER BY g.id",
         )?
         .query_map([credential.to_string()], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
