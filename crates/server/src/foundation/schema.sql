@@ -58,6 +58,15 @@ CREATE TABLE IF NOT EXISTS ccp_credential_grants (
         REFERENCES ccp_grants(id, client_id) ON DELETE RESTRICT
 );
 CREATE INDEX IF NOT EXISTS ccp_grants_workspace ON ccp_grants(workspace_id);
+CREATE TABLE IF NOT EXISTS ccp_admin_keys (
+    id TEXT PRIMARY KEY,
+    admin_id TEXT NOT NULL REFERENCES ccp_admin_principals(id) ON DELETE RESTRICT,
+    workspace_id TEXT REFERENCES ccp_workspaces(id) ON DELETE RESTRICT,
+    name TEXT NOT NULL,
+    token_hash BLOB NOT NULL UNIQUE CHECK (length(token_hash) = 32),
+    expires_at INTEGER CHECK (expires_at >= 0),
+    revoked_at INTEGER CHECK (revoked_at >= 0)
+);
 CREATE TABLE IF NOT EXISTS ccp_access_audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_kind TEXT NOT NULL CHECK (actor_kind IN ('local_operator', 'admin', 'credential')),
@@ -65,5 +74,6 @@ CREATE TABLE IF NOT EXISTS ccp_access_audit (
     action TEXT NOT NULL,
     workspace_id TEXT,
     target_id TEXT NOT NULL,
-    recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0)
+    recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0),
+    admin_key_id TEXT REFERENCES ccp_admin_keys(id) ON DELETE RESTRICT
 );

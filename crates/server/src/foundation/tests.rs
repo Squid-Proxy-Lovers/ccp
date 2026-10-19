@@ -110,6 +110,7 @@ fn role_matrix_keeps_global_read_separate_from_workspace_authority() {
         Action::RevokeAdmin,
         Action::TransferOwner,
         Action::ArchiveWorkspace,
+        Action::ManageWorkspaceKeys,
     ];
     let actions = [
         Action::ReadContext,
@@ -125,6 +126,7 @@ fn role_matrix_keeps_global_read_separate_from_workspace_authority() {
         Action::ReactivateWorkspace,
         Action::PurgeWorkspace,
         Action::ManageArchives,
+        Action::ManageWorkspaceKeys,
     ];
     for (principal, allowed) in [
         (f.global, global.to_vec()),
@@ -181,6 +183,7 @@ fn instance_capabilities_require_global_admin_and_exact_scope() {
         Action::SaveGlobalBoard,
         Action::DisableClient,
         Action::RecoverGlobalClient,
+        Action::ManageInstanceKeys,
     ] {
         assert!(authorize(&f.connection, Actor::Admin(f.global), action, None, NOW).is_ok());
         assert!(authorize(&f.connection, Actor::Admin(f.owner), action, None, NOW).is_err());
@@ -1274,3 +1277,5 @@ fn historical_http_schemas_are_refused_without_mutating_their_data() {
         fs::remove_file(path).unwrap();
     }
 }
+
+mod admin_keys;

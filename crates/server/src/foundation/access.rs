@@ -6,7 +6,8 @@ use anyhow::bail;
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
-use super::{Action, Actor, parse_id};
+use super::admin::live_admin_key;
+use super::{Action, Actor, AdminKeyScope, parse_id};
 
 /// Checks current persisted authority, including live credentials/bindings and
 /// workspace lifecycle. `now` must come from the trusted server clock.
@@ -37,7 +38,14 @@ pub(super) fn permitted(
         bail!("invalid authorization target or server time");
     }
     let allowed = match actor {
-        Actor::Admin(admin) => admin_allowed(connection, admin, action, workspace)?,
+        Actor::Admin(admin) => admin_allowed(connection, admin, action, workspace, None)?,
+        Actor::AdminKey(key) => match live_admin_key(connection, key, now)? {
+            Some((admin, scope)) if scope.is_none() || scope == workspace => {
+                let scope = scope.map_or(AdminKeyScope::Instance, AdminKeyScope::Workspace);
+                admin_allowed(connection, admin, action, workspace, Some(scope))?
+            }
+            _ => false,
+        },
         Actor::Credential(credential) => {
             client_allowed(connection, credential, action, workspace, now)?
         }
@@ -50,6 +58,7 @@ fn admin_allowed(
     admin: Uuid,
     action: Action,
     workspace: Option<Uuid>,
+    key_scope: Option<AdminKeyScope>,
 ) -> anyhow::Result<bool> {
     let enabled = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM ccp_admin_principals WHERE id = ?1 AND enabled = 1)",
@@ -59,11 +68,12 @@ fn admin_allowed(
     if !enabled {
         return Ok(false);
     }
-    let global: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ccp_server_admins WHERE admin_id = ?1)",
-        [admin.to_string()],
-        |row| row.get(0),
-    )?;
+    let global = !matches!(key_scope, Some(AdminKeyScope::Workspace(_)))
+        && connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ccp_server_admins WHERE admin_id = ?1)",
+            [admin.to_string()],
+            |row| row.get(0),
+        )?;
     let Some(workspace) = workspace else {
         return Ok(global && action.instance_wide());
     };
@@ -73,13 +83,15 @@ fn admin_allowed(
     if state == "purged" {
         return Ok(false);
     }
-    let owner = owner.as_deref() == Some(admin.to_string().as_str());
-    let scoped: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ccp_workspace_admins
+    let workspace_roles = !matches!(key_scope, Some(AdminKeyScope::Instance));
+    let owner = workspace_roles && owner.as_deref() == Some(admin.to_string().as_str());
+    let scoped = workspace_roles
+        && connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ccp_workspace_admins
          WHERE workspace_id = ?1 AND admin_id = ?2)",
-        params![workspace.to_string(), admin.to_string()],
-        |row| row.get(0),
-    )?;
+            params![workspace.to_string(), admin.to_string()],
+            |row| row.get(0),
+        )?;
     Ok(admin_capability(action, &state, global, owner, scoped))
 }
 
@@ -87,7 +99,7 @@ fn admin_capability(action: Action, state: &str, global: bool, owner: bool, scop
     match action {
         Action::ReadContext => global || owner || scoped,
         Action::RevokeGrant | Action::RecoverWorkspaceClient => owner || scoped,
-        Action::RevokeAdmin => owner,
+        Action::RevokeAdmin | Action::ManageWorkspaceKeys => owner,
         Action::ArchiveWorkspace => state == "active" && (owner || global),
         Action::ReactivateWorkspace | Action::PurgeWorkspace => {
             state == "archived" && (owner || global)

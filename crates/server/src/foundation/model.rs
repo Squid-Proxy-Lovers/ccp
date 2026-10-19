@@ -8,6 +8,7 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Actor {
     Admin(Uuid),
+    AdminKey(Uuid),
     Credential(Uuid),
 }
 
@@ -32,6 +33,8 @@ pub enum Action {
     SaveGlobalBoard,
     DisableClient,
     RecoverGlobalClient,
+    ManageInstanceKeys,
+    ManageWorkspaceKeys,
 }
 
 impl Action {
@@ -42,6 +45,7 @@ impl Action {
                 | Self::SaveGlobalBoard
                 | Self::DisableClient
                 | Self::RecoverGlobalClient
+                | Self::ManageInstanceKeys
         )
     }
 }

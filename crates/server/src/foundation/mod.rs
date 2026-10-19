@@ -10,10 +10,12 @@
 //! entry ownership enforcement are introduced by subsequent phases.
 
 mod access;
+mod admin;
 mod model;
 mod store;
 
 pub use access::authorize;
+pub use admin::{AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,
 };
@@ -27,6 +29,18 @@ const SCHEMA: &str = include_str!("schema.sql");
 
 pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(SCHEMA)?;
+    let has_key_audit = transaction
+        .prepare("PRAGMA table_info(ccp_access_audit)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?
+        .iter()
+        .any(|name| name == "admin_key_id");
+    if !has_key_audit {
+        transaction.execute_batch(
+            "ALTER TABLE ccp_access_audit ADD COLUMN admin_key_id TEXT
+             REFERENCES ccp_admin_keys(id) ON DELETE RESTRICT;",
+        )?;
+    }
     transaction.execute(
         "INSERT OR IGNORE INTO ccp_instance(singleton, instance_id) VALUES (1, ?1)",
         [Uuid::new_v4().to_string()],

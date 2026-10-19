@@ -35,6 +35,7 @@ you need to complete. These guides describe the current `main` branch.
 | Build the server crate | [Server crate](../crates/server/README.md) |
 | Work with wire types and compatibility | [Protocol crate](../crates/protocol/README.md) |
 | Understand the unreleased workspace migration and permission foundation | [Workspace access foundation](workspace-foundation.md) |
+| Understand unreleased scoped-key authentication | [Workspace admin keys](workspace-admin-keys.md) |
 | Edit documentation | [Writing guide](writing.md) |
 
 ## Earlier versions

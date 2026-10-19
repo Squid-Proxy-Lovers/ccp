@@ -6,6 +6,8 @@ use anyhow::{Context, bail};
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 use uuid::Uuid;
 
+mod keys;
+
 use super::access::{authenticated_client, permitted};
 use super::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,
@@ -57,27 +59,7 @@ impl<'a> AccessStore<'a> {
     /// Existing global-admin records, even disabled ones, prevent re-bootstrap.
     pub fn bootstrap_admin(&mut self, name: &str, now: i64) -> anyhow::Result<Uuid> {
         let name = validate_name(name)?;
-        self.mutate(|transaction| {
-            let count: u64 =
-                transaction.query_row("SELECT COUNT(*) FROM ccp_server_admins", [], |row| {
-                    row.get(0)
-                })?;
-            if count != 0 {
-                bail!("instance already has administrative bootstrap records");
-            }
-            let id = insert_principal(transaction, name)?;
-            transaction.execute(
-                "INSERT INTO ccp_server_admins(admin_id) VALUES (?1)",
-                [id.to_string()],
-            )?;
-            transaction.execute(
-                "INSERT INTO ccp_access_audit
-                 (actor_kind, actor_id, action, target_id, recorded_at)
-                 VALUES ('local_operator', 'local', 'bootstrap_admin', ?1, ?2)",
-                params![id.to_string(), now],
-            )?;
-            Ok(id)
-        })
+        self.mutate(|transaction| bootstrap_principal(transaction, name, now))
     }
 
     /// Creates an unprivileged principal for initial-owner appointment. Merely
@@ -404,6 +386,11 @@ fn validate_actor(connection: &Connection, actor: Actor, now: i64) -> anyhow::Re
             authenticated_client(connection, id, now)?;
         }
         Actor::Admin(id) => require_enabled_principal(connection, id)?,
+        Actor::AdminKey(id) => {
+            if super::admin::live_admin_key(connection, id, now)?.is_none() {
+                bail!("admin key is not valid");
+            }
+        }
     }
     Ok(())
 }
@@ -472,22 +459,61 @@ fn audit(
     target: Uuid,
     now: i64,
 ) -> anyhow::Result<()> {
-    let (kind, id) = match actor {
-        Actor::Admin(id) => ("admin", id),
-        Actor::Credential(id) => ("credential", id),
+    let (kind, id, key) = match actor {
+        Actor::Admin(id) => ("admin", id, None),
+        Actor::Credential(id) => ("credential", id, None),
+        Actor::AdminKey(key) => {
+            let principal = parse_id(connection.query_row(
+                "SELECT admin_id FROM ccp_admin_keys WHERE id = ?1",
+                [key.to_string()],
+                |row| row.get(0),
+            )?)?;
+            ("admin", principal, Some(key))
+        }
     };
     connection.execute(
         "INSERT INTO ccp_access_audit
-         (actor_kind, actor_id, action, workspace_id, target_id, recorded_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+         (actor_kind, actor_id, action, workspace_id, target_id, recorded_at, admin_key_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             kind,
             id.to_string(),
             action,
             workspace.map(|id| id.to_string()),
             target.to_string(),
-            now
+            now,
+            key.map(|id| id.to_string())
         ],
+    )?;
+    Ok(())
+}
+
+fn bootstrap_principal(connection: &Connection, name: &str, now: i64) -> anyhow::Result<Uuid> {
+    let count: u64 = connection.query_row("SELECT COUNT(*) FROM ccp_server_admins", [], |row| {
+        row.get(0)
+    })?;
+    if count != 0 {
+        bail!("instance already has administrative bootstrap records");
+    }
+    let id = insert_principal(connection, name)?;
+    connection.execute(
+        "INSERT INTO ccp_server_admins(admin_id) VALUES (?1)",
+        [id.to_string()],
+    )?;
+    audit_local_operator(connection, "bootstrap_admin", id, now)?;
+    Ok(id)
+}
+
+fn audit_local_operator(
+    connection: &Connection,
+    action: &str,
+    target: Uuid,
+    now: i64,
+) -> anyhow::Result<()> {
+    connection.execute(
+        "INSERT INTO ccp_access_audit(actor_kind, actor_id, action, target_id, recorded_at)
+         VALUES ('local_operator', 'local', ?1, ?2, ?3)",
+        params![action, target.to_string(), now],
     )?;
     Ok(())
 }

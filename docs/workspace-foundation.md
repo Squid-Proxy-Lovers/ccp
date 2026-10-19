@@ -1,7 +1,8 @@
 # Workspace access foundation
 
-This unreleased first phase adds persistent identity and authorization records
-for the workspace redesign. The existing native mTLS client protocol and CLI
+This unreleased foundation adds persistent identity and authorization records
+for the workspace redesign. Phase 1 introduced schema 5; the scoped-key batch
+adds schema 6. The existing native mTLS client protocol and CLI
 remain in service. No new HTTP listener, admin login, invitation endpoint or
 workspace browser is exposed by this phase.
 
@@ -22,8 +23,8 @@ them. A naming collision must not prevent an existing session from starting.
 Names remain unique among new, non-purged workspaces.
 
 Legacy follow-up migrations, foundation creation, legacy mappings and the
-schema-5 version record commit in
-one immediate transaction, reserving the writer before reading migration state
+current schema-version record commit in one immediate transaction, reserving
+the writer before reading migration state
 so another session cannot invalidate its snapshot. Failure rolls those additions
 back; an older recorded schema
 version is not advanced. Databases with a newer schema version are refused.
@@ -31,7 +32,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schema 5. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 and 6. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -54,8 +55,9 @@ cannot reconstruct creator identities or status rows absent from the old data.
 
 The `server::foundation` APIs are internal server building blocks. An `Actor`
 must come from a trusted authentication layer; accepting a caller-supplied
-principal UUID would not authenticate it. Admin-key authentication, certificate
-issuance, invitations and the new HTTP transport belong to the next phase.
+principal UUID would not authenticate it. Scoped admin-key primitives are documented in [Workspace admin keys](workspace-admin-keys.md).
+Certificate issuance, invitations and the new HTTP transport remain subsequent
+integration work.
 
 A client data action requires a live, unexpired, nonrevoked credential, an
 enabled client, a live workspace grant bound to that credential, a suitable
