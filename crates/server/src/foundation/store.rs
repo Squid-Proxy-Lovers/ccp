@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 mod invitations;
 mod keys;
+mod redemption;
 
 use super::access::{authenticated_client, permitted};
 use super::{

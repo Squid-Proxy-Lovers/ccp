@@ -107,3 +107,31 @@ CREATE TABLE IF NOT EXISTS ccp_enrollment_events (
     event TEXT NOT NULL CHECK (event IN ('opened', 'manual_close', 'deadline_close', 'capacity_close')),
     recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0)
 );
+CREATE UNIQUE INDEX IF NOT EXISTS ccp_grant_workspace_identity ON ccp_grants(id, workspace_id);
+CREATE TABLE IF NOT EXISTS ccp_credential_certificates (
+    credential_id TEXT PRIMARY KEY REFERENCES ccp_credentials(id) ON DELETE RESTRICT,
+    public_key_hash BLOB NOT NULL CHECK (length(public_key_hash) = 32),
+    certificate_fingerprint BLOB NOT NULL UNIQUE CHECK (length(certificate_fingerprint) = 32),
+    certificate_pem TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ccp_invitation_receipts (
+    invitation_id TEXT NOT NULL,
+    request_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    public_key_hash BLOB NOT NULL CHECK (length(public_key_hash) = 32),
+    previous_credential_id TEXT,
+    client_id TEXT NOT NULL REFERENCES ccp_clients(id) ON DELETE RESTRICT,
+    credential_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0),
+    PRIMARY KEY (invitation_id, request_id),
+    FOREIGN KEY (invitation_id, workspace_id) REFERENCES ccp_invitations(id, workspace_id) ON DELETE RESTRICT,
+    FOREIGN KEY (credential_id, client_id) REFERENCES ccp_credentials(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (previous_credential_id, client_id) REFERENCES ccp_credentials(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (grant_id, client_id) REFERENCES ccp_grants(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (grant_id, workspace_id) REFERENCES ccp_grants(id, workspace_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS ccp_invitation_closures (
+    invitation_id TEXT PRIMARY KEY REFERENCES ccp_invitations(id) ON DELETE RESTRICT,
+    expired_at INTEGER NOT NULL CHECK (expired_at >= 0)
+);

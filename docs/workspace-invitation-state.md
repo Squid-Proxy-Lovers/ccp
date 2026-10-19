@@ -1,9 +1,9 @@
 # Invitation policy records
 
 This unreleased internal batch persists invitation policies and initial-window
-lifecycle. It does not redeem tokens, consume capacity, issue certificates or
-admit clients through invitations yet. Those operations must be integrated in
-one transaction in the next batch before an HTTP enrollment route is exposed.
+lifecycle. The [certificate enrollment batch](workspace-enrollment.md) now adds signed-CSR
+redemption, capacity consumption and identity/grant/certificate creation in one
+transaction. No HTTP enrollment route is exposed yet.
 The existing native enrollment path is unchanged.
 
 ## One initial group window
@@ -17,7 +17,7 @@ Existing grants, including revoked ones, prevent starting a later initial phase.
 An active group must be explicitly closed before individual invitations can be
 issued. Starting individual admission before any group window seals that unused
 initial opportunity. Individual invitations have capacity one and a finite
-expiry. This is an initial setup transition, not a way to rotate a group link
+expiry, at most seven days from issuance. This is an initial setup transition, not a way to rotate a group link
 and reset its limits.
 
 Administrative metadata checks persist observed deadline/capacity closure. Once
@@ -46,12 +46,12 @@ is terminal and closing/revoking a group never resets its recorded policy.
 
 Schema 7 adds invitation, initial-enrollment and enrollment-event records to
 schema 6 without replacing admin keys, identities, grants or access audit rows.
+Schema 8 adds certificate bindings, retry receipts and durable invitation expiry.
 The [foundation backup/upgrade rules](workspace-foundation.md) apply.
 
 Tests exercise bounds, scope, issuer freshness, audit rollback, archived security,
-expiry and stored-capacity closure, migration and reopening persistence. The
-capacity-transition test seeds an exhausted counter directly; it does not prove
-atomic redemption or quota consumption. Before exposing enrollment, implement
-and test proof of key possession, atomic identity/grant/certificate issuance,
-idempotent retries, race-safe slot consumption, current revocation and bounded
-recovery. No browser session or network listener is established by these tests.
+expiry and stored-capacity closure, migration and reopening persistence. The policy
+capacity-transition test seeds an exhausted counter directly; separate redemption
+race tests now verify actual quota consumption and retry receipts. Renewal,
+scoped recovery and network adapters remain subsequent work. No browser session
+or network listener is established by these internal tests.

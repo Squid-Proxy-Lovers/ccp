@@ -470,10 +470,12 @@ fn schema6_upgrade_keeps_keys_and_initial_closure_survives_restart() {
             NOW,
         )
         .unwrap();
-    // Schema7 is additive: removing its three new empty tables recreates schema6.
+    // Enrollment additions are additive: removing their empty tables recreates schema6.
     f.connection
         .execute_batch(
-            "DROP TABLE ccp_enrollment_events; DROP TABLE ccp_initial_enrollment;
+            "DROP TABLE ccp_invitation_receipts; DROP TABLE ccp_invitation_closures; DROP TABLE ccp_credential_certificates;
+        DROP INDEX ccp_grant_workspace_identity;
+        DROP TABLE ccp_enrollment_events; DROP TABLE ccp_initial_enrollment;
         DROP TABLE ccp_invitations; UPDATE schema_version SET version = 6;",
         )
         .unwrap();
@@ -532,20 +534,29 @@ fn concurrent_opening_creates_only_one_initial_invitation() {
             let barrier = Arc::clone(&barrier);
             std::thread::spawn(move || {
                 let mut connection = Connection::open(path).unwrap();
+                connection
+                    .busy_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
                 let mut store = AccessStore::new(&mut connection).unwrap();
                 barrier.wait();
                 store
                     .issue_initial_invitation(actor, initial(workspace), NOW)
-                    .is_ok()
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
             })
         })
         .collect();
-    let successes = workers
+    let results: Vec<_> = workers
         .into_iter()
         .map(|worker| worker.join().unwrap())
-        .filter(|ok| *ok)
-        .count();
-    assert_eq!(successes, 1);
+        .collect();
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    for error in results.iter().filter_map(|result| result.as_ref().err()) {
+        assert!(
+            error.contains("initial enrollment has already started or closed"),
+            "{error}"
+        );
+    }
     let connection = Connection::open(&path).unwrap();
     assert_eq!(rows(&connection, "ccp_invitations"), 1);
     assert_eq!(rows(&connection, "ccp_initial_enrollment"), 1);

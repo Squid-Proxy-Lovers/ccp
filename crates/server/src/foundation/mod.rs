@@ -11,12 +11,14 @@
 
 mod access;
 mod admin;
+mod certificate;
 mod invitation;
 mod model;
 mod store;
 
 pub use access::authorize;
 pub use admin::{AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
+pub use certificate::{EnrollmentReceipt, IssuingAuthority, RedemptionRequest};
 pub use invitation::{
     IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,
 };

@@ -37,6 +37,7 @@ you need to complete. These guides describe the current `main` branch.
 | Understand the unreleased workspace migration and permission foundation | [Workspace access foundation](workspace-foundation.md) |
 | Understand unreleased scoped-key authentication | [Workspace admin keys](workspace-admin-keys.md) |
 | Understand unreleased initial enrollment policy | [Invitation state](workspace-invitation-state.md) |
+| Understand unreleased atomic invitation redemption | [Certificate enrollment](workspace-enrollment.md) |
 | Edit documentation | [Writing guide](writing.md) |
 
 ## Earlier versions

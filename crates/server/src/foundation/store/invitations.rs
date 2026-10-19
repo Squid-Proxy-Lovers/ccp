@@ -74,6 +74,13 @@ impl AccessStore<'_> {
         now: i64,
     ) -> anyhow::Result<IssuedInvitation> {
         validate_bounds(Some(1), Some(request.expires_at), now)?;
+        if request
+            .expires_at
+            .checked_sub(now)
+            .is_none_or(|ttl| ttl > 7 * 24 * 60 * 60)
+        {
+            bail!("individual invitation lifetime cannot exceed seven days");
+        }
         self.mutate(|tx| {
             authorize(
                 tx,
@@ -124,6 +131,7 @@ impl AccessStore<'_> {
     ) -> anyhow::Result<()> {
         self.mutate(|tx| {
             authorize(tx, actor, Action::RevokeGrant, Some(workspace), now)?;
+            refresh_initial(tx, workspace, now)?;
             if close_initial(tx, workspace, "manual_close", now)? {
                 audit(
                     tx,
@@ -147,6 +155,7 @@ impl AccessStore<'_> {
     ) -> anyhow::Result<()> {
         self.mutate(|tx| {
             authorize(tx, actor, Action::RevokeGrant, Some(workspace), now)?;
+            refresh_initial(tx, workspace, now)?;
             require_changed(tx.execute(
                 "UPDATE ccp_invitations SET revoked_at = ?1 WHERE id = ?2
                  AND workspace_id = ?3 AND revoked_at IS NULL",
@@ -174,11 +183,12 @@ impl AccessStore<'_> {
     ) -> anyhow::Result<InvitationStatus> {
         self.mutate(|tx| {
             authorize(tx, actor, Action::RevokeGrant, Some(workspace), now)?;
-            refresh_initial(tx, workspace, now)?;
+            refresh_invitation_expiry(tx, workspace, invitation, now)?;
             let row = tx.query_row(
                 "SELECT uses, max_uses, expires_at, revoked_at, issuer_kind, issuer_id,
                  EXISTS(SELECT 1 FROM ccp_initial_enrollment w WHERE w.workspace_id = i.workspace_id
-                 AND w.invitation_id = i.id AND w.closed_at IS NOT NULL)
+                 AND w.invitation_id = i.id AND w.closed_at IS NOT NULL),
+                 EXISTS(SELECT 1 FROM ccp_invitation_closures e WHERE e.invitation_id = i.id)
                  FROM ccp_invitations i WHERE id = ?1 AND workspace_id = ?2",
                 params![invitation.to_string(), workspace.to_string()],
                 |row| {
@@ -190,6 +200,7 @@ impl AccessStore<'_> {
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
                         row.get::<_, bool>(6)?,
+                        row.get::<_, bool>(7)?,
                     ))
                 },
             )?;
@@ -205,6 +216,7 @@ impl AccessStore<'_> {
                 max_uses: row.1,
                 expires_at: row.2,
                 revoked: row.3.is_some(),
+                expired: row.7,
                 initial_closed: row.6,
                 issuer_authorized: permitted(
                     tx,
@@ -279,7 +291,7 @@ fn close_initial(tx: &Connection, workspace: Uuid, event: &str, now: i64) -> any
     Ok(changed > 0)
 }
 
-fn refresh_initial(tx: &Connection, workspace: Uuid, now: i64) -> anyhow::Result<()> {
+pub(super) fn refresh_initial(tx: &Connection, workspace: Uuid, now: i64) -> anyhow::Result<()> {
     let boundary: Option<(bool, bool)> = tx
         .query_row(
             "SELECT i.expires_at IS NOT NULL AND i.expires_at <= ?2,
@@ -292,6 +304,11 @@ fn refresh_initial(tx: &Connection, workspace: Uuid, now: i64) -> anyhow::Result
         .optional()?;
     match boundary {
         Some((true, _)) => {
+            tx.execute(
+                "INSERT OR IGNORE INTO ccp_invitation_closures(invitation_id, expired_at)
+                SELECT invitation_id, ?2 FROM ccp_initial_enrollment WHERE workspace_id = ?1",
+                params![workspace.to_string(), now],
+            )?;
             close_initial(tx, workspace, "deadline_close", now)?;
         }
         Some((_, true)) => {
@@ -300,4 +317,19 @@ fn refresh_initial(tx: &Connection, workspace: Uuid, now: i64) -> anyhow::Result
         _ => {}
     }
     Ok(())
+}
+
+pub(super) fn refresh_invitation_expiry(
+    tx: &Connection,
+    workspace: Uuid,
+    invitation: Uuid,
+    now: i64,
+) -> anyhow::Result<()> {
+    tx.execute(
+        "INSERT OR IGNORE INTO ccp_invitation_closures(invitation_id, expired_at)
+         SELECT id, ?3 FROM ccp_invitations WHERE id = ?1 AND workspace_id = ?2
+         AND expires_at IS NOT NULL AND expires_at <= ?3",
+        params![invitation.to_string(), workspace.to_string(), now],
+    )?;
+    refresh_initial(tx, workspace, now)
 }

@@ -51,6 +51,7 @@ pub struct InvitationStatus {
     pub max_uses: Option<u64>,
     pub expires_at: Option<i64>,
     pub revoked: bool,
+    pub expired: bool,
     pub initial_closed: bool,
     pub issuer_authorized: bool,
 }
