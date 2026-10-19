@@ -44,6 +44,10 @@ impl ServerState {
         Ok(true)
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "legacy function predating the size and complexity limits; split it before extending"
+    )]
     async fn apply_journal_entry(&self, entry: JournalEntry) {
         match entry {
             JournalEntry::AuthTokenUsed {
@@ -96,6 +100,10 @@ impl ServerState {
                 description,
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
+                    #[expect(
+                        clippy::let_underscore_must_use,
+                        reason = "pre-existing replay behaviour: an already-present book is not a replay failure"
+                    )]
                     let _ = session.add_book(&shelf_name, &book_name, Some(&description));
                     session.refresh_library_metadata(&shelf_name, Some(&book_name));
                 }
@@ -265,7 +273,7 @@ pub(super) fn persist_transfer_log(
                 bundle_sha256,
                 policy,
                 outcome,
-                entry_count as i64,
+                i64::try_from(entry_count).context("transfer entry count exceeds i64 range")?,
                 created_at,
                 created_by,
             ],
@@ -580,6 +588,10 @@ fn persist_library_metadata_transaction(
     Ok(())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 fn persist_snapshot_transaction(
     transaction: &Transaction<'_>,
     snapshot: &Snapshot,

@@ -1,0 +1,5 @@
+# Every pull request into main needs review from the maintainer. The main
+# branch ruleset requires code-owner approval, so this also keeps a change from
+# relaxing the checks it is judged by.
+
+* @qvipin

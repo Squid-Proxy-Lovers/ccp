@@ -65,6 +65,7 @@ jobs:
           build-warnings: ""
           cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
       - run: make lint-rust
+      - run: make lint-docs
 
   fmt:
     runs-on: ubuntu-latest
@@ -102,11 +103,29 @@ jobs:
         with:
           python-version: "3.13"
       - run: make tools
-      - run: make lint-python lint-shell lint-workflows lint-secrets
+      - run: python -m pip install -e ./mcp
+      - run: make lint-python lint-types lint-deadcode lint-deps lint-shell lint-workflows lint-secrets
       - name: Quality gate regressions
         run: make quality-tests
       - name: Secret history
         run: .lint-tools/bin/gitleaks git --redact --no-banner --config .gitleaks.toml
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - run: rustup component add llvm-tools
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: make tools
+      - run: make coverage
 
   audit:
     runs-on: ubuntu-latest
@@ -207,7 +226,7 @@ jobs:
         run: python tests/mcp_smoke.py
 
   build:
-    needs: [test, clippy, fmt, source-lint, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]
     strategy:
       matrix:
         include:
@@ -295,7 +314,7 @@ jobs:
           generate_release_notes: true
 
   docker:
-    needs: [test, clippy, fmt, source-lint, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]
     runs-on: ubuntu-latest
     permissions:
       contents: read

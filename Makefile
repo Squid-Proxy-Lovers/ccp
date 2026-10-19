@@ -2,9 +2,12 @@
 CARGO ?= cargo
 PYTHON ?= python3
 LINT_BIN ?= .lint-tools/bin
+BASE ?= origin/main
 export PATH := $(abspath $(LINT_BIN)):$(PATH)
 
-.PHONY: nightly-tests installer-tests quality-tests tools build test integration mcp-smoke compat lint lint-fast lint-rust lint-python lint-shell lint-workflows lint-secrets security fmt help
+.PHONY: check nightly-tests installer-tests quality-tests tools build test integration mcp-smoke compat coverage semver test-integrity lint lint-fast lint-rust lint-docs lint-deps lint-python lint-types lint-deadcode lint-shell lint-workflows lint-secrets security fmt hooks help
+
+check: lint-fast quality-tests coverage integration test-integrity semver ## Run the offline gates a pull request must pass.
 
 nightly-tests: ## Check nightly packaging, failure recovery, and channel installation.
 	$(PYTHON) -m unittest discover -s tests -p 'test_nightly.py' -v
@@ -34,9 +37,19 @@ mcp-smoke: build ## Exercise real FastMCP tools through the CLI and TLS server.
 compat: build ## Check TLS enrollment, client requests, and persistence reopening.
 	$(PYTHON) tests/dependency_compat.py --server target/release/server --client target/release/client
 
+coverage: ## Run Rust tests with coverage and fail below tools/coverage-baseline.json.
+	$(CARGO) llvm-cov --workspace --locked --json --summary-only --output-path target/coverage-summary.json -- --test-threads=1
+	$(PYTHON) scripts/check-coverage.py target/coverage-summary.json
+
+semver: ## Check the protocol crate's public API against main.
+	$(CARGO) semver-checks --package protocol --baseline-rev $(BASE)
+
+test-integrity: ## Fail if tests or assertions were removed, or tests skipped, since main.
+	$(PYTHON) scripts/check-test-integrity.py --base $(BASE)
+
 lint: lint-fast ## Alias for the complete offline source checks.
 
-lint-fast: fmt lint-rust lint-python lint-shell lint-workflows lint-secrets ## Run all offline source checks; Cargo needs cached dependencies.
+lint-fast: fmt lint-rust lint-docs lint-deps lint-python lint-types lint-deadcode lint-shell lint-workflows lint-secrets ## Run all offline source checks; Cargo needs cached dependencies.
 
 fmt: ## Check Rust formatting.
 	$(CARGO) fmt --all -- --check
@@ -44,9 +57,21 @@ fmt: ## Check Rust formatting.
 lint-rust: ## Check all Rust targets with warnings treated as errors.
 	$(CARGO) clippy --workspace --all-targets --locked -- -D warnings
 
+lint-docs: ## Build Rust API docs with warnings treated as errors.
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --locked
+
+lint-deps: ## Reject Cargo dependencies that no crate uses.
+	"$(abspath $(LINT_BIN))/cargo-machete" --skip-target-dir
+
 lint-python: ## Check Python correctness/security rules and formatting.
 	$(PYTHON) -m ruff check mcp tests scripts
 	$(PYTHON) -m ruff format --check mcp tests scripts
+
+lint-types: ## Type-check the MCP package and scripts strictly; needs the MCP package installed.
+	$(PYTHON) -m mypy --strict mcp/src scripts
+
+lint-deadcode: ## Reject unused Python code; record intentional exceptions in tools/vulture_allowlist.py.
+	$(PYTHON) -m vulture mcp/src scripts tests tools/vulture_allowlist.py --min-confidence 60 --ignore-decorators "@mcp.tool,@mcp.resource"
 
 lint-shell: ## Check every Git-visible Bash/POSIX shell script.
 	$(PYTHON) scripts/check-source.py shell
@@ -61,6 +86,9 @@ lint-secrets: ## Scan Git-visible working files, including uncommitted changes.
 security: ## Audit Rust policy/advisories and the installed Python environment (network required).
 	$(CARGO) deny --locked check advisories licenses bans sources --hide-inclusion-graph
 	$(PYTHON) scripts/audit-python.py
+
+hooks: ## Run formatting, Python, and secret checks before each local commit.
+	git config core.hooksPath .githooks
 
 help: ## Show available checks.
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "%-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)

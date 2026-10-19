@@ -36,6 +36,10 @@ use uuid::Uuid;
 
 static TEST_ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static CRYPTO_PROVIDER_READY: Lazy<()> = Lazy::new(|| {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "another test may already have installed the process crypto provider"
+    )]
     let _ = rustls::crypto::ring::default_provider().install_default();
 });
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -329,6 +333,10 @@ impl Drop for TestServer {
     fn drop(&mut self) {
         self.server_task.abort();
         clear_server_env();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best-effort cleanup while dropping the test server"
+        )]
         let _ = fs::remove_dir_all(&self.data_dir);
     }
 }
@@ -763,6 +771,10 @@ impl ProtocolConnection {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 pub async fn run_persistent_load(
     clients: Vec<EnrolledClient>,
     requests_per_client: usize,
@@ -1006,11 +1018,15 @@ fn allocate_port() -> anyhow::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+#[expect(
+    unsafe_code,
+    reason = "edition 2024 marks process environment mutation unsafe"
+)]
 fn set_server_env(data_dir: &Path, auth_addr: &str, mtls_addr: &str) {
     let auth_base_url = format!("http://{auth_addr}");
     let mtls_port = mtls_addr.rsplit(':').next().unwrap_or("");
     let mtls_base_url = format!("https://localhost:{mtls_port}");
-    // Tests serialize access to the process environment via TEST_ENV_LOCK.
+    // SAFETY: tests serialize access to the process environment via TEST_ENV_LOCK.
     unsafe {
         env::set_var(SERVER_DATA_DIR_ENV, data_dir);
         env::set_var(AUTH_LISTENER_ADDR_ENV, auth_addr);
@@ -1020,7 +1036,12 @@ fn set_server_env(data_dir: &Path, auth_addr: &str, mtls_addr: &str) {
     }
 }
 
+#[expect(
+    unsafe_code,
+    reason = "edition 2024 marks process environment mutation unsafe"
+)]
 fn clear_server_env() {
+    // SAFETY: tests serialize access to the process environment via TEST_ENV_LOCK.
     unsafe {
         env::remove_var(SERVER_DATA_DIR_ENV);
         env::remove_var(AUTH_LISTENER_ADDR_ENV);

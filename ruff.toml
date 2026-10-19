@@ -4,7 +4,16 @@ required-version = "==0.16.10"
 extend-exclude = ["handoff", "audit-context", ".lint-tools"]
 
 [lint]
-select = ["E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "S", "RUF100"]
+select = [
+    "E4", "E7", "E9", "F", "I", "B", "UP", "SIM", "S", "RUF100",
+    # Unused arguments, commented-out code, and blind exception handlers.
+    "ARG", "ERA001", "BLE001",
+    # Function size and complexity limits.
+    "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+]
+
+[lint.mccabe]
+max-complexity = 10
 
 [lint.per-file-ignores]
 # Assertions intentionally make the smoke tests fail when a contract breaks.

@@ -30,6 +30,11 @@ mod commands;
 mod database;
 #[cfg(test)]
 #[path = "tests/state.rs"]
+#[expect(
+    unsafe_code,
+    clippy::undocumented_unsafe_blocks,
+    reason = "tests change process environment variables only while holding test_env_lock"
+)]
 mod tests;
 
 const DEFAULT_SHELF_NAME: &str = "main";
@@ -814,5 +819,9 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
 }
 
 fn checkpoint_journal(journal: &JournalHandle) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "pre-existing behaviour: a failed checkpoint leaves the journal intact for replay"
+    )]
     let _ = journal.truncate_blocking();
 }

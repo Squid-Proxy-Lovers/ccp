@@ -44,3 +44,7 @@ runtime-journal.jsonl
 
 # Python source-distribution build output
 /mcp/build/
+
+# Untracked local agent notes
+/AGENTS.local.md
+/CLAUDE.local.md

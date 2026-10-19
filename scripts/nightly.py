@@ -19,21 +19,21 @@ ASSETS = tuple(
 TAG_PATTERN = re.compile(r"nightly-\d{4}-\d{2}-\d{2}-[0-9a-f]{12}")
 
 
-def run(*args, capture=False, check=True):
+def run(*args: str, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
     # Only fixed executables and argv are used; release/ref values are validated below.
     return subprocess.run(args, check=check, text=True, capture_output=capture)  # noqa: S603
 
 
-def digest(path):
+def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def validate_sha(sha):
+def validate_sha(sha: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("A full source commit SHA is required")
 
 
-def prepare(dist, sha):
+def prepare(dist: Path, sha: str) -> None:
     validate_sha(sha)
     for name in ASSETS:
         path = dist / name
@@ -55,7 +55,7 @@ def prepare(dist, sha):
     (dist / "SHA256SUMS").write_text("".join(f"{digest(dist / name)}  {name}\n" for name in names))
 
 
-def verify(dist, sha):
+def verify(dist: Path, sha: str) -> None:
     validate_sha(sha)
     if json.loads((dist / "build-info.json").read_text())["source_sha"] != sha:
         raise ValueError("Release artifacts belong to another commit")
@@ -74,14 +74,15 @@ def verify(dist, sha):
         raise ValueError("Incomplete checksum manifest")
 
 
-def promote(image, tag):
+def promote(image: str, tag: str) -> None:
     # Use the already-published image, including when repairing a failed alias update.
     run("docker", "pull", f"{image}:{tag}")
     run("docker", "tag", f"{image}:{tag}", f"{image}:nightly")
     run("docker", "push", f"{image}:nightly")
 
 
-def publish(dist, archive):
+# C901: publication is one ordered, recoverable release transaction; see tests/test_nightly.py.
+def publish(dist: Path, archive: Path) -> None:  # noqa: C901
     sha = os.environ["GITHUB_SHA"]
     repo = os.environ["GITHUB_REPOSITORY"]
     if os.environ.get("GITHUB_REF") != "refs/heads/main" or os.environ.get(
@@ -191,7 +192,7 @@ def publish(dist, archive):
     promote(image, tag)
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("prepare", "publish"))
     parser.add_argument("--dist", type=Path, required=True)

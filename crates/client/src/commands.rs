@@ -250,6 +250,11 @@ struct GetEntryAtArgs {
     book: Option<String>,
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 pub(crate) async fn run() -> anyhow::Result<()> {
     let cli = parse_cli();
 
@@ -657,12 +662,24 @@ fn parse_cli() -> Cli {
 fn print_error(error: clap::Error, input_formats: &str) -> ! {
     let use_stderr = error.use_stderr();
     let exit_code = error.exit_code();
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "printing help is best effort when the terminal has closed"
+    )]
     let _ = error.print();
     if use_stderr {
         let mut stderr = io::stderr();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "printing help is best effort when the terminal has closed"
+        )]
         let _ = writeln!(stderr, "\n{input_formats}");
     } else {
         let mut stdout = io::stdout();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "printing help is best effort when the terminal has closed"
+        )]
         let _ = writeln!(stdout, "\n{input_formats}");
     }
     std::process::exit(exit_code);

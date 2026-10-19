@@ -200,7 +200,7 @@ fn select_enrollment_from_enrollments(
     session_selector: &str,
     require_write: bool,
 ) -> anyhow::Result<StoredEnrollment> {
-    let mut candidates = enrollments
+    let candidates = enrollments
         .iter()
         .filter(|enrollment| enrollment_matches_selector(enrollment, session_selector))
         .filter(|enrollment| {
@@ -222,8 +222,10 @@ fn select_enrollment_from_enrollments(
         bail!("no saved enrollment found for session '{session_selector}'");
     }
 
-    candidates.sort_by_key(|enrollment| enrollment.metadata.enrolled_at);
-    Ok(candidates.pop().expect("candidate list is not empty"))
+    candidates
+        .into_iter()
+        .max_by_key(|enrollment| enrollment.metadata.enrolled_at)
+        .context("no saved enrollment candidates remain")
 }
 
 fn enrollment_matches_selector(enrollment: &StoredEnrollment, session_selector: &str) -> bool {

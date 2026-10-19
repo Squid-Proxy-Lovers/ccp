@@ -150,6 +150,10 @@ pub fn config_session_dir(session_name: &str) -> anyhow::Result<PathBuf> {
         resolved = session_storage_dir(session_name);
     }
 
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the first resolved data directory wins for the process lifetime"
+    )]
     let _ = RESOLVED_DATA_DIR.set(resolved.clone());
     Ok(resolved)
 }
@@ -232,8 +236,8 @@ pub fn session_slug(session_name: &str) -> String {
         normalized
     };
     let digest = Sha256::digest(session_name.as_bytes());
-    let digest_hex = format!("{digest:x}");
-    format!("{normalized}-{}", &digest_hex[..8])
+    let digest_prefix: String = format!("{digest:x}").chars().take(8).collect();
+    format!("{normalized}-{digest_prefix}")
 }
 
 pub fn db_path() -> PathBuf {
@@ -338,6 +342,11 @@ pub(crate) fn test_env_lock() -> &'static Mutex<()> {
 
 #[cfg(test)]
 #[path = "tests/init.rs"]
+#[expect(
+    unsafe_code,
+    clippy::undocumented_unsafe_blocks,
+    reason = "tests change process environment variables only while holding test_env_lock"
+)]
 mod tests;
 
 pub(crate) fn configure_sqlite(connection: &Connection) -> anyhow::Result<()> {
@@ -477,22 +486,6 @@ fn allow_non_loopback_auth_listener() -> bool {
         .unwrap_or(false)
 }
 
-#[allow(dead_code)]
-pub(crate) fn initialize_auth_secret() -> anyhow::Result<()> {
-    let path = auth_secret_path();
-    if path.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create auth secret dir at {}", parent.display()))?;
-    }
-    let mut secret = [0u8; 32];
-    getrandom::getrandom(&mut secret)
-        .map_err(|error| anyhow::anyhow!("failed to generate auth secret: {error}"))?;
-    write_private_file(&path, &secret)
-}
-
 fn load_auth_secret() -> anyhow::Result<Vec<u8>> {
     let path = auth_secret_path();
     let secret = fs::read(&path)
@@ -526,6 +519,10 @@ fn encode_hex(bytes: &[u8]) -> String {
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         use std::fmt::Write as _;
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "writing to a String cannot fail"
+        )]
         let _ = write!(&mut encoded, "{byte:02x}");
     }
     encoded
@@ -716,6 +713,10 @@ fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> an
         .with_context(|| format!("failed to load session id for {session_name}"))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 fn apply_schema_migrations(connection: &Connection) -> anyhow::Result<()> {
     add_column_if_missing(
         connection,
@@ -1028,7 +1029,8 @@ pub fn unix_timestamp_after(ttl_seconds: u64) -> anyhow::Result<u64> {
 }
 
 pub fn unix_timestamp_to_sqlite(timestamp: u64) -> anyhow::Result<String> {
-    let datetime = OffsetDateTime::from_unix_timestamp(timestamp as i64)
+    let timestamp = i64::try_from(timestamp).context("unix timestamp exceeds i64 range")?;
+    let datetime = OffsetDateTime::from_unix_timestamp(timestamp)
         .context("failed to convert unix timestamp to datetime")?;
     Ok(format!(
         "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
@@ -1337,13 +1339,7 @@ fn extract_cn_from_pem(pem_str: &str) -> Option<String> {
     // Try to find CN in the PEM certificate
     // This is a simple approach - looks for subjectAltName URI with session/access info
     // Format: X509v3 Subject Alternative Name: URI:ccp://session/..., URI:ccp://access/...
-    if let Some(cn_start) = pem_str.find("CN=") {
-        let rest = &pem_str[cn_start + 3..];
-        if let Some(cn_end) = rest.find(',') {
-            return Some(rest[..cn_end].trim().to_string());
-        } else if let Some(cn_end) = rest.find('\n') {
-            return Some(rest[..cn_end].trim().to_string());
-        }
-    }
-    None
+    let (_, rest) = pem_str.split_once("CN=")?;
+    let (common_name, _) = rest.split_once(',').or_else(|| rest.split_once('\n'))?;
+    Some(common_name.trim().to_string())
 }

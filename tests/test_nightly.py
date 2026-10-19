@@ -41,7 +41,8 @@ class PublicationTests(unittest.TestCase):
         self.calls = []
 
     def publish(self, *, releases=(), failure=(), revision=SHA, ancestor=False):
-        def command(*args, capture=False, check=True):
+        # ARG001: the fake mirrors nightly.run's keyword interface.
+        def command(*args, capture=False, check=True):  # noqa: ARG001
             self.calls.append(args)
             if failure and args[: len(failure)] == failure:
                 raise subprocess.CalledProcessError(1, args)

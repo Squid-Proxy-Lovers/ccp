@@ -2,6 +2,11 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+#![expect(
+    clippy::indexing_slicing,
+    reason = "test and benchmark support code: a panic here is a failed test, not a production crash"
+)]
+
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -153,6 +158,10 @@ async fn seed_entries(
     Ok(entry_names)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "legacy function predating the size and complexity limits; split it before extending"
+)]
 fn benchmark_scenarios(config: &BenchmarkConfig, seeded_entries: &[String]) -> Vec<Scenario> {
     let entry_names = seeded_entries.to_vec();
 

@@ -13,8 +13,8 @@ make test
 cargo test --workspace --locked -- --list
 ```
 
-The normal workspace run currently executes **64 Rust cases**: 50 server, eight
-client, and six integration tests. The quality suite adds **seven Python cases**,
+The normal workspace run currently executes **67 Rust cases**: 53 server, eight
+client, and six integration tests. The quality suite adds **12 Python cases**,
 and the Docker installer suite adds **six Python cases**. The nightly suite checks
 artifact integrity, publication recovery, and real-installer channel selection.
 The CLI suite separately passes 59 assertions;

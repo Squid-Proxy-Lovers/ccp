@@ -177,7 +177,10 @@ pub(super) fn build_context_snippets(context: &str, query: &SearchQuery) -> Vec<
     let mut snippets = Vec::new();
     for term in &query.terms {
         let mut start_search = 0usize;
-        while let Some(index) = lowered[start_search..].find(term) {
+        while let Some(index) = lowered
+            .get(start_search..)
+            .and_then(|remaining| remaining.find(term))
+        {
             let absolute = start_search + index;
             let snippet = snippet_around(context, absolute, term.len(), 100);
             if !snippets.iter().any(|existing| existing == &snippet) {
