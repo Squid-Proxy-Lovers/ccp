@@ -126,7 +126,7 @@ Response:
   "status": "healthy",
   "session_name": "my-session",
   "protocol_version": 1,
-  "schema_version": 11,
+  "schema_version": 12,
   "active_sessions": 1,
   "issued_certs": 3,
   "revoked_certs": 0,

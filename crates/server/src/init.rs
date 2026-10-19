@@ -53,7 +53,7 @@ const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
@@ -64,6 +64,7 @@ const DEFAULT_CERT_WARNING_WINDOW_SECONDS: u64 = 0;
 const SCHEMA: &str = include_str!("init-db.sql");
 
 pub struct SessionBootstrap {
+    pub(crate) directory_lease: crate::directory_mode::DirectoryLease,
     pub session_id: i64,
     pub session_name: String,
     pub auth_redeem_url: String,
@@ -87,7 +88,8 @@ pub struct SessionBinding {
 }
 
 pub async fn initialize_cpp_server(session_name: &str) -> anyhow::Result<SessionBootstrap> {
-    let _ = config_session_dir(session_name)?;
+    let directory = config_session_dir(session_name)?;
+    let directory_lease = crate::directory_mode::DirectoryLease::native(&directory)?;
     init_sqlite(&db_path())?;
     validate_auth_formating()?;
     let mut connection = open_sqlite_connection()?;
@@ -100,6 +102,7 @@ pub async fn initialize_cpp_server(session_name: &str) -> anyhow::Result<Session
     let initial_read_write_token =
         ensure_initial_enrollment_token(session_name, session_id, "read_write")?;
     Ok(SessionBootstrap {
+        directory_lease,
         session_id,
         session_name: session_name.to_string(),
         auth_redeem_url: auth_redeem_url(),
@@ -203,6 +206,19 @@ fn cmp_dir_session_name(dir: &Path, session_name: &str) -> anyhow::Result<bool> 
         return Ok(false);
     }
 
+    let _directory_lease = match crate::directory_mode::DirectoryLease::native(dir) {
+        Ok(lease) => lease,
+        Err(error)
+            if error
+                .downcast_ref::<crate::directory_mode::DirectoryConflict>()
+                .is_some() =>
+        {
+            // A legacy discovery scan cannot inspect a protected/in-use mode.
+            // Explicitly selected directories are rejected by startup/tool guards.
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
     let connection = Connection::open(&db_path)
         .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
     configure_sqlite(&connection)?;
@@ -365,7 +381,8 @@ pub fn issue_enrollment_token(
     access_level: &str,
     ttl_seconds: Option<u64>,
 ) -> anyhow::Result<IssuedEnrollmentToken> {
-    let _ = config_session_dir(session_name)?;
+    let directory = config_session_dir(session_name)?;
+    let _directory_lease = crate::directory_mode::DirectoryLease::native(&directory)?;
     if access_level != "read" && access_level != "read_write" && access_level != "admin" {
         bail!("access_level must be 'read', 'read_write', or 'admin'");
     }
@@ -1183,7 +1200,7 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     }
 }
 
-fn reject_unsupported_schema(connection: &Connection) -> anyhow::Result<()> {
+pub(crate) fn reject_unsupported_schema(connection: &Connection) -> anyhow::Result<()> {
     let exists: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version')",
         [], |row| row.get(0),
@@ -1276,6 +1293,7 @@ pub struct CertInfo {
 
 pub fn check_server_health(session_name: &str) -> anyhow::Result<ServerHealthStatus> {
     let session_dir = config_session_dir(session_name)?;
+    let _directory_lease = crate::directory_mode::DirectoryLease::native(&session_dir)?;
     let db_path = session_dir.join("ccp.sqlite3");
     let journal_path = session_dir.join("runtime-journal.jsonl");
     let ca_cert_path = session_dir.join("ccp_ca_cert.pem");

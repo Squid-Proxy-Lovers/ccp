@@ -242,3 +242,9 @@ CREATE TABLE IF NOT EXISTS ccp_readmission_history (
     FOREIGN KEY (grant_id, workspace_id)
         REFERENCES ccp_grants(id, workspace_id) ON DELETE RESTRICT
 );
+
+CREATE TABLE IF NOT EXISTS ccp_runtime_mode (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    mode TEXT NOT NULL CHECK (mode IN ('native', 'workspace'))
+);
+INSERT OR IGNORE INTO ccp_runtime_mode(singleton, mode) VALUES (1, 'native');

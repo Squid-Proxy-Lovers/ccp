@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 pub mod auth_request;
+pub mod directory_mode;
 pub mod foundation;
 pub mod identity;
 pub mod init;
@@ -58,15 +59,7 @@ const FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
     reason = "legacy function predating the size and complexity limits; split it before extending"
 )]
 pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "another component may already have installed the process crypto provider"
-    )]
-    let _ = ring::default_provider().install_default();
-    let bootstrap = initialize_cpp_server(session_name).await?;
-    let journal = Arc::new(JournalHandle::start(journal_path())?);
-    let state = Arc::new(ServerState::load_from_storage(Arc::clone(&journal)).await?);
-    install_crash_persistence_hook(Arc::clone(&state));
+    let (bootstrap, journal, state) = initialize_native_runtime(session_name).await?;
     let shutdown = Arc::new(ShutdownCoordinator::new());
 
     println!(
@@ -265,6 +258,28 @@ pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
     journal.truncate_blocking()?;
 
     server_result
+}
+
+async fn initialize_native_runtime(
+    session_name: &str,
+) -> anyhow::Result<(
+    crate::init::SessionBootstrap,
+    Arc<JournalHandle>,
+    Arc<ServerState>,
+)> {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "another component may already have installed the process crypto provider"
+    )]
+    let _ = ring::default_provider().install_default();
+    let bootstrap = initialize_cpp_server(session_name).await?;
+    let journal = Arc::new(JournalHandle::start_guarded(
+        journal_path(),
+        bootstrap.directory_lease.clone(),
+    )?);
+    let state = Arc::new(ServerState::load_from_storage(Arc::clone(&journal)).await?);
+    install_crash_persistence_hook(Arc::clone(&state));
+    Ok((bootstrap, journal, state))
 }
 
 async fn auth_handler(

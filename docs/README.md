@@ -40,6 +40,7 @@ you need to complete. These guides describe the current `main` branch.
 | Understand unreleased atomic invitation redemption | [Certificate enrollment](workspace-enrollment.md) |
 | Understand unreleased scoped/global client recovery | [Client recovery](workspace-recovery.md) |
 | Understand explicit readmission of a revoked workspace member | [Targeted readmission](workspace-readmission.md) |
+| Understand native/workspace data-directory exclusion and activation | [Runtime mode isolation](workspace-runtime-mode.md) |
 | Edit documentation | [Writing guide](writing.md) |
 
 ## Earlier versions

@@ -4,7 +4,8 @@ This unreleased foundation adds persistent identity and authorization records
 for the workspace redesign. Phase 1 introduced schema 5; the scoped-key batch
 adds schema 6; invitation policy records add schema 7, atomic certificate
 redemption adds schema 8, credential renewal adds schema 9, targeted recovery
-adds schema 10 and explicit targeted readmission adds schema 11. The existing
+adds schema 10, explicit targeted readmission adds schema 11 and data-directory
+mode isolation adds schema 12. The existing
 native mTLS client protocol and CLI
 remain in service. No new HTTP listener, admin login, invitation endpoint or
 workspace browser is exposed by this phase.
@@ -35,7 +36,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 11. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 12. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -112,3 +113,10 @@ owner-only administration, audit rollback, persistent reopening, legacy-data
 preservation, migration rollback and refusal of a future schema. Native CLI/MCP
 and compatibility checks still apply. Passing these checks does not establish
 the new HTTP, browser or enrollment flows before those phases are implemented.
+
+## Runtime mode isolation
+
+[Directory mode leases](workspace-runtime-mode.md) exclude native runtime and
+local native tools from an activated workspace data directory. This storage
+boundary does not grant any client/admin role, implement a new transport or
+convert legacy contents. Native mode remains the default.
