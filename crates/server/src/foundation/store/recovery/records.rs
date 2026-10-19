@@ -39,7 +39,7 @@ pub(super) fn replace_bindings(
     authority: &IssuingAuthority,
     now: i64,
 ) -> anyhow::Result<RecoveryReceipt> {
-    require_fresh_recovery_key(tx, invite.client, &proof.key_hash)?;
+    require_fresh_client_key(tx, invite.client, &proof.key_hash)?;
     let grants = tx
         .prepare(
             "SELECT g.id FROM ccp_recovery_grants r
@@ -164,25 +164,4 @@ pub(super) fn recovery_retry(
         bail!("recovery receipt has no current captured readable binding");
     }
     recovered_receipt(tx, invite, credential).map(Some)
-}
-
-fn require_fresh_recovery_key(
-    tx: &Connection,
-    client: Uuid,
-    key_hash: &[u8],
-) -> anyhow::Result<()> {
-    // All previously registered target-client keys count, even when their
-    // credentials expired, were revoked/superseded or retain only another
-    // workspace. Otherwise recovery could reuse a known compromised key.
-    let reused: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ccp_credential_certificates k
-         JOIN ccp_credentials c ON c.id = k.credential_id
-         WHERE c.client_id = ?1 AND k.public_key_hash = ?2)",
-        params![client.to_string(), key_hash],
-        |row| row.get(0),
-    )?;
-    if reused {
-        bail!("recovery requires a key not previously registered to this client");
-    }
-    Ok(())
 }

@@ -57,7 +57,8 @@ credentials and lost keys need the separate targeted-recovery flow; they cannot
 renew themselves through this ordinary identity-reuse path. Routine renewal is
 documented below. Targeted scoped/global recovery uses a
 [fresh administrative recovery invitation](workspace-recovery.md). Explicit
-targeted readmission of revoked members remains subsequent work.
+targeted readmission of revoked members uses a
+[fresh targeted individual invitation](workspace-readmission.md).
 
 ## Routine credential renewal
 

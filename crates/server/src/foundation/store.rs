@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 mod invitations;
 mod keys;
+mod readmission;
 mod recovery;
 mod redemption;
 mod renewal;
@@ -519,5 +520,22 @@ fn audit_local_operator(
          VALUES ('local_operator', 'local', ?1, ?2, ?3)",
         params![action, target.to_string(), now],
     )?;
+    Ok(())
+}
+
+fn require_fresh_client_key(tx: &Connection, client: Uuid, key_hash: &[u8]) -> anyhow::Result<()> {
+    // All previously registered target-client keys count, even when their
+    // credentials expired, were revoked/superseded or retain only another
+    // workspace. Targeted replacement must not reuse a known compromised key.
+    let reused: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ccp_credential_certificates k
+         JOIN ccp_credentials c ON c.id = k.credential_id
+         WHERE c.client_id = ?1 AND k.public_key_hash = ?2)",
+        params![client.to_string(), key_hash],
+        |row| row.get(0),
+    )?;
+    if reused {
+        bail!("new credential requires a key not previously registered to this client");
+    }
     Ok(())
 }

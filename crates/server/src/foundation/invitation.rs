@@ -21,6 +21,16 @@ pub struct IndividualInvitationRequest {
     pub expires_at: i64,
 }
 
+/// Explicit administrative admission of an existing client whose complete
+/// workspace grant history is revoked. Redemption carries no client-ID claim.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadmissionInvitationRequest {
+    pub workspace_id: Uuid,
+    pub client_id: Uuid,
+    pub role: DataRole,
+    pub expires_at: i64,
+}
+
 /// Issuance-only secret. No implicit Debug/Serialize disclosure is available.
 pub struct IssuedInvitation {
     pub id: Uuid,
@@ -54,4 +64,5 @@ pub struct InvitationStatus {
     pub expired: bool,
     pub initial_closed: bool,
     pub issuer_authorized: bool,
+    pub target_client_id: Option<Uuid>,
 }

@@ -97,5 +97,7 @@ apply; schema-9 renewal and earlier supported native identities are preserved.
 Tests cover scoped/global recovery, expired clients, current role/key loss,
 archived reads, partial grant revocation, immutable capture, exact retries,
 competing requests, rollback, schema-9 upgrade and restart. Full network identity
-verification, server-trust setup, local operator reset and explicit targeted
-readmission of a revoked workspace member remain subsequent work.
+verification, server-trust setup and local operator reset remain subsequent
+work. Explicit [targeted readmission](workspace-readmission.md) is a separate
+administrative action that creates a new grant; recovery never restores a
+revoked grant.

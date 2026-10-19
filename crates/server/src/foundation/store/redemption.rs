@@ -5,6 +5,7 @@
 use rusqlite::OptionalExtension;
 
 use super::invitations::{refresh_initial, refresh_invitation_expiry};
+use super::readmission::{readmission_current, readmission_target};
 use super::*;
 use crate::foundation::admin::key_hash;
 use crate::foundation::certificate::VerifiedCsr;
@@ -118,17 +119,10 @@ fn redeem(
     {
         return Ok(Redemption::Denied);
     }
-    let Some(identity) = prepare_identity(tx, request, proof, authority, now)? else {
+    let Some(identity) = prepare_invited_identity(tx, &invite, request, proof, authority, now)?
+    else {
         return Ok(Redemption::Denied);
     };
-    let existing: bool = tx.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ccp_grants WHERE client_id = ?1 AND workspace_id = ?2)",
-        params![identity.client_id.to_string(), invite.workspace.to_string()],
-        |row| row.get(0),
-    )?;
-    if existing {
-        return Ok(Redemption::Denied);
-    }
     let grant_id = grant_and_bind(
         tx,
         invite.workspace,
@@ -262,7 +256,9 @@ fn replay(
     let client = parse_id(row.0)?;
     let credential = parse_id(row.1)?;
     let grant = parse_id(row.2)?;
-    if row.3 != proof.key_hash
+    let target = readmission_target(tx, invite.id, invite.workspace)?;
+    if target.is_some_and(|id| id != client || request.existing_credential.is_some())
+        || row.3 != proof.key_hash
         || row.4 != request.existing_credential.map(|id| id.to_string())
         || !permitted(
             tx,
@@ -318,6 +314,7 @@ fn stored_certificate(tx: &Connection, credential: Uuid) -> anyhow::Result<(Stri
 fn prepare_identity(
     tx: &Connection,
     request: &RedemptionRequest,
+    target: Option<Uuid>,
     proof: &VerifiedCsr,
     authority: &IssuingAuthority,
     now: i64,
@@ -347,13 +344,18 @@ fn prepare_identity(
         [],
         |row| row.get(0),
     )?)?;
-    let client = Uuid::new_v4();
+    let client = target.unwrap_or_else(Uuid::new_v4);
+    if target.is_some() {
+        require_fresh_client_key(tx, client, &proof.key_hash)?;
+    }
     let credential = Uuid::new_v4();
     let signed = authority.issue(proof, instance, client, credential, now)?;
-    tx.execute(
-        "INSERT INTO ccp_clients(id, name) VALUES (?1, ?2)",
-        params![client.to_string(), format!("client-{}", client.simple())],
-    )?;
+    if target.is_none() {
+        tx.execute(
+            "INSERT INTO ccp_clients(id, name) VALUES (?1, ?2)",
+            params![client.to_string(), format!("client-{}", client.simple())],
+        )?;
+    }
     tx.execute(
         "INSERT INTO ccp_credentials(id, client_id, expires_at) VALUES (?1, ?2, ?3)",
         params![
@@ -372,4 +374,36 @@ fn prepare_identity(
         certificate_pem: signed.pem,
         expires_at: signed.expires_at,
     }))
+}
+
+fn prepare_invited_identity(
+    tx: &Connection,
+    invite: &Invitation,
+    request: &RedemptionRequest,
+    proof: &VerifiedCsr,
+    authority: &IssuingAuthority,
+    now: i64,
+) -> anyhow::Result<Option<PreparedIdentity>> {
+    let target = readmission_target(tx, invite.id, invite.workspace)?;
+    if let Some(client) = target
+        && (invite.initial
+            || request.existing_credential.is_some()
+            || !readmission_current(tx, invite.id, client, invite.workspace)?)
+    {
+        return Ok(None);
+    }
+    let Some(identity) = prepare_identity(tx, request, target, proof, authority, now)? else {
+        return Ok(None);
+    };
+    if target.is_none() {
+        let existing: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ccp_grants WHERE client_id = ?1 AND workspace_id = ?2)",
+            params![identity.client_id.to_string(), invite.workspace.to_string()],
+            |row| row.get(0),
+        )?;
+        if existing {
+            return Ok(None);
+        }
+    }
+    Ok(Some(identity))
 }

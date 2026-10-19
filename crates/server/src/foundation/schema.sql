@@ -217,3 +217,28 @@ CREATE TABLE IF NOT EXISTS ccp_recovery_receipt_grants (
     FOREIGN KEY (credential_id, grant_id)
         REFERENCES ccp_credential_grants(credential_id, grant_id) ON DELETE RESTRICT
 );
+
+CREATE TABLE IF NOT EXISTS ccp_readmission_targets (
+    invitation_id TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL REFERENCES ccp_clients(id) ON DELETE RESTRICT,
+    workspace_id TEXT NOT NULL,
+    UNIQUE (invitation_id, client_id),
+    UNIQUE (invitation_id, workspace_id),
+    FOREIGN KEY (invitation_id, workspace_id)
+        REFERENCES ccp_invitations(id, workspace_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS ccp_readmission_history (
+    invitation_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    PRIMARY KEY (invitation_id, grant_id),
+    FOREIGN KEY (invitation_id, client_id)
+        REFERENCES ccp_readmission_targets(invitation_id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (invitation_id, workspace_id)
+        REFERENCES ccp_readmission_targets(invitation_id, workspace_id) ON DELETE RESTRICT,
+    FOREIGN KEY (grant_id, client_id)
+        REFERENCES ccp_grants(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (grant_id, workspace_id)
+        REFERENCES ccp_grants(id, workspace_id) ON DELETE RESTRICT
+);

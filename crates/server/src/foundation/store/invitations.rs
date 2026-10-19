@@ -73,44 +73,8 @@ impl AccessStore<'_> {
         request: IndividualInvitationRequest,
         now: i64,
     ) -> anyhow::Result<IssuedInvitation> {
-        validate_bounds(Some(1), Some(request.expires_at), now)?;
-        if request
-            .expires_at
-            .checked_sub(now)
-            .is_none_or(|ttl| ttl > 7 * 24 * 60 * 60)
-        {
-            bail!("individual invitation lifetime cannot exceed seven days");
-        }
         self.mutate(|tx| {
-            authorize(
-                tx,
-                actor,
-                Action::AdmitClient,
-                Some(request.workspace_id),
-                now,
-            )?;
-            refresh_initial(tx, request.workspace_id, now)?;
-            let open: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM ccp_initial_enrollment
-                 WHERE workspace_id = ?1 AND closed_at IS NULL)",
-                [request.workspace_id.to_string()],
-                |row| row.get(0),
-            )?;
-            if open {
-                bail!("close initial group enrollment before individual admission");
-            }
-            close_initial(tx, request.workspace_id, "manual_close", now)?;
-            let issued = insert_invitation(
-                tx,
-                actor,
-                InvitationInsert {
-                    workspace: request.workspace_id,
-                    role: request.role,
-                    kind: "individual",
-                    max_uses: Some(1),
-                    expires_at: Some(request.expires_at),
-                },
-            )?;
+            let issued = insert_individual(tx, actor, request, now)?;
             audit(
                 tx,
                 actor,
@@ -218,6 +182,9 @@ impl AccessStore<'_> {
                 revoked: row.3.is_some(),
                 expired: row.7,
                 initial_closed: row.6,
+                target_client_id: super::readmission::readmission_target(
+                    tx, invitation, workspace,
+                )?,
                 issuer_authorized: permitted(
                     tx,
                     issuer,
@@ -332,4 +299,49 @@ pub(super) fn refresh_invitation_expiry(
         params![invitation.to_string(), workspace.to_string(), now],
     )?;
     refresh_initial(tx, workspace, now)
+}
+
+/// Shared individual-mode transition, called only inside the caller's atomic
+/// transaction. Targeted readmission adds its immutable target/history here.
+pub(super) fn insert_individual(
+    tx: &Connection,
+    actor: Actor,
+    request: IndividualInvitationRequest,
+    now: i64,
+) -> anyhow::Result<IssuedInvitation> {
+    validate_bounds(Some(1), Some(request.expires_at), now)?;
+    if request
+        .expires_at
+        .checked_sub(now)
+        .is_none_or(|ttl| ttl > 7 * 24 * 60 * 60)
+    {
+        bail!("individual invitation lifetime cannot exceed seven days");
+    }
+    authorize(
+        tx,
+        actor,
+        Action::AdmitClient,
+        Some(request.workspace_id),
+        now,
+    )?;
+    refresh_initial(tx, request.workspace_id, now)?;
+    let open: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ccp_initial_enrollment WHERE workspace_id = ?1 AND closed_at IS NULL)",
+        [request.workspace_id.to_string()], |row| row.get(0),
+    )?;
+    if open {
+        bail!("close initial group enrollment before individual admission");
+    }
+    close_initial(tx, request.workspace_id, "manual_close", now)?;
+    insert_invitation(
+        tx,
+        actor,
+        InvitationInsert {
+            workspace: request.workspace_id,
+            role: request.role,
+            kind: "individual",
+            max_uses: Some(1),
+            expires_at: Some(request.expires_at),
+        },
+    )
 }

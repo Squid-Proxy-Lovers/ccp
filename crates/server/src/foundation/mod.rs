@@ -24,6 +24,7 @@ pub use certificate::{
 };
 pub use invitation::{
     IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,
+    ReadmissionInvitationRequest,
 };
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,

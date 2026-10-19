@@ -55,3 +55,12 @@ capacity-transition test seeds an exhausted counter directly; separate redemptio
 race tests now verify actual quota consumption and retry receipts. Renewal,
 scoped recovery and network adapters remain subsequent work. No browser session
 or network listener is established by these internal tests.
+
+## Explicit targeted readmission
+
+A fresh [targeted individual invitation](workspace-readmission.md) can admit an
+existing client whose prior grants in that workspace are all revoked. It uses
+the same finite individual lifetime, one-use limit and explicit initial-group
+closure rules. Its target and complete prior grant history are server records;
+ordinary invitations never infer that purpose from caller claims. Administrative
+status includes an optional `target_client_id`, not an authorization lease.
