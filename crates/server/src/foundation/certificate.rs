@@ -55,6 +55,24 @@ pub struct EnrollmentReceipt {
     pub expires_at: i64,
 }
 
+/// A new signed CSR, authorized by a separately verified old mTLS credential.
+#[derive(Clone, Debug)]
+pub struct RenewalRequest {
+    pub request_id: Uuid,
+    pub csr_pem: String,
+}
+
+/// Public material from one atomic rotation. Grant IDs are captured at renewal;
+/// current role, binding and lifecycle checks still govern every data operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenewalReceipt {
+    pub client_id: Uuid,
+    pub credential_id: Uuid,
+    pub grant_ids: Vec<Uuid>,
+    pub certificate_pem: String,
+    pub expires_at: i64,
+}
+
 impl IssuingAuthority {
     pub fn from_pem(certificate_pem: &str, private_key_pem: &str) -> anyhow::Result<Self> {
         let key = KeyPair::from_pem(private_key_pem).context("invalid issuing private key")?;

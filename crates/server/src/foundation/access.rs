@@ -134,7 +134,8 @@ pub(super) fn authenticated_client(
     let client: Option<String> = connection
         .query_row(
             "SELECT c.client_id FROM ccp_credentials c JOIN ccp_clients p ON p.id = c.client_id
-             WHERE c.id = ?1 AND c.revoked_at IS NULL AND c.expires_at > ?2 AND p.disabled = 0",
+             WHERE c.id = ?1 AND c.revoked_at IS NULL AND c.expires_at > ?2 AND p.disabled = 0
+             AND NOT EXISTS(SELECT 1 FROM ccp_credential_renewals r WHERE r.previous_credential_id = c.id)",
             params![credential.to_string(), now],
             |row| row.get(0),
         )
@@ -158,7 +159,8 @@ fn client_allowed(
     // A failed identity lookup is a denied action, not a way to infer grants.
     let live = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM ccp_credentials c JOIN ccp_clients p ON p.id = c.client_id
-         WHERE c.id = ?1 AND c.revoked_at IS NULL AND c.expires_at > ?2 AND p.disabled = 0)",
+         WHERE c.id = ?1 AND c.revoked_at IS NULL AND c.expires_at > ?2 AND p.disabled = 0
+         AND NOT EXISTS(SELECT 1 FROM ccp_credential_renewals r WHERE r.previous_credential_id = c.id))",
         params![credential.to_string(), now],
         |row| row.get::<_, bool>(0),
     )?;

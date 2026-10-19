@@ -135,3 +135,30 @@ CREATE TABLE IF NOT EXISTS ccp_invitation_closures (
     invitation_id TEXT PRIMARY KEY REFERENCES ccp_invitations(id) ON DELETE RESTRICT,
     expired_at INTEGER NOT NULL CHECK (expired_at >= 0)
 );
+
+-- Supersession is distinct from administrative revocation. Old credentials may
+-- retrieve only their exact renewal receipt; they cannot authorize data calls.
+CREATE TABLE IF NOT EXISTS ccp_credential_renewals (
+    previous_credential_id TEXT PRIMARY KEY,
+    request_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL UNIQUE,
+    client_id TEXT NOT NULL,
+    public_key_hash BLOB NOT NULL CHECK (length(public_key_hash) = 32),
+    recorded_at INTEGER NOT NULL CHECK (recorded_at >= 0),
+    CHECK (previous_credential_id != credential_id),
+    UNIQUE (previous_credential_id, client_id),
+    FOREIGN KEY (previous_credential_id, client_id)
+        REFERENCES ccp_credentials(id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (credential_id, client_id)
+        REFERENCES ccp_credentials(id, client_id) ON DELETE RESTRICT
+);
+CREATE TABLE IF NOT EXISTS ccp_renewal_grants (
+    previous_credential_id TEXT NOT NULL,
+    grant_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    PRIMARY KEY (previous_credential_id, grant_id),
+    FOREIGN KEY (previous_credential_id, client_id)
+        REFERENCES ccp_credential_renewals(previous_credential_id, client_id) ON DELETE RESTRICT,
+    FOREIGN KEY (grant_id, client_id)
+        REFERENCES ccp_grants(id, client_id) ON DELETE RESTRICT
+);

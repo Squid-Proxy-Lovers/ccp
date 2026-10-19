@@ -319,7 +319,8 @@ fn prepare_identity(
         let row = tx.query_row(
             "SELECT c.client_id, k.certificate_pem, c.expires_at FROM ccp_credentials c
              JOIN ccp_clients p ON p.id = c.client_id JOIN ccp_credential_certificates k ON k.credential_id = c.id
-             WHERE c.id = ?1 AND c.expires_at > ?2 AND c.revoked_at IS NULL AND p.disabled = 0 AND k.public_key_hash = ?3",
+             WHERE c.id = ?1 AND c.expires_at > ?2 AND c.revoked_at IS NULL AND p.disabled = 0 AND k.public_key_hash = ?3
+             AND NOT EXISTS(SELECT 1 FROM ccp_credential_renewals r WHERE r.previous_credential_id = c.id)",
             params![credential.to_string(), now, proof.key_hash],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?)),
         ).optional()?;

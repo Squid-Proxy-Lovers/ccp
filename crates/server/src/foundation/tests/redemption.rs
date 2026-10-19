@@ -14,7 +14,7 @@ use std::sync::Arc;
 const CLOCK: i64 = 1_700_000_000;
 const DEADLINE: i64 = CLOCK + 3600;
 
-fn authority() -> (IssuingAuthority, Vec<u8>) {
+pub(super) fn authority() -> (IssuingAuthority, Vec<u8>) {
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -28,7 +28,7 @@ fn authority() -> (IssuingAuthority, Vec<u8>) {
     )
 }
 
-fn csr_request(key: &KeyPair) -> RedemptionRequest {
+pub(super) fn csr_request(key: &KeyPair) -> RedemptionRequest {
     let params = CertificateParams::new(Vec::<String>::new()).unwrap();
     RedemptionRequest {
         request_id: Uuid::new_v4(),
@@ -37,7 +37,7 @@ fn csr_request(key: &KeyPair) -> RedemptionRequest {
     }
 }
 
-fn invite(f: &mut Fixture, capacity: u32) -> IssuedInvitation {
+pub(super) fn invite(f: &mut Fixture, capacity: u32) -> IssuedInvitation {
     AccessStore::new(&mut f.connection)
         .unwrap()
         .issue_initial_invitation(
@@ -53,7 +53,7 @@ fn invite(f: &mut Fixture, capacity: u32) -> IssuedInvitation {
         .unwrap()
 }
 
-fn redeem(
+pub(super) fn redeem(
     f: &mut Fixture,
     token: &IssuedInvitation,
     request: &RedemptionRequest,

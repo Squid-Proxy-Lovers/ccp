@@ -54,8 +54,45 @@ does not rewrite its role, attach a different credential or resurrect a revoked
 grant through an old invitation. Fresh targeted administrative readmission is
 separate from this ordinary path. Expired
 credentials and lost keys need the separate targeted-recovery flow; they cannot
-renew themselves through this ordinary identity-reuse path. Renewal and scoped
-recovery are not implemented by this batch.
+renew themselves through this ordinary identity-reuse path. Routine renewal is documented below. Targeted scoped/global recovery and
+readmission still require a separate fresh administrative invitation.
+
+## Routine credential renewal
+
+`renew_credential` is an internal transaction primitive. Its actor must come
+from an actual verified client TLS connection, never a credential ID in JSON or
+a public signed CSR. A live, certified, enabled credential can submit a new
+signed CSR and a stable request UUID. The new key may differ from the old key;
+the authenticated old connection authorizes that rotation. Clients retain the
+new private key and request UUID until the result has been stored locally.
+
+Renewal keeps the registered client ID and captures only currently readable
+grants already bound to the presented credential. Other credentials' grants,
+revoked grants and purged workspaces are excluded. Archived readable workspaces
+can renew; their writes remain frozen. Grant roles stay in the database and
+are rechecked for every operation, so a renewed certificate does not preserve
+an obsolete write role.
+
+Certificate, bindings, supersession receipt and audit commit atomically. Failure
+leaves the old credential usable. Success ends its ordinary data, discovery and
+admission authority. Old binding history is retained, and other credentials
+belonging to the client are unaffected.
+
+An exact retry returns the same public certificate, IDs and captured grant IDs
+without another rotation. Request UUID or key changes conflict. The old
+credential must still be unexpired and not administratively revoked; the new
+credential must remain live, enabled, unsuperseded and bound to at least one
+currently readable captured workspace. Later admissions do not change the receipt
+or keep it usable after all captured access is revoked. A revoked captured grant never regains access,
+even if its ID remains in the original public receipt. Global disable and the
+revocation of all readable bindings deny retry. Further renewal of the new
+credential ends retrieval through the previous receipt.
+
+Schema 9 records supersession separately from administrative revocation. Future
+network integration needs a dedicated retry-only authorization path for a
+verified superseded peer; it must never admit that peer to ordinary operations.
+No such network endpoint or automatic client renewal scheduler exists yet.
+An already expired credential requires fresh targeted administrative recovery.
 
 ## Certificate identity and trust
 
@@ -88,5 +125,9 @@ on second-workspace admission, roll back failed audits, enforce quota under
 concurrent admission, return one result under concurrent retry, retain receipts
 across database reopening, and enforce current lifecycle/revocation/expiry.
 Native CLI/MCP compatibility remains separately tested. The new HTTPS and mTLS
-network flows, server-trust bootstrap, renewal/recovery and browser UI remain
+network flows, server-trust bootstrap, automated renewal, targeted recovery and browser UI remain
 unverified until their adapters are implemented.
+
+Renewal tests cover current bound-scope capture, changed roles, archived reads,
+revocation/disable/expiry, exact retry, competing and identical concurrent
+rotations, audit/CA failure rollback, schema-8 upgrade and database reopening.

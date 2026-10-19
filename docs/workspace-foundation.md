@@ -2,7 +2,9 @@
 
 This unreleased foundation adds persistent identity and authorization records
 for the workspace redesign. Phase 1 introduced schema 5; the scoped-key batch
-adds schema 6; invitation policy records add schema 7 and atomic certificate redemption adds schema 8. The existing native mTLS client protocol and CLI
+adds schema 6; invitation policy records add schema 7, atomic certificate
+redemption adds schema 8 and credential renewal adds schema 9. The existing
+native mTLS client protocol and CLI
 remain in service. No new HTTP listener, admin login, invitation endpoint or
 workspace browser is exposed by this phase.
 
@@ -32,7 +34,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 8. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 9. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -56,10 +58,11 @@ cannot reconstruct creator identities or status rows absent from the old data.
 The `server::foundation` APIs are internal server building blocks. An `Actor`
 must come from a trusted authentication layer; accepting a caller-supplied
 principal UUID would not authenticate it. Scoped admin-key primitives are documented in [Workspace admin keys](workspace-admin-keys.md).
-Certificate issuance, invitations and the new HTTP transport remain subsequent
-integration work.
+Internal certificate enrollment and renewal are documented in
+[Workspace enrollment](workspace-enrollment.md); their network adapters remain
+subsequent integration work.
 
-A client data action requires a live, unexpired, nonrevoked credential, an
+A client data action requires a live, unexpired, nonrevoked, unsuperseded credential, an
 enabled client, a live workspace grant bound to that credential, a suitable
 current role and a workspace state that permits the action. One client identity
 can have different grants in several workspaces. Binding foreign keys prevent

@@ -18,7 +18,9 @@ mod store;
 
 pub use access::authorize;
 pub use admin::{AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
-pub use certificate::{EnrollmentReceipt, IssuingAuthority, RedemptionRequest};
+pub use certificate::{
+    EnrollmentReceipt, IssuingAuthority, RedemptionRequest, RenewalReceipt, RenewalRequest,
+};
 pub use invitation::{
     IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,
 };
