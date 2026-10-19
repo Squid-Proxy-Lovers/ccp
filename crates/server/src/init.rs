@@ -53,7 +53,7 @@ const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 5;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
@@ -662,12 +662,14 @@ pub fn ensure_active_session_binding(session_id: i64) -> anyhow::Result<SessionB
 }
 
 fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> anyhow::Result<i64> {
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let owner = env::var(SESSION_OWNER_ENV).unwrap_or_default();
     let labels = env::var(SESSION_LABELS_ENV).unwrap_or_default();
     let visibility = env::var(SESSION_VISIBILITY_ENV).unwrap_or_else(|_| "private".to_string());
     let purpose = env::var(SESSION_PURPOSE_ENV)
         .unwrap_or_else(|_| "Runtime session for CCP inter-agent communication".to_string());
-    connection
+    transaction
         .execute(
             "INSERT OR IGNORE INTO sessions (
                 name,
@@ -690,7 +692,7 @@ fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> an
         )
         .with_context(|| format!("failed to ensure session {session_name} exists"))?;
 
-    connection
+    transaction
         .execute(
             "UPDATE sessions
              SET is_active = 1,
@@ -704,13 +706,16 @@ fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> an
         )
         .with_context(|| format!("failed to activate session {session_name}"))?;
 
-    connection
+    let session_id = transaction
         .query_row(
             "SELECT id FROM sessions WHERE name = ?1",
             [session_name],
             |row| row.get(0),
         )
-        .with_context(|| format!("failed to load session id for {session_name}"))
+        .with_context(|| format!("failed to load session id for {session_name}"))?;
+    crate::foundation::map_legacy_session(&transaction, session_id)?;
+    transaction.commit()?;
+    Ok(session_id)
 }
 
 #[expect(
@@ -871,8 +876,6 @@ fn apply_schema_migrations(connection: &Connection) -> anyhow::Result<()> {
             ON transfer_log(session_id);",
         )
         .context("failed to apply v2 migration: transfer_log table")?;
-
-    record_schema_version(connection)?;
 
     Ok(())
 }
@@ -1180,6 +1183,30 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     }
 }
 
+fn reject_unsupported_schema(connection: &Connection) -> anyhow::Result<()> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version')",
+        [], |row| row.get(0),
+    )?;
+    if exists {
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )?;
+        if version > SCHEMA_VERSION {
+            bail!("database schema {version} is newer than supported schema {SCHEMA_VERSION}");
+        }
+        if matches!(version, 3 | 4) {
+            bail!(
+                "HTTP holding-draft database schema {version} requires offline conversion; \
+                 preserve its database, journal and keys with its producing binary"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn init_sqlite(db_path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -1194,19 +1221,28 @@ pub(crate) fn init_sqlite(db_path: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
     configure_sqlite(&connection)?;
 
-    apply_schema_migrations(&connection)?;
-
+    reject_unsupported_schema(&connection)?;
+    // Legacy table rebuilds need foreign keys disabled before BEGIN; SQLite
+    // ignores changes to that pragma inside a transaction. This connection is
+    // private to initialization and is never used for serving requests.
+    connection.pragma_update(None, "foreign_keys", false)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("failed to start sqlite initialization transaction")?;
 
+    reject_unsupported_schema(&transaction)?;
+    apply_schema_migrations(&transaction)?;
     transaction
         .execute_batch(SCHEMA)
         .context("failed to initialize sqlite schema")?;
 
+    crate::foundation::migrate(&transaction)?;
+    record_schema_version(&transaction)?;
+
     transaction
         .commit()
         .context("failed to commit sqlite initialization transaction")?;
+    connection.pragma_update(None, "foreign_keys", true)?;
 
     Ok(())
 }
