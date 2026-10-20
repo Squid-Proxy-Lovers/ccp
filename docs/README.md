@@ -11,6 +11,7 @@ the other guides describe the supported native interface.
 | Install and try the CLI | [Project README](../README.md) |
 | Enroll, select a session, and use commands or the Rust SDK | [Client guide](client.md) |
 | Configure an agent host | [MCP bridge](../mcp/README.md) |
+| Configure unreleased workspace MCP discovery and caller selections | [Workspace MCP](workspace-mcp.md) |
 | Find tool arguments, responses, and resources | [MCP tool-call reference](tool-call-api.md) |
 | Share context with another session | [Droplet guide and format](droplet-format.md) |
 | Organize research, reviews, or handoffs | [Collaboration examples](use-cases.md) |

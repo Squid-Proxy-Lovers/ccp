@@ -325,6 +325,49 @@ fn paged_workspaces(f: &Fixture, client: &str, credential: &str, count: u128) ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn separate_same_client_profiles_contend_on_selection_revision_without_a_shared_profile_lock()
+{
+    let f = Fixture::new().await;
+    enroll_profile(&f).await;
+    let (token, second) = second_invitation(&f);
+    let state = f.root.join("caller");
+    let mut first = WorkspaceProfile::open(&f.profile).unwrap();
+    first.join(&token).await.unwrap();
+    first.initialize_selection(&state).unwrap();
+    drop(first);
+    let other = f.root.join("profile-copy");
+    std::fs::create_dir(&other).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&other, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    std::fs::copy(
+        f.profile.join("workspace-profile.sqlite3"),
+        other.join("workspace-profile.sqlite3"),
+    )
+    .unwrap();
+    let mut first = WorkspaceProfile::open(&f.profile).unwrap();
+    let mut next = WorkspaceProfile::open(&other).unwrap();
+    let a = update(&[f.setup.workspace_id.to_string()], None, 0);
+    let b = update(&[second.to_string()], None, 0);
+    let (one, two) = tokio::join!(
+        first.set_selection(&state, a),
+        next.set_selection(&state, b)
+    );
+    assert_ne!(one.is_ok(), two.is_ok());
+    let error = match (one, two) {
+        (Err(error), Ok(_)) | (Ok(_), Err(error)) => error,
+        _ => panic!("exactly one selection update must succeed"),
+    };
+    assert!(error.to_string().contains("selection changed"));
+    assert_eq!(first.selection(&state).unwrap().revision, 1);
+    drop(first);
+    drop(next);
+    f.finish().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn target_resolution_follows_real_pages_and_refuses_to_silently_exceed_its_bound() {
     for count in [501, 10_001] {
         let f = Fixture::new().await;

@@ -17,6 +17,7 @@ installer-tests: ## Run isolated Docker installer regressions.
 
 quality-tests: ## Run quality-tool and CLI-accounting regressions.
 	$(PYTHON) -m unittest discover -s tests -p 'test_quality.py' -v
+	$(PYTHON) -m unittest discover -s tests -p 'test_workspace_mcp.py' -v
 
 tools: ## Install pinned quality tools in the active venv and .lint-tools/bin.
 	$(PYTHON) -m pip install -r requirements-lint.txt
@@ -33,6 +34,7 @@ integration: build ## Run real CLI assertions against an isolated TLS server.
 
 mcp-smoke: build ## Exercise real FastMCP tools through the CLI and TLS server.
 	$(PYTHON) tests/mcp_smoke.py
+	$(PYTHON) tests/workspace_mcp_smoke.py
 
 compat: build ## Check TLS enrollment, client requests, and persistence reopening.
 	$(PYTHON) tests/dependency_compat.py --server target/release/server --client target/release/client

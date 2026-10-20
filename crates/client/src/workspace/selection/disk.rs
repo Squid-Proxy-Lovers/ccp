@@ -83,3 +83,90 @@ pub(super) fn replace(directory: &Path, state: &Selection, expected: u64) -> any
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, Barrier, mpsc};
+    use uuid::Uuid;
+
+    enum CommitOrder {
+        First(mpsc::Sender<()>),
+        After(mpsc::Receiver<()>),
+    }
+
+    fn commit_from_shared_snapshot(
+        path: std::path::PathBuf,
+        state: Selection,
+        gate: Arc<Barrier>,
+        order: CommitOrder,
+    ) -> (String, anyhow::Result<()>) {
+        let expected = {
+            let connection =
+                Connection::open_with_flags(path.join(FILE), OpenFlags::SQLITE_OPEN_READ_ONLY)
+                    .unwrap();
+            read(&connection).unwrap().0.revision
+        };
+        assert_eq!(expected, 0);
+        gate.wait();
+        // Both callers validated revision 0 before discovery. Reproduce the
+        // commit ordering after that work, without assuming that simultaneous
+        // SQLite EXCLUSIVE lock contention always becomes a revision error.
+        let result = match order {
+            CommitOrder::First(done) => {
+                let result = replace(&path, &state, expected);
+                assert!(result.is_ok(), "{result:?}");
+                done.send(()).unwrap();
+                result
+            }
+            CommitOrder::After(done) => {
+                done.recv_timeout(Duration::from_secs(5)).unwrap();
+                replace(&path, &state, expected)
+            }
+        };
+        (state.workspace_ids[0].clone(), result)
+    }
+
+    #[test]
+    fn independent_selection_commits_recheck_the_revision_after_a_shared_start() {
+        let directory = std::env::temp_dir().join(format!("ccp-selection-race-{}", Uuid::new_v4()));
+        let initial = Selection {
+            instance_id: Uuid::new_v4().to_string(),
+            client_id: Uuid::new_v4().to_string(),
+            workspace_ids: Vec::new(),
+            default_workspace_id: None,
+            revision: 0,
+        };
+        create(&directory, &initial).unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let [first, second] = [Uuid::new_v4(), Uuid::new_v4()].map(|id| Selection {
+            instance_id: initial.instance_id.clone(),
+            client_id: initial.client_id.clone(),
+            workspace_ids: vec![id.to_string()],
+            default_workspace_id: Some(id.to_string()),
+            revision: 1,
+        });
+        let (done, completed) = mpsc::channel();
+        let path = directory.clone();
+        let gate = barrier.clone();
+        let one = std::thread::spawn(move || {
+            commit_from_shared_snapshot(path, first, gate, CommitOrder::First(done))
+        });
+        let path = directory.clone();
+        let two = std::thread::spawn(move || {
+            commit_from_shared_snapshot(path, second, barrier, CommitOrder::After(completed))
+        });
+        let (one, two) = (one.join().unwrap(), two.join().unwrap());
+        assert_ne!(one.1.is_ok(), two.1.is_ok());
+        let (winner, error) = match (one, two) {
+            ((id, Ok(())), (_, Err(error))) | ((_, Err(error)), (id, Ok(()))) => (id, error),
+            _ => panic!("exactly one selection update must succeed"),
+        };
+        assert!(error.to_string().contains("selection changed"), "{error:#}");
+        let (saved, _) = read(&open(&directory).unwrap()).unwrap();
+        assert_eq!(saved.revision, 1);
+        assert_eq!(saved.workspace_ids, vec![winner.clone()]);
+        assert_eq!(saved.default_workspace_id, Some(winner));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}

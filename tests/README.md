@@ -13,12 +13,11 @@ make test
 cargo test --workspace --locked -- --list
 ```
 
-The normal workspace run currently executes **67 Rust cases**: 53 server, eight
-client, and six integration tests. The quality suite adds **12 Python cases**,
-and the Docker installer suite adds **six Python cases**. The nightly suite checks
-artifact integrity, publication recovery, and real-installer channel selection.
-The CLI suite separately passes 59 assertions;
-MCP and persistence compatibility are two end-to-end smoke suites.
+Use `--list` for the current Rust case inventory as workspace features are added.
+The quality suite includes tool/accounting regressions and workspace MCP config,
+argument, child-process and selection-handle tests. The Docker installer suite is
+separate. The nightly suite checks artifact integrity, publication recovery and
+real-installer channel selection. The CLI suite separately checks 59 assertions.
 
 The workspace contains server and client library tests plus the Rust integration
 suite. Protocol and database compatibility are separate versioned contracts.
@@ -52,9 +51,14 @@ make mcp-smoke
 make compat
 ```
 
-The MCP smoke uses actual FastMCP transport, CLI processes, and the TLS server.
-It exercises discovery, help/session resources, enrollment, writes, append, read,
-and briefing. CI runs it across supported Python/FastMCP combinations.
+The MCP command runs both the native and workspace smoke suites using actual
+FastMCP transport, CLI processes and TLS servers. The native suite exercises
+discovery, help/session resources, enrollment, writes, append, read and briefing.
+The workspace suite exercises the stdio entry point, issued selection handles,
+independent callers even on one connection, explicit targets, scoped recovery,
+current revocation/disable, process restart and private-state cleanup. CI runs both
+across supported Python/FastMCP combinations. Workspace content tools are not
+implemented by this metadata/selection smoke.
 
 The compatibility smoke enrolls clients, verifies the existing wire codec,
 reads/appends context, and reopens persisted data. For a dependency update, test

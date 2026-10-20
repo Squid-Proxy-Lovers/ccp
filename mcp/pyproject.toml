@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 ccp-mcp-server = "ccp_mcp_server.server:main"
+ccp-workspace-mcp = "ccp_mcp_server.workspace:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

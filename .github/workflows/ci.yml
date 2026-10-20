@@ -223,7 +223,9 @@ jobs:
         env:
           CCP_SERVER_BIN: ${{ runner.temp }}/ccp-current/server
           CCP_CLIENT_BIN: ${{ runner.temp }}/ccp-current/client
-        run: python tests/mcp_smoke.py
+        run: |
+          python tests/mcp_smoke.py
+          python tests/workspace_mcp_smoke.py
 
   build:
     needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]

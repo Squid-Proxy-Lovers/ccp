@@ -5,8 +5,8 @@ and paged workspace discovery over HTTPS/mTLS, same-registration joining,
 credential renewal and recovery into a separate profile. It also accepts a fresh
 targeted readmission invitation into an unenrolled profile. Explicit
 [caller workspace selection](workspace-selection.md) is available separately.
-Context contents and workspace MCP
-integration remain subsequent work. Existing native commands and their saved
+The [workspace MCP bridge](workspace-mcp.md) connects discovery and caller choices;
+context contents remain subsequent work. Existing native commands and their saved
 session files keep their current behavior.
 
 [Documentation index](README.md) · [Server HTTPS setup](workspace-http-api.md) ·

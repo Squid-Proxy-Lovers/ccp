@@ -49,6 +49,11 @@ A successful set increments the revision. If another invocation changed this
 directory, the expected revision fails. Inspect the current choices and decide
 the next update instead of overwriting them with a stale command.
 
+Simultaneous updates can also fail busy while acquiring the exclusive SQLite
+lease, which waits up to two seconds. Inspect the saved choices before retrying:
+another invocation may already have committed. Lock contention does not guarantee
+a revision-conflict error; both failures preserve the newer saved choices.
+
 To clear the set and default, run `set` with the current expected revision and
 no workspace flags. Clearing local preferences is available offline, including
 after server-side disabling; it never changes server grants.
@@ -104,5 +109,6 @@ is refused under the same host/Unix/Windows limits as the
 
 Keep caller directories private and back them up only with clients stopped.
 No automatic repair, old-state fallback or preference import is performed.
-Workspace MCP session routing and context operations remain later integration
+The [workspace MCP bridge](workspace-mcp.md) uses explicit selection handles for
+callers, including sessionless requests. Context content operations remain later
 work; the supported native MCP path keeps its current behavior.
