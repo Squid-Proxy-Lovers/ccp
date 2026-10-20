@@ -13,6 +13,15 @@ from uuid import uuid4
 
 from ccp_mcp_server.workspace import WorkspaceChoice, WorkspaceTools, build_server
 from ccp_mcp_server.workspace_config import WorkspaceConfig, load_config
+from ccp_mcp_server.workspace_content import (
+    BookPage,
+    ContentPage,
+    ContentScope,
+    EntryPage,
+    EntryRead,
+    HistoryRead,
+    WorkspaceContentTools,
+)
 from ccp_mcp_server.workspace_process import WorkspaceProcess
 from ccp_mcp_server.workspace_runtime import WorkspaceRuntime
 from fastmcp import Client
@@ -94,7 +103,7 @@ class WorkspaceConfigurationTests(unittest.TestCase):
 
 
 class WorkspaceProcessTests(unittest.IsolatedAsyncioTestCase):
-    async def exercise_child(self, code, *, timeout=2, limit=1024):
+    async def exercise_child(self, code, *, timeout=2, limit=1024, arguments=("info",)):
         processes = []
         original = asyncio.create_subprocess_exec
 
@@ -107,7 +116,7 @@ class WorkspaceProcessTests(unittest.IsolatedAsyncioTestCase):
             "ccp_mcp_server.workspace_process.asyncio.create_subprocess_exec", side_effect=spawn
         ):
             try:
-                return await runner.run("info")
+                return await runner.run(*arguments)
             finally:
                 self.assertEqual(len(processes), 1)
                 self.assertIsNotNone(processes[0].returncode)
@@ -117,6 +126,24 @@ class WorkspaceProcessTests(unittest.IsolatedAsyncioTestCase):
             "import sys; print('private-path',file=sys.stderr); print('{\"ok\":true}')"
         )
         self.assertEqual(result, {"ok": True})
+
+    async def test_only_fixed_entry_snapshot_argv_gets_four_mib_and_overflow_reaps_child(self):
+        snapshot = ("content", "--profile", "/configured/profile", "entry")
+        code = "import json; print(json.dumps({'text':'x'*(2*1024*1024)}))"
+        result = await self.exercise_child(code, arguments=snapshot)
+        self.assertEqual(len(result["text"]), 2 * 1024 * 1024)
+        for arguments in [
+            ("info",),
+            ("content", "--profile", "/configured/profile", "history"),
+            ("content", "entry", "--profile", "/configured/profile"),
+        ]:
+            with self.assertRaises(ToolError):
+                await self.exercise_child(code, arguments=arguments)
+        with self.assertRaises(ToolError):
+            await self.exercise_child(
+                "import json; print(json.dumps({'text':'x'*(4*1024*1024)}))",
+                arguments=snapshot,
+            )
 
     async def test_failure_and_invalid_json_never_echo_child_output(self):
         for code in ["import sys; print('private-path'); sys.exit(7)", "print('private-path')"]:
@@ -231,10 +258,196 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 8)
+                self.assertEqual(len(tools), 15)
+                self.assertTrue(
+                    {
+                        "workspace_profiles",
+                        "workspace_profile",
+                        "workspace_list",
+                        "workspace_selection_open",
+                        "workspace_selection",
+                        "workspace_select",
+                        "workspace_resolve",
+                        "workspace_target",
+                    }
+                    <= {tool.name for tool in tools}
+                )
                 self.assertTrue(all(tool.name.startswith("workspace_") for tool in tools))
                 for tool in tools:
                     properties = tool.inputSchema.get("properties", {})
                     self.assertNotIn("ctx", properties)
                     self.assertNotIn("session_id", properties)
                     self.assertNotIn("profile_path", properties)
+                    encoded = json.dumps(tool.inputSchema)
+                    for private in ['"profile_path"', '"executable"', '"admin_key"', '"url"']:
+                        self.assertNotIn(private, encoded)
+
+
+class WorkspaceContentTests(unittest.IsolatedAsyncioTestCase):
+    def config(self):
+        return WorkspaceConfig(Path(sys.executable), {"office": Path("/configured/profile")})
+
+    async def test_rpc_invalid_nested_inputs_refuse_before_spawning(self):
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run = AsyncMock()
+            async with Client(build_server(runtime)) as client:
+                target = str(uuid4())
+                for name, arguments in [
+                    ("workspace_shelves", {"scope": {"workspace_id": "--profile=/outside"}}),
+                    (
+                        "workspace_shelves",
+                        {"scope": {"workspace_id": target}, "query": {"limit": 33}},
+                    ),
+                    (
+                        "workspace_entry",
+                        {
+                            "scope": {"workspace_id": target},
+                            "query": {"entry_id": target, "revision": 0},
+                        },
+                    ),
+                    (
+                        "workspace_books",
+                        {
+                            "scope": {"workspace_id": target},
+                            "query": {"shelf_id": "--node-id=/outside"},
+                        },
+                    ),
+                    (
+                        "workspace_entries",
+                        {
+                            "scope": {"workspace_id": target},
+                            "query": {"book_id": target, "after": "--after=evil"},
+                        },
+                    ),
+                ]:
+                    result = await client.call_tool(
+                        name, {"profile": "office", **arguments}, raise_on_error=False
+                    )
+                    self.assertTrue(result.is_error)
+            runtime.process.run.assert_not_awaited()
+
+    async def test_all_seven_reads_use_fixed_argv_and_label_the_captured_workspace(self):
+        workspace, parent, cursor = str(uuid4()), str(uuid4()), str(uuid4())
+        scope = ContentScope(workspace_id=workspace)
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run = AsyncMock(return_value={"items": []})
+            tools = WorkspaceContentTools(runtime)
+            calls = [
+                (
+                    tools.workspace_shelves,
+                    ContentPage(cursor, 2),
+                    "shelves",
+                    ("--limit", "2", "--after", cursor),
+                ),
+                (
+                    tools.workspace_books,
+                    BookPage(parent),
+                    "books",
+                    ("--shelf-id", parent, "--limit", "32"),
+                ),
+                (tools.workspace_shelf, parent, "shelf", ("--node-id", parent)),
+                (tools.workspace_book, parent, "book", ("--node-id", parent)),
+                (
+                    tools.workspace_entries,
+                    EntryPage(parent, True),
+                    "entries",
+                    ("--book-id", parent, "--limit", "32", "--archived"),
+                ),
+                (
+                    tools.workspace_entry,
+                    EntryRead(parent, 2),
+                    "entry",
+                    ("--entry-id", parent, "--revision", "2"),
+                ),
+                (
+                    tools.workspace_history,
+                    HistoryRead(parent, 1, 2),
+                    "history",
+                    ("--entry-id", parent, "--limit", "2", "--after", "1"),
+                ),
+            ]
+            for method, query, action, args in calls:
+                value = await method("office", scope, query)
+                self.assertEqual(value, {"workspace_id": workspace, "data": {"items": []}})
+                runtime.process.run.assert_awaited_with(
+                    "content",
+                    "--profile",
+                    "/configured/profile",
+                    action,
+                    "--workspace-id",
+                    workspace,
+                    *args,
+                )
+            self.assertEqual(runtime.process.run.await_count, 7)
+
+    async def test_invalid_input_alias_or_scope_does_not_spawn_or_create_a_selection(self):
+        workspace = str(uuid4())
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run = AsyncMock()
+            tools = WorkspaceContentTools(runtime)
+            for profile, scope in [
+                ("/outside/profile", ContentScope(workspace)),
+                ("office", ContentScope()),
+                ("office", ContentScope("--profile=/outside")),
+                ("office", ContentScope(selection_id="../../outside")),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_shelves(profile, scope)
+            for query in [
+                ContentPage(None, 0),
+                ContentPage(None, 33),
+                ContentPage(None, True),
+                ContentPage("--after=/outside", 1),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_shelves("office", ContentScope(workspace), query)
+            for query in [
+                EntryRead("invalid"),
+                EntryRead(workspace, 0),
+                EntryRead(workspace, 2**63),
+                EntryRead(workspace, True),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_entry("office", ContentScope(workspace), query)
+            for query in [
+                HistoryRead(workspace, 0),
+                HistoryRead(workspace, 2**63),
+                HistoryRead(workspace, None, 33),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_history("office", ContentScope(workspace), query)
+            runtime.process.run.assert_not_awaited()
+            self.assertEqual(runtime._selections, {})
+
+    async def test_default_is_captured_and_explicit_override_never_changes_handle_state(self):
+        workspace = str(uuid4())
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.selection = AsyncMock(return_value={"workspace": {"id": workspace}})
+            runtime.process.run = AsyncMock(return_value={"items": []})
+            tools = WorkspaceContentTools(runtime)
+            handle = runtime.open_selection()
+            result = await tools.workspace_shelves("office", ContentScope(selection_id=handle))
+            self.assertEqual(result["workspace_id"], workspace)
+            runtime.selection.assert_awaited_once_with(handle, "office", "target")
+            runtime.selection.reset_mock()
+            override = str(uuid4())
+            result = await tools.workspace_shelves("office", ContentScope(override, handle))
+            self.assertEqual(result["workspace_id"], override)
+            runtime.selection.assert_not_awaited()
+            self.assertEqual(runtime._selections, {})
+
+    async def test_malformed_target_and_cli_shapes_fail_without_echo_or_content_fallback(self):
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.selection = AsyncMock()
+            runtime.process.run = AsyncMock()
+            tools = WorkspaceContentTools(runtime)
+            for value in [[], {}, {"workspace": {}}, {"workspace": {"id": "PRIVATE_VALUE"}}]:
+                runtime.selection.return_value = value
+                with self.assertRaises(ToolError) as error:
+                    await tools.workspace_shelves("office", ContentScope(selection_id="handle"))
+                self.assertNotIn("PRIVATE_VALUE", str(error.exception))
+            runtime.process.run.assert_not_awaited()
+            runtime.process.run.return_value = ["PRIVATE_VALUE"]
+            with self.assertRaises(ToolError) as error:
+                await tools.workspace_shelves("office", ContentScope(str(uuid4())))
+            self.assertNotIn("PRIVATE_VALUE", str(error.exception))

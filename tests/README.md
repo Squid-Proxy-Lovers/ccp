@@ -56,9 +56,11 @@ FastMCP transport, CLI processes and TLS servers. The native suite exercises
 discovery, help/session resources, enrollment, writes, append, read and briefing.
 The workspace suite exercises the stdio entry point, issued selection handles,
 independent callers even on one connection, explicit targets, scoped recovery,
-current revocation/disable, process restart and private-state cleanup. CI runs both
-across supported Python/FastMCP combinations. Workspace content tools are not
-implemented by this metadata/selection smoke.
+current revocation/disable, process restart and private-state cleanup. It also
+runs seven content read tools through actual stdio/CLI/TLS, including historical
+and archived entry rules, large escaped snapshots and scoped recovery without
+authority union. CI runs both across supported Python/FastMCP combinations.
+Workspace content writes are not implemented by these MCP read tools.
 
 The compatibility smoke enrolls clients, verifies the existing wire codec,
 reads/appends context, and reopens persisted data. For a dependency update, test

@@ -49,7 +49,9 @@ class WorkspaceProcess:
         except (OSError, ValueError):
             raise ToolError("unable to start the configured workspace client") from None
         try:
-            output = await asyncio.wait_for(self._read(process), timeout=self.timeout)
+            output = await asyncio.wait_for(
+                self._read(process, self._budget(arguments)), timeout=self.timeout
+            )
         except asyncio.CancelledError:
             await stop_child(process)
             raise
@@ -89,14 +91,24 @@ class WorkspaceProcess:
             await stop_child(process)
             raise
 
-    async def _read(self, process: asyncio.subprocess.Process) -> bytes:
+    def _budget(self, arguments: tuple[str, ...]) -> int:
+        if (
+            len(arguments) >= 4
+            and arguments[0] == "content"
+            and arguments[1] == "--profile"
+            and arguments[3] == "entry"
+        ):
+            return 4 * 1024 * 1024
+        return self.output_limit
+
+    async def _read(self, process: asyncio.subprocess.Process, limit: int) -> bytes:
         if process.stdout is None:
             raise OutputLimitError("missing stdout")
         chunks: list[bytes] = []
         size = 0
         while chunk := await process.stdout.read(64 * 1024):
             size += len(chunk)
-            if size > self.output_limit:
+            if size > limit:
                 raise OutputLimitError("output budget exceeded")
             chunks.append(chunk)
         await process.wait()

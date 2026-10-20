@@ -13,6 +13,7 @@ from ccp_mcp_server.workspace_runtime import WorkspaceRuntime
 from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from mcp_smoke import data
+from workspace_mcp_content_smoke import check as check_content
 from workspace_mcp_fixture import WorkspaceFixture
 
 
@@ -169,6 +170,7 @@ async def permission_changes(fixture, one, two, provisioned):
 
 
 async def check():
+    await check_content()
     with WorkspaceFixture() as fixture:
         await stdio_protocol(fixture)
         config = WorkspaceConfig(

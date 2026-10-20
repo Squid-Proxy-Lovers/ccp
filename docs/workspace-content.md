@@ -5,8 +5,8 @@ client-owned entries in shared SQLite, with immutable revisions and recoverable
 entry archives. The [authenticated HTTP adapter](workspace-content-http.md) now
 exposes this store. The [normal client](workspace-content-client.md) now supports
 content reads, shelf/book creation and [entry mutations](workspace-content-mutations.md).
-Workspace MCP content tools follow later. The workspace MCP bridge
-currently returns metadata and selections, not content.
+The [workspace MCP bridge](workspace-mcp.md) also returns content reads alongside
+metadata and selections; MCP writes follow later.
 
 [Documentation index](README.md) · [Workspace access](workspace-foundation.md) ·
 [Workspace MCP](workspace-mcp.md)

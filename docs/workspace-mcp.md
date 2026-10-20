@@ -1,9 +1,10 @@
-# Connect workspace discovery and selection to MCP
+# Read workspace context through MCP
 
 This unreleased stdio bridge connects an agent host to configured workspace
 client profiles. It exposes current workspace metadata and explicit caller
-selections. Workspace content tools, boards, status and the browser panel remain
-later work. The supported native `ccp-mcp-server` entry point stays available.
+selections, plus shelves, books, entries and revision history. Content writes,
+boards, status and the browser panel remain later work. The supported native
+`ccp-mcp-server` entry point stays available.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md) ·
 [Selection contract](workspace-selection.md)
@@ -104,6 +105,61 @@ update increments the revision. A stale revision fails instead of overwriting
 newer choices. An empty set clears preferences locally. An explicit target does
 not need a selection handle and never changes any handle's choices.
 
+## Read content in one workspace
+
+The seven content tools take `profile` and a nested `scope`. Supply either
+`scope.workspace_id` explicitly or `scope.selection_id` to use that handle's
+default. An explicit workspace takes precedence when both are present; the
+handle's choices are not consulted or changed. Missing/unknown handles and absent
+defaults fail. Each call captures one target before reading, checks current
+access again through the Rust client, and returns `workspace_id` plus `data`.
+Even empty pages and history are labeled with the resolved workspace UUID.
+
+| Tool | Other arguments; result in `data` |
+| --- | --- |
+| `workspace_shelves` | Optional `query: {after, limit}`; shelf page |
+| `workspace_books` | `query: {shelf_id, after?, limit?}`; book page |
+| `workspace_shelf` | `node_id`; shelf metadata |
+| `workspace_book` | `node_id`; book metadata and parent |
+| `workspace_entries` | `query: {book_id, archived?, after?, limit?}`; entry summaries |
+| `workspace_entry` | `query: {entry_id, revision?}`; exact current or historical snapshot |
+| `workspace_history` | `query: {entry_id, after?, limit?}`; revision metadata without bodies |
+
+For example, call `workspace_entry` using the handle you opened and an actual
+entry UUID. These identifiers are illustrative:
+
+```json
+{
+  "profile": "office",
+  "scope": {
+    "selection_id": "00000000-0000-4000-8000-000000000001"
+  },
+  "query": {
+    "entry_id": "00000000-0000-4000-8000-000000000003",
+    "revision": 2
+  }
+}
+```
+
+Use `scope: {"workspace_id": "YOUR_WORKSPACE_UUID"}` for an explicit target
+without a selection. It may be accessible without being selected. No read adds
+new grants to selections, changes a default, aggregates workspaces or tries a
+different alias after denial. The bridge never combines recovery-profile grants.
+
+Pages default to 32 items and accept 1–32. Follow `data.next_cursor` as `query.after`;
+history uses positive revision numbers, other pages use canonical lowercase
+hyphenated UUIDs. `revision` and history cursors must fit a positive signed64-bit
+integer. Omit the entry revision for its current version. A historical snapshot
+separates current entry metadata from the requested revision and exact text,
+description, labels and original append contribution.
+
+`archived: true` lists summaries without text/descriptions/labels. Full entry,
+historical-body and history reads fail while that entry is archived. An archived
+workspace remains readable to authorized clients. Current revocation and global
+disable still apply. The [client content guide](workspace-content-client.md)
+explains response validation, bounded snapshots and renewal; creation and durable
+entry writes remain available through that CLI rather than these MCP read tools.
+
 ## Scope, lifetime and failures
 
 The server still checks current credential bindings, grants, workspace lifecycle
@@ -127,12 +183,16 @@ permissions and the [profile storage limits](workspace-client.md#profile-storage
 apply; Windows ACL and directory durability are not independently verified here.
 
 The bridge runs at most eight Rust children, waits at most two seconds for a
-process slot, and gives each child 60 seconds and 1 MiB of stdout. Requests using
-one handle/alias serialize. Timeout, cancellation or excess output kills and
+process slot, and gives each child 60 seconds. Only the fixed entry-snapshot
+command gets 4 MiB of stdout, preserving escaped text and append contributions;
+all other commands retain 1 MiB. There is no tool argument to raise these limits.
+Selection operations using one handle/alias serialize. A content read captures
+the default and then reads that explicit target; a subsequent selection change
+does not retarget an in-flight read. Timeout, cancellation or excess output kills and
 reaps the child. CLI stderr and malformed output are not echoed through MCP;
 use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-These tools return metadata and preferences. They do not read or write workspace
-entries, publish guidance, manage tasks or start a server.
+The bridge exposes 15 tools: eight metadata/selection tools and seven content
+reads. It does not write entries, publish guidance, manage tasks or start a server.

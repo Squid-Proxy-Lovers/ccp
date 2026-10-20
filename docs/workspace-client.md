@@ -7,8 +7,8 @@ targeted readmission invitation into an unenrolled profile. Explicit
 [caller workspace selection](workspace-selection.md) is available separately.
 The [workspace MCP bridge](workspace-mcp.md) connects discovery and caller choices;
 the [normal client content commands](workspace-content-client.md) now support
-reads, shelf/book creation and [entry mutations](workspace-content-mutations.md). MCP content tools
-remain subsequent work. Existing
+reads, shelf/book creation and [entry mutations](workspace-content-mutations.md).
+The workspace MCP bridge exposes content reads; MCP writes remain subsequent work. Existing
 native commands and their saved session files keep their current behavior.
 
 [Documentation index](README.md) · [Server HTTPS setup](workspace-http-api.md) ·

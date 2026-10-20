@@ -4,8 +4,8 @@ Use an enrolled [workspace profile](workspace-client.md) and an explicit workspa
 UUID to read shelves, books, entries and their history. These unreleased commands
 use the authenticated [content HTTPS API](workspace-content-http.md). Entry
 mutations have their own [client guide](workspace-content-mutations.md).
-The client also creates shelves and books. Workspace MCP content tools are later work.
-The existing workspace MCP bridge still exposes metadata and caller selections.
+The client also creates shelves and books. The [workspace MCP bridge](workspace-mcp.md)
+exposes these reads with explicit scopes and caller selections; MCP writes are later work.
 
 [Documentation index](README.md) · [Caller selections](workspace-selection.md) ·
 [Content ownership and revisions](workspace-content.md)

@@ -9,13 +9,14 @@ from __future__ import annotations
 import sys
 from dataclasses import dataclass
 from typing import Any
-from uuid import UUID
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
 from .workspace_config import environment_config
+from .workspace_content import WorkspaceContentTools
 from .workspace_runtime import WorkspaceRuntime
+from .workspace_values import canonical_uuid, object_result
 
 
 @dataclass(frozen=True)
@@ -42,20 +43,6 @@ class WorkspaceChoice:
         if self.default_workspace_id is not None:
             args.extend(["--default-workspace-id", self.default_workspace_id])
         return tuple(args)
-
-
-def canonical_uuid(value: str) -> None:
-    try:
-        if str(UUID(value)) != value:
-            raise ValueError("noncanonical")
-    except (ValueError, AttributeError):
-        raise ToolError("workspace targets must be canonical UUIDs") from None
-
-
-def object_result(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ToolError("workspace client returned an unexpected response shape")
-    return value
 
 
 class WorkspaceTools:
@@ -119,7 +106,15 @@ class WorkspaceTools:
 def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp = FastMCP(
         "ccp-workspace",
-        instructions="Use configured profile aliases to discover accessible workspaces. Open a selection handle and retain its selection_id for later choices and resolution. Open separate handles for independent callers; share a handle only deliberately. An explicit target does not change choices. Selection is a preference; the CCP server enforces current access.",
+        instructions=(
+            "Use configured profile aliases to discover accessible workspaces. "
+            "Open a selection handle and retain its selection_id for later choices and resolution. "
+            "Open separate handles for independent callers; share a handle only deliberately. "
+            "An explicit target does not change choices. Selection is a preference; "
+            "the CCP server enforces current access. Content reads accept scope.workspace_id "
+            "or scope.selection_id for its default and return the resolved workspace_id with data. "
+            "Each read targets one workspace and does not change selections."
+        ),
     )
     tools = WorkspaceTools(runtime)
     mcp.tool(tools.workspace_profiles)
@@ -130,6 +125,14 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp.tool(tools.workspace_select)
     mcp.tool(tools.workspace_resolve)
     mcp.tool(tools.workspace_target)
+    content = WorkspaceContentTools(runtime)
+    mcp.tool(content.workspace_shelves)
+    mcp.tool(content.workspace_books)
+    mcp.tool(content.workspace_shelf)
+    mcp.tool(content.workspace_book)
+    mcp.tool(content.workspace_entries)
+    mcp.tool(content.workspace_entry)
+    mcp.tool(content.workspace_history)
     return mcp
 
 
