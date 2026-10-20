@@ -5,7 +5,8 @@ FastMCP bridge invokes the Rust client for data operations.
 
 This guide covers the supported native `ccp-mcp-server` entry point. The separate,
 unreleased [workspace MCP bridge](../docs/workspace-mcp.md) exposes workspace
-discovery, explicit caller selections, content reads, shelf/book creation and
+discovery, explicit caller selections, content reads (including shelf lifecycle
+state and archived summaries), shelf/book creation and
 durable entry mutations with guarded outcome recovery through
 `ccp-workspace-mcp`.
 

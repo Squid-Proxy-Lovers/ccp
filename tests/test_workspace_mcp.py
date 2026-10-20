@@ -266,7 +266,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 21)
+                self.assertEqual(len(tools), 23)
                 self.assertTrue(
                     {
                         "workspace_profiles",
@@ -459,6 +459,83 @@ class WorkspaceContentTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ToolError) as error:
                 await tools.workspace_shelves("office", ContentScope(str(uuid4())))
             self.assertNotIn("PRIVATE_VALUE", str(error.exception))
+
+    async def test_shelf_lifecycle_readers_capture_scope_and_use_only_fixed_read_commands(self):
+        workspace, node = str(uuid4()), str(uuid4())
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.selection = AsyncMock(return_value={"workspace": {"id": workspace}})
+            runtime.process.run = AsyncMock(return_value={"revision": 2, "archived": True})
+            tools = WorkspaceContentTools(runtime)
+            result = await tools.workspace_shelf_state(
+                "office", ContentScope(selection_id="handle"), node
+            )
+            self.assertEqual(result["workspace_id"], workspace)
+            runtime.selection.assert_awaited_once_with("handle", "office", "target")
+            runtime.process.run.assert_awaited_once_with(
+                "content",
+                "--profile",
+                "/configured/profile",
+                "shelf-state",
+                "--workspace-id",
+                workspace,
+                "--node-id",
+                node,
+            )
+            runtime.selection.reset_mock()
+            runtime.process.run.reset_mock()
+            runtime.process.run.return_value = {"items": [], "next_cursor": None}
+            result = await tools.workspace_archived_shelves(
+                "office", ContentScope(workspace, "unused"), ContentPage(node, 1)
+            )
+            self.assertEqual(
+                result, {"workspace_id": workspace, "data": {"items": [], "next_cursor": None}}
+            )
+            runtime.selection.assert_not_awaited()
+            runtime.process.run.assert_awaited_once_with(
+                "content",
+                "--profile",
+                "/configured/profile",
+                "archived-shelves",
+                "--workspace-id",
+                workspace,
+                "--limit",
+                "1",
+                "--after",
+                node,
+            )
+            self.assertEqual(runtime._selections, {})
+
+    async def test_shelf_reader_bad_targets_aliases_and_pages_refuse_before_children(self):
+        workspace, node = str(uuid4()), str(uuid4())
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run = AsyncMock()
+            tools = WorkspaceContentTools(runtime)
+            for profile, scope in [
+                ("/outside", ContentScope(workspace)),
+                ("office", ContentScope()),
+                ("office", ContentScope("invalid")),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_shelf_state(profile, scope, node)
+                with self.assertRaises(ToolError):
+                    await tools.workspace_archived_shelves(profile, scope)
+            with self.assertRaises(ToolError):
+                await tools.workspace_shelf_state(
+                    "office", ContentScope(workspace), "--node-id=/outside"
+                )
+            for query in [
+                ContentPage(None, 0),
+                ContentPage(None, 33),
+                ContentPage(None, True),
+                ContentPage("invalid", 1),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_archived_shelves("office", ContentScope(workspace), query)
+            runtime.process.run.assert_not_awaited()
+            runtime.process.run.return_value = ["PRIVATE_BODY"]
+            with self.assertRaises(ToolError) as caught:
+                await tools.workspace_shelf_state("office", ContentScope(workspace), node)
+            self.assertNotIn("PRIVATE_BODY", str(caught.exception))
 
 
 class WorkspaceWriteTests(unittest.IsolatedAsyncioTestCase):

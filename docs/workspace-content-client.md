@@ -1,7 +1,7 @@
 # Use workspace content with the client
 
 Use an enrolled [workspace profile](workspace-client.md) and an explicit workspace
-UUID to read shelves, books, entries and their history. These unreleased commands
+UUID to read shelves, books, entries, history and shelf lifecycle metadata. These unreleased commands
 use the authenticated [content HTTPS API](workspace-content-http.md). Entry
 mutations have their own [client guide](workspace-content-mutations.md).
 The client also creates shelves and books. The [workspace MCP bridge](workspace-mcp.md)
@@ -89,6 +89,8 @@ They return the underlying typed JSON data without the HTTP envelope.
 | Command | Required target flags | Other flags |
 | --- | --- | --- |
 | `shelves` | Workspace | `--after UUID`, `--limit N` |
+| `archived-shelves` | Workspace | `--after UUID`, `--limit N` |
+| `shelf-state` | Workspace, `--node-id UUID` | None |
 | `books` | Workspace, `--shelf-id UUID` | `--after UUID`, `--limit N` |
 | `shelf`, `book` | Workspace, `--node-id UUID` | None |
 | `entries` | Workspace, `--book-id UUID` | `--archived`, `--after UUID`, `--limit N` |
@@ -98,6 +100,35 @@ They return the underlying typed JSON data without the HTTP envelope.
 Lists default to 32 items and accept 1–32. Use `next_cursor` as `--after` until
 it is null. History cursors are revision numbers; other cursors are UUIDs.
 Request UUIDs must use the canonical lowercase hyphenated form.
+
+## Inspect an archived shelf
+
+Use `shelf-state` for a current shelf lifecycle revision and archive state;
+`archived-shelves` lists safe archived-shelf summaries. UUIDs are illustrative:
+
+```bash
+ccp-client workspace content --profile ./my-profile shelf-state \
+  --workspace-id 11111111-1111-4111-8111-111111111111 \
+  --node-id 22222222-2222-4222-8222-222222222222
+
+ccp-client workspace content --profile ./my-profile archived-shelves \
+  --workspace-id 11111111-1111-4111-8111-111111111111 --limit 32
+```
+
+State contains shelf ID, workspace ID, lifecycle revision and `archived`.
+Summaries contain ID, workspace, name, lifecycle revision and creation time;
+there are no descriptions or descendant bodies. Current readers can inspect
+these within their workspace, including while the workspace is archived.
+An archived shelf disappears from active `shelves` output; its descendant
+body/history reads fail until restoration. Restoring the parent preserves entry
+ownership/history and leaves individually archived entries archived.
+
+These commands do not archive, restore or purge. Use the separate
+[scoped admin HTTPS operation](workspace-content-http.md#archive-or-restore-a-shelf)
+for transitions. Lifecycle revisions belong to shelves, independently of entry
+revisions. A historical transition receipt is different from current shelf state.
+Selections, profile credentials and pending intents are not changed by these reads,
+except the existing authorized automatic renewal when due.
 
 ## Read an entry or earlier version
 
@@ -130,6 +161,9 @@ Responses are checked for canonical IDs, echoed target and parent fields,
 metadata bounds, archive state, revision/attribution consistency and page order.
 History responses carry revision metadata and a cursor without echoed target
 IDs; their workspace/entry association comes from the verified TLS request.
+Shelf lifecycle responses require their known fields and types. Unknown additive
+response fields are tolerated and dropped through typed projection before CLI
+output, so unexpected descriptions or bodies are not forwarded in summaries.
 Snapshot reads allow up to 4 MiB of encoded JSON to preserve full escaped text
 and its original append contribution. Other content responses and all existing
 client response paths keep their 1 MiB limit. Invalid, oversized, truncated,

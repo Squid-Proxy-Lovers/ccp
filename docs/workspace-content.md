@@ -111,7 +111,8 @@ It requires a currently authorized workspace owner/admin under `ManageArchives`
 in an active workspace. Ordinary writers and global admin keys cannot do this.
 The [HTTPS adapter](workspace-content-http.md#archive-or-restore-a-shelf) exposes
 this operation to scoped admins, plus state/summary reads for current readers.
-CLI, MCP and panel shelf-management commands remain subsequent work.
+The normal client and MCP bridge can read shelf state and archive summaries.
+Shelf-management commands in the CLI/MCP and the human panel remain subsequent work.
 
 Archive changes the parent shelf's visibility in one transaction. Its books,
 entries, ownership, metadata, versions and entry-operation receipts stay intact.

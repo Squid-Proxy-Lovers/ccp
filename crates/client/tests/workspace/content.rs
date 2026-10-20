@@ -9,6 +9,7 @@ use server::foundation::{Actor, EntryChange, EntryContent, EntryMutation, NodeDr
 mod create;
 mod lifecycle;
 mod mutation;
+mod shelves;
 
 struct Records {
     shelf: String,

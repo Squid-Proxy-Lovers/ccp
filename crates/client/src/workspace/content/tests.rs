@@ -170,3 +170,93 @@ fn history_metadata_is_bounded_ordered_and_has_no_invented_cursor() {
     history.items[0].recorded_at = -1;
     assert!(validate::history(&history, &request).is_err());
 }
+
+#[test]
+fn shelf_state_rejects_wrong_targets_and_revisions_and_drops_unknown_response_fields() {
+    let request = NodeTarget {
+        workspace_id: Uuid::new_v4().to_string(),
+        node_id: Uuid::new_v4().to_string(),
+    };
+    let original = json!({"workspace_id":request.workspace_id,"shelf_id":request.node_id,"revision":2,"archived":true,"content":"PRIVATE_BODY"});
+    let parsed: ShelfState = serde_json::from_value(original.clone()).unwrap();
+    validate::shelf_state(&parsed, &request).unwrap();
+    assert_eq!(
+        serde_json::to_value(&parsed)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .len(),
+        4
+    );
+    assert!(
+        !serde_json::to_string(&parsed)
+            .unwrap()
+            .contains("PRIVATE_BODY")
+    );
+    for (field, value) in [
+        ("workspace_id", json!(Uuid::new_v4().to_string())),
+        ("shelf_id", json!(Uuid::new_v4().to_string())),
+        ("shelf_id", json!("bad")),
+        ("revision", json!(0)),
+        ("revision", json!(u64::MAX)),
+    ] {
+        let mut changed = original.clone();
+        changed[field] = value;
+        let value: ShelfState = serde_json::from_value(changed).unwrap();
+        assert!(validate::shelf_state(&value, &request).is_err());
+    }
+    for field in ["shelf_id", "revision", "archived"] {
+        let mut missing = original.clone();
+        missing.as_object_mut().unwrap().remove(field);
+        assert!(serde_json::from_value::<ShelfState>(missing).is_err());
+    }
+    for (field, value) in [("revision", json!(true)), ("archived", json!("true"))] {
+        let mut changed = original.clone();
+        changed[field] = value;
+        assert!(serde_json::from_value::<ShelfState>(changed).is_err());
+    }
+}
+
+#[test]
+fn archived_shelf_projection_bounds_and_page_invariants_preserve_safe_metadata_only() {
+    let workspace = Uuid::new_v4().to_string();
+    let original = json!({"workspace_id":workspace,"id":Uuid::new_v4().to_string(),"revision":2,"name":"é".repeat(128),"created_at":1,"description":"PRIVATE_BODY","content":"PRIVATE_BODY"});
+    let value: ArchivedShelf = serde_json::from_value(original.clone()).unwrap();
+    validate::archived_shelf(&value, &workspace).unwrap();
+    let safe = serde_json::to_value(&value).unwrap();
+    assert_eq!(safe.as_object().unwrap().len(), 5);
+    assert!(!safe.to_string().contains("PRIVATE_BODY"));
+    for (field, v) in [
+        ("workspace_id", json!(Uuid::new_v4().to_string())),
+        ("id", json!("invalid")),
+        ("revision", json!(0)),
+        ("revision", json!(u64::MAX)),
+        ("created_at", json!(-1)),
+        ("name", json!("")),
+        ("name", json!(" trimmed ")),
+        ("name", json!("bad\nname")),
+        ("name", json!("é".repeat(129))),
+    ] {
+        let mut changed = original.clone();
+        changed[field] = v;
+        let value: ArchivedShelf = serde_json::from_value(changed).unwrap();
+        assert!(validate::archived_shelf(&value, &workspace).is_err());
+    }
+    let mut page = Page {
+        items: vec![value],
+        next_cursor: Some(safe["id"].as_str().unwrap().into()),
+    };
+    let check = |v: &Page<ArchivedShelf>, after| {
+        validate::page(
+            v,
+            after,
+            Some(1),
+            |x| &x.id,
+            |x| validate::archived_shelf(x, &workspace),
+        )
+    };
+    check(&page, None).unwrap();
+    assert!(check(&page, Some(safe["id"].as_str().unwrap())).is_err());
+    page.next_cursor = Some(Uuid::new_v4().to_string());
+    assert!(check(&page, None).is_err());
+}

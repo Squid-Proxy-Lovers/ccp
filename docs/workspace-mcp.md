@@ -108,7 +108,7 @@ not need a selection handle and never changes any handle's choices.
 
 ## Read content in one workspace
 
-The seven content tools take `profile` and a nested `scope`. Supply either
+The nine content readers take `profile` and a nested `scope`. Supply either
 `scope.workspace_id` explicitly or `scope.selection_id` to use that handle's
 default. An explicit workspace takes precedence when both are present; the
 handle's choices are not consulted or changed. Missing/unknown handles and absent
@@ -118,7 +118,9 @@ Even empty pages and history are labeled with the resolved workspace UUID.
 
 | Tool | Other arguments; result in `data` |
 | --- | --- |
-| `workspace_shelves` | Optional `query: {after, limit}`; shelf page |
+| `workspace_shelves` | Optional `query: {after, limit}`; active shelf page |
+| `workspace_archived_shelves` | Optional `query: {after, limit}`; safe archived shelf summaries |
+| `workspace_shelf_state` | `node_id`; current shelf lifecycle revision and archive state |
 | `workspace_books` | `query: {shelf_id, after?, limit?}`; book page |
 | `workspace_shelf` | `node_id`; shelf metadata |
 | `workspace_book` | `node_id`; book metadata and parent |
@@ -146,6 +148,14 @@ Use `scope: {"workspace_id": "YOUR_WORKSPACE_UUID"}` for an explicit target
 without a selection. It may be accessible without being selected. No read adds
 new grants to selections, changes a default, aggregates workspaces or tries a
 different alias after denial. The bridge never combines recovery-profile grants.
+
+Shelf lifecycle readers use the same resolved workspace and current permissions.
+Archived shelf summaries expose only IDs, name, lifecycle revision and creation
+time, with no descriptions or descendant content. Archived shelves disappear from
+active shelf lists; their body/history reads remain unavailable until restoration.
+The Rust client validates known response fields and drops unknown additions
+before returning typed JSON. Lifecycle metadata does not grant authority to
+archive or restore; those operations remain on the scoped admin HTTPS API.
 
 Pages default to 32 items and accept 1–32. Follow `data.next_cursor` as `query.after`;
 history uses positive revision numbers, other pages use canonical lowercase
@@ -320,6 +330,6 @@ use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-The bridge exposes 21 tools: eight metadata/selection tools, seven content reads,
+The bridge exposes 23 tools: eight metadata/selection tools, nine content reads,
 two container creations and four entry-intent/outcome tools. It does not publish
 guidance, manage tasks or start a server.

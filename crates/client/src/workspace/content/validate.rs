@@ -170,3 +170,17 @@ pub(super) fn history(value: &History, request: &HistoryPage) -> anyhow::Result<
     }
     Ok(())
 }
+
+pub(super) fn shelf_state(value: &ShelfState, request: &NodeTarget) -> anyhow::Result<()> {
+    ids(&[&value.shelf_id, &value.workspace_id])?;
+    same(&value.workspace_id, &request.workspace_id)?;
+    same(&value.shelf_id, &request.node_id)?;
+    revision_number(value.revision)
+}
+
+pub(super) fn archived_shelf(value: &ArchivedShelf, workspace: &str) -> anyhow::Result<()> {
+    ids(&[&value.id, &value.workspace_id])?;
+    same(&value.workspace_id, workspace)?;
+    node(&value.name, "", value.created_at)?;
+    revision_number(value.revision)
+}

@@ -137,6 +137,8 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp.tool(tools.workspace_target)
     content = WorkspaceContentTools(runtime)
     mcp.tool(content.workspace_shelves)
+    mcp.tool(content.workspace_archived_shelves)
+    mcp.tool(content.workspace_shelf_state)
     mcp.tool(content.workspace_books)
     mcp.tool(content.workspace_shelf)
     mcp.tool(content.workspace_book)

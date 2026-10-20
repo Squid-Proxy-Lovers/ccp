@@ -57,7 +57,7 @@ discovery, help/session resources, enrollment, writes, append, read and briefing
 The workspace suite exercises the stdio entry point, issued selection handles,
 independent callers even on one connection, explicit targets, scoped recovery,
 current revocation/disable, process restart and private-state cleanup. It also
-runs seven content read tools through actual stdio/CLI/TLS, including historical
+runs nine content readers through actual stdio/CLI/TLS, including historical
 and archived entry rules, large escaped snapshots and scoped recovery without
 authority union. CI runs both across supported Python/FastMCP combinations.
 It also runs private-file shelf/book creation through MCP, including pending
@@ -131,8 +131,15 @@ reads/history/writes, preserved ownership and individual archives, revision CAS,
 exact historical replay, name collisions and injected audit/receipt failures.
 They also check archive-summary paging, current key revocation, legacy refusal,
 schema-17 backfill, file reopen and independent stale database writers. Shelf
-CLI/MCP adapters and payload purge remain subsequent work.
+CLI/MCP shelf state/archive-summary readers are also exercised; shelf transitions
+remain admin HTTPS only, and payload purge remains subsequent work.
 Six additional shelf HTTP cases use real HTTPS/mTLS to cover scoped transitions,
 historical retries, restore collisions, storage rollback, metadata privacy,
 current revocation/archive/disable, strict request types, listener separation,
 paging and unchanged body bounds.
+
+Shelf reader adapter tests validate known target/revision/name/page fields and
+drop unknown response additions before typed output. Real CLI/TLS and MCP flows
+check active-list omission, archive metadata privacy/paging, restoration without
+ownership/history changes, due renewal versus denied reads, pending-intent
+preservation, scoped recovery and global disable without permission union.

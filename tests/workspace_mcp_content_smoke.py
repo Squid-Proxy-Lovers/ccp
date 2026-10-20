@@ -200,6 +200,13 @@ async def archives_and_large_snapshot(client, fixture, ids, scope):
     fixture.admin("workspaces/archive", {"workspace_id": fixture.setup["workspace_id"]})
     readable = await call(client, "workspace_entry", profile="office", scope=scope, query=query)
     assert readable["data"]["entry"]["revision"] == 4
+    state = await call(
+        client, "workspace_shelf_state", profile="office", scope=scope, node_id=ids["shelf"]
+    )
+    assert state["data"]["revision"] == 3
+    assert (await call(client, "workspace_archived_shelves", profile="office", scope=scope))[
+        "data"
+    ]["items"]
     fixture.admin("workspaces/reactivate", {"workspace_id": fixture.setup["workspace_id"]})
 
 
@@ -242,6 +249,16 @@ async def scope_and_permission_changes(client, fixture, ids, handle):
     assert (
         await call(client, "workspace_shelves", profile="office", scope={"workspace_id": second})
     )["data"]["items"] == []
+    for tool in ["workspace_shelf_state", "workspace_archived_shelves"]:
+        extra = {"node_id": ids["shelf"]} if tool == "workspace_shelf_state" else {}
+        await refused(client, tool, profile="office", scope=scope, **extra)
+        await call(client, tool, profile="recovered", scope={"workspace_id": first}, **extra)
+        await refused(client, tool, profile="recovered", scope={"workspace_id": second}, **extra)
+    assert (
+        await call(
+            client, "workspace_archived_shelves", profile="office", scope={"workspace_id": second}
+        )
+    )["data"]["items"] == []
     fixture.admin(
         "clients/disable",
         {"client_id": fixture.client_id},
@@ -255,6 +272,9 @@ async def scope_and_permission_changes(client, fixture, ids, handle):
         query={"entry_id": ids["entry"]},
     )
     await refused(client, "workspace_shelves", profile="office", scope={"workspace_id": second})
+    for tool in ["workspace_shelf_state", "workspace_archived_shelves"]:
+        extra = {"node_id": ids["shelf"]} if tool == "workspace_shelf_state" else {}
+        await refused(client, tool, profile="recovered", scope={"workspace_id": first}, **extra)
 
 
 async def check():
@@ -288,7 +308,7 @@ async def check():
         )
         async with Client(transport) as client:
             tools = await client.list_tools()
-            assert len(tools) == 21
+            assert len(tools) == 23
             names = {tool.name for tool in tools}
             assert {
                 "workspace_shelves",
@@ -298,6 +318,8 @@ async def check():
                 "workspace_entries",
                 "workspace_entry",
                 "workspace_history",
+                "workspace_shelf_state",
+                "workspace_archived_shelves",
             } <= names
             handle = (await call(client, "workspace_selection_open"))["selection_id"]
             await call(
@@ -313,12 +335,15 @@ async def check():
             )
             scope = {"selection_id": handle}
             await browse(client, fixture, ids, scope)
+            from workspace_mcp_shelf_reads import check_shelf_reads
+
+            await check_shelf_reads(client, fixture, ids, scope)
             await archives_and_large_snapshot(client, fixture, ids, scope)
             await scope_and_permission_changes(client, fixture, ids, handle)
         await transport.close()
         assert not list(scratch.glob("ccp-workspace-mcp-*"))
     print(
-        "PASS: seven workspace content tools over stdio/CLI/TLS, large snapshots, archive privacy and scope isolation"
+        "PASS: nine workspace content readers over stdio/CLI/TLS, large snapshots, archive privacy and scope isolation"
     )
 
 

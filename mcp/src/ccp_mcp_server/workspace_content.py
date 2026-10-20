@@ -140,6 +140,21 @@ class WorkspaceContentTools:
         """Read shelves in an explicit workspace or handle default; return workspace_id and data."""
         return await self._read(profile, scope, "shelves", (query or ContentPage()).arguments())
 
+    async def workspace_archived_shelves(
+        self, profile: str, scope: ContentScope, query: ContentPage | None = None
+    ) -> dict[str, Any]:
+        """Read safe archived shelf summaries; no descriptions or descendant content."""
+        return await self._read(
+            profile, scope, "archived-shelves", (query or ContentPage()).arguments()
+        )
+
+    async def workspace_shelf_state(
+        self, profile: str, scope: ContentScope, node_id: str
+    ) -> dict[str, Any]:
+        """Read current shelf lifecycle revision/state with current access, without changing visibility."""
+        canonical_uuid(node_id)
+        return await self._read(profile, scope, "shelf-state", ("--node-id", node_id))
+
     async def workspace_books(
         self, profile: str, scope: ContentScope, query: BookPage
     ) -> dict[str, Any]:

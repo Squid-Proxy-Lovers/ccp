@@ -4,10 +4,10 @@
 
 //! Explicit workspace content reads and durable entry intents over pinned mTLS.
 pub use protocol::workspace::content::{
-    Book, BookPage, ContentActor, CreateBook, CreateShelf, EntryChange, EntryContent,
-    EntryMutation, EntryOperationOutcome, EntryOperationResolution, EntryPage, EntryReceipt,
-    EntryRevision, EntrySnapshot, EntrySummary, EntryTarget, History, HistoryPage, NodeTarget,
-    Page, Shelf, ShelfPage,
+    ArchivedShelf, Book, BookPage, ContentActor, CreateBook, CreateShelf, EntryChange,
+    EntryContent, EntryMutation, EntryOperationOutcome, EntryOperationResolution, EntryPage,
+    EntryReceipt, EntryRevision, EntrySnapshot, EntrySummary, EntryTarget, History, HistoryPage,
+    NodeTarget, Page, Shelf, ShelfPage, ShelfState,
 };
 
 use super::*;
@@ -17,6 +17,7 @@ pub(crate) mod cli;
 pub(crate) mod create;
 pub(crate) mod mutation;
 pub use mutation::ContentOperationInfo;
+pub(crate) mod shelves;
 mod validate;
 
 #[cfg(test)]
