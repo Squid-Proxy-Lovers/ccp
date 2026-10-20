@@ -5,6 +5,8 @@
 //! Versioned JSON workspace API, separate from the native binary wire protocol.
 use serde::{Deserialize, Serialize};
 
+pub mod content;
+
 pub const API_VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize)]

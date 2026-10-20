@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    State, Surface, invitations, management,
+    State, Surface, content, invitations, management,
     request::Input,
     response::{self, Error, Reply},
     session::Context,
@@ -66,10 +66,14 @@ fn https(
         && !invitations::handles(&input.path)
         && !management::handles(&input.path)
         && !team::handles(&input.path)
+        && !content::handles(&input.path)
     {
         return Err(Error::NotFound);
     }
     let actor = admin(store, input.authorization.as_deref(), now)?;
+    if content::handles(&input.path) {
+        return content::dispatch(store, actor, &input, now);
+    }
     if invitations::handles(&input.path) {
         return invitations::dispatch(store, actor, &input, now);
     }
@@ -148,7 +152,8 @@ fn client(
     if !matches!(
         input.path.as_str(),
         "/api/v1/workspaces" | "/api/v1/admissions" | "/api/v1/credentials/renew"
-    ) {
+    ) && !content::handles(&input.path)
+    {
         return Err(Error::NotFound);
     }
     let peer = context
@@ -185,6 +190,9 @@ fn client(
     let actor = store
         .authenticate_peer(&peer, now)
         .map_err(|error| response::operation(error, Error::Forbidden))?;
+    if content::handles(&input.path) {
+        return content::dispatch(store, actor, &input, now);
+    }
     match (input.method, input.path.as_str()) {
         (Method::GET, "/api/v1/workspaces") => {
             workspaces(store, actor, input.query.as_deref(), now)

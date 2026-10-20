@@ -21,6 +21,8 @@ pub(super) enum Error {
     Unauthorized,
     Forbidden,
     NotFound,
+    Conflict,
+    LegacyContent,
     Method,
     TooLarge,
     Media,
@@ -36,6 +38,8 @@ impl Error {
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
             Self::NotFound => (StatusCode::NOT_FOUND, "not_found"),
+            Self::Conflict => (StatusCode::CONFLICT, "content_conflict"),
+            Self::LegacyContent => (StatusCode::CONFLICT, "content_conversion_required"),
             Self::Method => (StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"),
             Self::TooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "request_too_large"),
             Self::Media => (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"),
@@ -62,12 +66,22 @@ impl Error {
 }
 
 pub(super) fn success(value: impl Serialize) -> Result<Reply, Error> {
+    limited_success(value, 1024 * 1024)
+}
+
+pub(super) fn content_snapshot(value: impl Serialize) -> Result<Reply, Error> {
+    // Full snapshot plus retained append delta can each escape to 6x the
+    // 256 KiB text bound. Other routes retain the original 1 MiB ceiling.
+    limited_success(value, 4 * 1024 * 1024)
+}
+
+fn limited_success(value: impl Serialize, max_bytes: usize) -> Result<Reply, Error> {
     let bytes = serde_json::to_vec(&Success {
         api_version: API_VERSION,
         data: value,
     })
     .map_err(|_serialization_error| Error::Unavailable)?;
-    if bytes.len() > 1024 * 1024 {
+    if bytes.len() > max_bytes {
         return Err(Error::Unavailable);
     }
     Ok(build(StatusCode::OK, bytes))

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 //! Direct TLS-only workspace HTTP runtime. There is no proxy/header identity,
-//! browser cookie authentication, content endpoint or native transport fallback.
+//! browser cookie authentication or native transport fallback.
+mod content;
 mod dispatch;
 mod invitations;
 mod management;

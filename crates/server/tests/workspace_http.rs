@@ -3,7 +3,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #[cfg(test)]
+#[path = "."]
 mod tests {
+    #[path = "workspace_content/mod.rs"]
+    mod content;
     use anyhow::Context;
     use rcgen::{CertificateParams, KeyPair};
     use reqwest::Client;

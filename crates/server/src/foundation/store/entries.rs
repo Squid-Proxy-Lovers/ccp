@@ -215,14 +215,3 @@ fn active_head(db: &Connection, workspace: Uuid, id: Uuid) -> anyhow::Result<Ent
     }
     Ok(head)
 }
-
-fn conflict(error: rusqlite::Error) -> anyhow::Error {
-    // Only uniqueness denotes an expected conflict. FK/trigger/I/O failures
-    // remain internal errors, so audit failures cannot masquerade as conflicts.
-    if matches!(&error, rusqlite::Error::SqliteFailure(e, _) if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE)
-    {
-        ContentError::Conflict.into()
-    } else {
-        error.into()
-    }
-}

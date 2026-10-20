@@ -39,7 +39,7 @@ pub(super) fn apply(
                 created_at: now,
                 updated_at: now,
             };
-            tx.execute("INSERT INTO ccp_content_entries(id,workspace_id,book_id,name,owner_client_id,revision,archived,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,1,0,?6,?6)",params![head.id.to_string(),workspace.to_string(),book_id.to_string(),head.name,owner.map(|v|v.to_string()),now]).map_err(conflict)?;
+            tx.execute("INSERT INTO ccp_content_entries(id,workspace_id,book_id,name,owner_client_id,revision,archived,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,1,0,?6,?6)",params![head.id.to_string(),workspace.to_string(),book_id.to_string(),head.name,owner.map(|v|v.to_string()),now]).map_err(content_conflict)?;
             VersionWrite {
                 head,
                 content: content.clone(),
@@ -113,7 +113,7 @@ fn change<'a>(
     head.revision += 1;
     head.archived = matches!(request.change, EntryChange::Archive { .. });
     head.updated_at = now;
-    let changed = tx.execute("UPDATE ccp_content_entries SET revision=?1,archived=?2,updated_at=?3 WHERE id=?4 AND workspace_id=?5 AND revision=?6",params![i64::try_from(head.revision)?,head.archived,now,id.to_string(),workspace.to_string(),i64::try_from(expected)?]).map_err(conflict)?;
+    let changed = tx.execute("UPDATE ccp_content_entries SET revision=?1,archived=?2,updated_at=?3 WHERE id=?4 AND workspace_id=?5 AND revision=?6",params![i64::try_from(head.revision)?,head.archived,now,id.to_string(),workspace.to_string(),i64::try_from(expected)?]).map_err(content_conflict)?;
     if changed != 1 {
         return Err(ContentError::Conflict.into());
     }

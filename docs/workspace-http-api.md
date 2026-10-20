@@ -4,9 +4,11 @@ This unreleased API connects the reviewed workspace identity, key and certificat
 foundations to direct TLS listeners. It supports invitations, enrollment,
 discovery, existing-client admission, credential renewal and targeted recovery.
 Initial [client trust/profiles, enrollment and discovery](workspace-client.md)
-are connected. Content endpoints, browser login, remaining client lifecycle and
-selection, MCP integration and the human panel remain subsequent work. Keep this draft
-implementation separate from a production rollout.
+are connected, along with client lifecycle, explicit selections and workspace MCP
+metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
+entries and revisions on both authenticated listeners. Normal client/MCP content
+adapters, browser login and the human panel remain subsequent work. Keep this
+draft implementation separate from a production rollout.
 
 [Documentation index](README.md) · [Instance TLS](instance-tls-identity.md) ·
 [Registered peers](registered-tls-peers.md)
@@ -29,7 +31,7 @@ ccp-server workspace-serve --data-dir ./ccp-data --activate-workspace
 Activation persists workspace mode, after which native startup, health and token
 tools refuse this directory. It is not an in-place downgrade toggle. Dirty
 legacy journals prevent activation. It does not migrate legacy entry ownership
-or expose context contents. See the [mode and backup rules](workspace-runtime-mode.md).
+or expose those legacy context contents. See the [mode and backup rules](workspace-runtime-mode.md).
 Socket bind and TLS validation failures occur before initial activation; later
 startup failures can leave the explicitly activated mode persisted.
 
@@ -284,24 +286,30 @@ The [workspace client](workspace-client.md) connects trust, private profiles,
 initial enrollment/readmission, discovery, same-registration joining, renewal and
 separate-profile recovery. Explicit [caller selection](workspace-selection.md)
 resolves current target metadata, including through the [workspace MCP bridge](workspace-mcp.md).
-Context contents remain later integration work. Native commands keep their
+Content HTTP is available separately; normal client/MCP content integration
+remains later work. Native commands keep their
 supported native-mode behavior.
 
 ## Limits and errors
 
 HTTP/1.1 keepalive and bounded chunked JSON are handled by Hyper. Header limit is
-8 KiB and 32 fields; decoded body limit is 64 KiB, with a 10-second body deadline.
+8 KiB and 32 fields; body limit is 64 KiB, with a 10-second body deadline. The
+exact content entry-mutation route accepts up to 2 MiB of encoded JSON.
 TLS handshake deadline is 5 seconds, header deadline 10 seconds, connection
 lifetime 120 seconds, and request budget 100 per connection. There are at most
 64 admitted connections or outstanding jobs; a disconnected database job keeps
-its slot. Responses are capped at 1 MiB. Early data is disabled. Supported
+its slot. Responses are capped at 1 MiB, except content snapshots at 4 MiB
+(full body plus original append contribution with JSON escaping). Content list
+limits are 1–32 to fit encoded metadata within the usual response cap.
+Early data is disabled. Supported
 transfer coding is chunked; content compression and trailers are not accepted.
 Malformed framing closes the connection under Hyper's HTTP rules, including
 closing after a request with both Transfer-Encoding and Content-Length.
 
 Admin authentication failure is 401 with a Bearer challenge. Client-registry,
 profile, scope and operation refusals use 403 without internal details. Other
-application errors include 400 invalid request, 404 route, 405 method, 408 body
+application errors include 400 invalid request, 404 route/target, 405 method,
+409 content conflict/conversion required, 408 body
 timeout, 413 size, 415 media, 501 transfer coding and 503 unavailable storage or
 response capacity. Malformed HTTP may receive Hyper's framing rejection without
 the JSON envelope. Responses disable caching; no request bodies, keys, CSRs or

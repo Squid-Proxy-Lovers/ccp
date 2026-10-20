@@ -2,7 +2,8 @@
 
 This unreleased internal server API stores workspace shelves, books and
 client-owned entries in shared SQLite, with immutable revisions and recoverable
-entry archives. HTTP/client/MCP content adapters are subsequent slices. The workspace MCP bridge
+entry archives. The [authenticated HTTP adapter](workspace-content-http.md) now
+exposes this store; normal client/MCP content adapters are subsequent slices. The workspace MCP bridge
 currently returns metadata and selections, not content.
 
 [Documentation index](README.md) · [Workspace access](workspace-foundation.md) ·
@@ -72,8 +73,8 @@ returns the original entry/revision receipt without appending again. Changing th
 request or credential under that UUID conflicts. New credentials, including
 recovery credentials, need fresh operation IDs for new mutations. Lost write
 access blocks retries too. Receipts contain no body and do not expose archived
-content. Retain the original operation ID until the result is known; this slice
-has no public transport or automatic retry implementation.
+content. Retain the original operation ID until the result is known; the HTTP adapter accepts this receipt contract, while normal client automatic
+retry integration remains later work.
 
 Text is limited to 256 KiB of UTF-8; description to 4096 bytes. Labels retain their
 order and exact case, with at most 32 distinct nonempty values of 1–128 bytes

@@ -30,8 +30,13 @@ pub(super) async fn read(request: Request<Incoming>) -> Result<Input, Error> {
         return Err(Error::BadRequest);
     }
     validate_headers(&parts.headers)?;
+    let max_body = if parts.uri.path() == super::content::MUTATION_PATH {
+        2 * 1024 * 1024
+    } else {
+        MAX_BODY
+    };
     if body.size_hint().lower()
-        > u64::try_from(MAX_BODY).map_err(|_invalid_limit| Error::Unavailable)?
+        > u64::try_from(max_body).map_err(|_invalid_limit| Error::Unavailable)?
     {
         return Err(Error::TooLarge);
     }
@@ -50,7 +55,7 @@ pub(super) async fn read(request: Request<Incoming>) -> Result<Input, Error> {
     }
     let collected = timeout(
         Duration::from_secs(10),
-        Limited::new(body, MAX_BODY).collect(),
+        Limited::new(body, max_body).collect(),
     )
     .await
     .map_err(|_timeout| Error::Timeout)?

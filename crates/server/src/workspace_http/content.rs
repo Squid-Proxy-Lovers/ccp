@@ -1,0 +1,73 @@
+// Cephalopod Coordination Protocol
+// Copyright (C) 2026 Squid Proxy Lovers
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+use super::{
+    dispatch::{decode, id},
+    request::Input,
+    response::{self, Error, Reply},
+};
+use crate::foundation::{self as domain, AccessStore, Actor, ContentError};
+use hyper::Method;
+use protocol::workspace::content as api;
+
+mod entries;
+mod nodes;
+mod project;
+
+pub(super) const MUTATION_PATH: &str = "/api/v1/content/entries/mutate";
+
+pub(super) fn handles(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/v1/content/shelves/create"
+            | "/api/v1/content/shelves/get"
+            | "/api/v1/content/shelves/list"
+            | "/api/v1/content/books/create"
+            | "/api/v1/content/books/get"
+            | "/api/v1/content/books/list"
+            | MUTATION_PATH
+            | "/api/v1/content/entries/get"
+            | "/api/v1/content/entries/list"
+            | "/api/v1/content/entries/history"
+    )
+}
+
+pub(super) fn dispatch(
+    store: &mut AccessStore<'_>,
+    actor: Actor,
+    input: &Input,
+    now: i64,
+) -> Result<Reply, Error> {
+    if input.method != Method::POST {
+        return Err(Error::Method);
+    }
+    match input.path.as_str() {
+        MUTATION_PATH => entries::mutate(store, actor, input, now),
+        "/api/v1/content/entries/get" => entries::get(store, actor, input, now),
+        "/api/v1/content/entries/list" => entries::list(store, actor, input, now),
+        "/api/v1/content/entries/history" => entries::history(store, actor, input, now),
+        _ => nodes::dispatch(store, actor, input, now),
+    }
+}
+
+fn operation(error: anyhow::Error) -> Error {
+    match error.downcast_ref::<ContentError>() {
+        Some(ContentError::InvalidInput) => Error::BadRequest,
+        Some(ContentError::Forbidden) => Error::Forbidden,
+        Some(ContentError::NotFound) => Error::NotFound,
+        Some(ContentError::Conflict) => Error::Conflict,
+        Some(ContentError::LegacyConversionRequired) => Error::LegacyContent,
+        None => Error::Unavailable,
+    }
+}
+
+fn limit(value: Option<u16>) -> Result<usize, Error> {
+    // 32 worst-case 4096-byte descriptions with 6x JSON escaping, names and
+    // bounded identity metadata fit the unchanged 1 MiB list response budget.
+    let value = value.unwrap_or(32);
+    if !(1..=32).contains(&value) {
+        return Err(Error::BadRequest);
+    }
+    Ok(usize::from(value))
+}

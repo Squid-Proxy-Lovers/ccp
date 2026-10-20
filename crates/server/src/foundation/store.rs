@@ -510,6 +510,17 @@ fn audit(
     Ok(())
 }
 
+fn content_conflict(error: rusqlite::Error) -> anyhow::Error {
+    // Only uniqueness is an expected content conflict. FK, audit trigger and
+    // I/O failures stay internal errors and must be sanitized by transports.
+    if matches!(&error, rusqlite::Error::SqliteFailure(e, _) if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE)
+    {
+        super::ContentError::Conflict.into()
+    } else {
+        error.into()
+    }
+}
+
 fn bootstrap_principal(connection: &Connection, name: &str, now: i64) -> anyhow::Result<Uuid> {
     let count: u64 = connection.query_row("SELECT COUNT(*) FROM ccp_server_admins", [], |row| {
         row.get(0)
