@@ -5,6 +5,7 @@
 #[cfg(test)]
 #[path = "workspace"]
 mod tests {
+    mod content;
     mod recovery;
     mod selection;
     use anyhow::Context;

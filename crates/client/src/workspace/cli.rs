@@ -17,6 +17,10 @@ pub(crate) struct WorkspaceArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    Content {
+        #[command(flatten)]
+        args: super::content::cli::ContentArgs,
+    },
     Selection {
         #[command(flatten)]
         args: selection::cli::SelectionArgs,
@@ -72,6 +76,7 @@ enum Command {
 }
 pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
     match args.command {
+        Command::Content { args } => super::content::cli::run(args).await,
         Command::Selection { args } => selection::cli::run(args).await,
         Command::Trust {
             profile,

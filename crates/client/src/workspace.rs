@@ -4,6 +4,7 @@
 
 //! Explicit, private workspace profiles, separate from native session storage.
 pub(crate) mod cli;
+pub mod content;
 mod crypto;
 mod lifecycle;
 mod network;

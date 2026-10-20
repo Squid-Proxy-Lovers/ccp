@@ -8,6 +8,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // Only the private response decoder is isolated here; public profile transport
 // is always HTTPS and separately exercised against the actual TLS server.
 async fn response(bytes: Vec<u8>) -> anyhow::Result<api::Health> {
+    decode_response(bytes, false).await
+}
+
+async fn decode_response(bytes: Vec<u8>, snapshot: bool) -> anyhow::Result<api::Health> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -28,9 +32,52 @@ async fn response(bytes: Vec<u8>) -> anyhow::Result<api::Health> {
         .timeout(std::time::Duration::from_secs(2))
         .build()
         .unwrap();
-    let result = network::json(http.get(format!("http://{address}/"))).await;
+    let request = http.get(format!("http://{address}/"));
+    let result = if snapshot {
+        network::snapshot_json(request).await
+    } else {
+        network::json(request).await
+    };
     task.await.unwrap();
     result
+}
+
+#[tokio::test]
+async fn snapshot_decoder_accepts_large_json_but_keeps_four_mib_stream_and_encoding_guards() {
+    let text = "x".repeat(3 * 1024 * 1024);
+    let body = serde_json::json!({"api_version":1,"data":{"instance_id":text}}).to_string();
+    let result = decode_response(fixed("200 OK", &body, ""), true)
+        .await
+        .unwrap();
+    assert_eq!(result.instance_id, text);
+    assert!(response(fixed("200 OK", &body, "")).await.is_err());
+    let declared =
+        b"HTTP/1.1 200 OK\r\nContent-Length: 4194305\r\nConnection: close\r\n\r\n".to_vec();
+    assert!(decode_response(declared, true).await.is_err());
+    let mut chunked =
+        b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n400001\r\n"
+            .to_vec();
+    chunked.extend(vec![b'x'; 4 * 1024 * 1024 + 1]);
+    chunked.extend(b"\r\n0\r\n\r\n");
+    assert!(decode_response(chunked, true).await.is_err());
+    for bytes in [
+        fixed("200 OK", "PRIVATE_BODY", ""),
+        fixed("403 Forbidden", "PRIVATE_BODY", ""),
+        fixed("200 OK", &body, "Content-Encoding: gzip\r\n"),
+        fixed(
+            "200 OK",
+            r#"{"api_version":999,"data":{"instance_id":"PRIVATE_BODY"}}"#,
+            "",
+        ),
+        b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}".to_vec(),
+    ] {
+        let error = decode_response(bytes, true)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(!error.contains("PRIVATE_BODY"));
+    }
 }
 fn fixed(status: &str, body: &str, extra: &str) -> Vec<u8> {
     format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n{extra}\r\n{body}",body.len()).into_bytes()

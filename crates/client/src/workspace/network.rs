@@ -92,6 +92,19 @@ pub(super) async fn health(http: &Client, origin: &str, instance: &str) -> anyho
 pub(super) async fn json<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
 ) -> anyhow::Result<T> {
+    limited_json(request, 1024 * 1024).await
+}
+
+pub(super) async fn snapshot_json<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+) -> anyhow::Result<T> {
+    limited_json(request, 4 * 1024 * 1024).await
+}
+
+async fn limited_json<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+    max_bytes: usize,
+) -> anyhow::Result<T> {
     let mut response = request.send().await.map_err(|_network| {
         anyhow::anyhow!("workspace HTTPS request failed; trust, name and connection must be valid")
     })?;
@@ -102,7 +115,9 @@ pub(super) async fn json<T: DeserializeOwned>(
         );
     }
     if response.headers().get("content-encoding").is_some()
-        || response.content_length().is_some_and(|n| n > 1024 * 1024)
+        || response
+            .content_length()
+            .is_some_and(|n| !usize::try_from(n).is_ok_and(|n| n <= max_bytes))
     {
         bail!("invalid workspace response encoding or size");
     }
@@ -110,7 +125,7 @@ pub(super) async fn json<T: DeserializeOwned>(
     while let Some(chunk) = response.chunk().await.map_err(|_body| {
         anyhow::anyhow!("incomplete workspace response; preserve pending request for retry")
     })? {
-        if bytes.len().saturating_add(chunk.len()) > 1024 * 1024 {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
             bail!("workspace response exceeds size limit");
         }
         bytes.extend_from_slice(&chunk);

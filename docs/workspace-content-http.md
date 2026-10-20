@@ -3,7 +3,8 @@
 This unreleased server API exposes workspace shelves, books and client-owned
 entries. Start the [workspace HTTPS server](workspace-http-api.md#prepare-and-start)
 and verify its instance CA first. The normal workspace client CLI and workspace
-MCP bridge currently expose access and selections; their content adapters and
+MCP bridge expose access and selections; the [normal client](workspace-content-client.md)
+now also supports content reads. Client mutation commands, MCP content tools and
 the human panel remain later work. Native commands keep their native-mode API.
 
 [Documentation index](README.md) · [Content storage and ownership](workspace-content.md) ·

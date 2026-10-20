@@ -6,8 +6,9 @@ discovery, existing-client admission, credential renewal and targeted recovery.
 Initial [client trust/profiles, enrollment and discovery](workspace-client.md)
 are connected, along with client lifecycle, explicit selections and workspace MCP
 metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
-entries and revisions on both authenticated listeners. Normal client/MCP content
-adapters, browser login and the human panel remain subsequent work. Keep this
+entries and revisions on both authenticated listeners. The normal client now
+supports [content reads](workspace-content-client.md); client mutations, MCP
+content tools, browser login and the human panel remain subsequent work. Keep this
 draft implementation separate from a production rollout.
 
 [Documentation index](README.md) · [Instance TLS](instance-tls-identity.md) ·
@@ -286,9 +287,9 @@ The [workspace client](workspace-client.md) connects trust, private profiles,
 initial enrollment/readmission, discovery, same-registration joining, renewal and
 separate-profile recovery. Explicit [caller selection](workspace-selection.md)
 resolves current target metadata, including through the [workspace MCP bridge](workspace-mcp.md).
-Content HTTP is available separately; normal client/MCP content integration
-remains later work. Native commands keep their
-supported native-mode behavior.
+Content HTTP and normal-client [content reads](workspace-content-client.md) are
+available; client mutations and MCP content tools remain later work. Native
+commands keep their supported native-mode behavior.
 
 ## Limits and errors
 
