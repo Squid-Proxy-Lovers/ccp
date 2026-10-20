@@ -279,7 +279,7 @@ curl --cacert ./ccp-ca.pem --cert ./client-cert.pem --key ./client-key.pem \
 ```
 
 The [workspace client](workspace-client.md) connects trust, private profiles,
-initial enrollment/readmission and discovery. Joining, renewal/recovery, context
+initial enrollment/readmission and discovery. Same-registration joining and renewal are also connected; recovery, context
 selection and MCP remain later integration work. Native commands keep their
 supported native-mode behavior.
 

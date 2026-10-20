@@ -134,6 +134,7 @@ impl IssuingAuthority {
             .distinguished_name
             .push(DnType::CommonName, credential.to_string());
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        params.use_authority_key_identifier_extension = true;
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         for (kind, id) in [
             ("instance", instance),

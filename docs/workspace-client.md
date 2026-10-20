@@ -1,9 +1,9 @@
 # Enroll a workspace client
 
 This unreleased client supports trusted workspace profiles, initial enrollment
-and paged workspace discovery over HTTPS/mTLS. It also accepts a fresh targeted
-readmission invitation into an unenrolled profile. Joining another workspace
-with an active registration, renewal, recovery, context selection and MCP
+and paged workspace discovery over HTTPS/mTLS, same-registration joining and
+credential renewal. It also accepts a fresh targeted readmission invitation into
+an unenrolled profile. Client recovery, context selection and workspace MCP
 integration remain subsequent work. Existing native commands and their saved
 session files keep their current behavior.
 
@@ -83,10 +83,55 @@ on the assumption that enrollment failed at the server.
 
 An enrolled profile refuses another initial enrollment. Reuse its registration
 for later workspace access; do not create another registration merely to join a
-second workspace on the same instance. The join command remains subsequent work.
+second workspace on the same instance. Use `workspace join` below for a new workspace grant.
 A separately authorized [targeted readmission](workspace-readmission.md) can use
 an otherwise unenrolled profile with a fresh key; the server captures the
 existing client identity and creates a new scoped grant.
+
+## Join another workspace or renew
+
+Use a fresh invitation for a second workspace on the same instance:
+
+```bash
+ccp-client workspace join \
+  --profile "$HOME/.ccp-client/workspaces/office" \
+  --invitation-file ./second-workspace-invitation.txt
+ccp-client workspace renew --profile "$HOME/.ccp-client/workspaces/office"
+```
+
+Join proves the existing identity through actual mTLS, with a signed CSR for its
+current key. The client UUID, credential UUID, certificate and key remain the
+same; the server grants only the invitation's workspace/role. The new workspace
+becomes discoverable but is not automatically selected for routine context reads.
+A known completed invitation is refused locally before creating another pending
+operation. That history records past completion, not current access; inspect
+workspaces to check today's authorization.
+
+Renewal creates a fresh pending key and request UUID, uses the old actual TLS
+peer on the renewal endpoint, and requires the returned certificate to preserve
+the client UUID and rotate the credential. The old key remains saved until the
+new material activates atomically. A committed renewal supersedes the old peer
+for ordinary requests. If activation or a response fails, the next discovery
+resumes the exact renewal receipt before attempting an ordinary request. It does
+not send the superseded peer to other routes or replace the pending key.
+
+Successful nonempty discovery automatically renews when seven days or less
+remain and the root permits a later expiry, then reloads the requested page
+using the new credential. Empty discovery does not queue a grantless renewal.
+A root-capped certificate is not repeatedly rotated automatically. Manual renew
+can still rotate its key, but cannot extend it past the CA's expiry. There is no
+background updater or timer; refresh happens on client use.
+
+A pending join requires its original invitation to finish. Discovery may still
+use the current credential, while automatic renewal is suppressed until that
+join resolves. Another join/invitation or explicit renewal cannot silently
+replace it. A pending renewal must finish before joining or ordinary discovery.
+Errors preserve the operation for retry and require current server permission;
+there is no fallback to a possibly superseded credential. Expired certificates
+cannot authenticate a renewal or admission. Ask an authorized admin for fresh
+recovery instead. Preserve every existing profile until recovery is complete:
+a scoped recovery may replace A while the old credential still authorizes B.
+Client recovery routing for that case remains separate implementation work.
 
 ## Inspect and discover
 
@@ -96,8 +141,9 @@ ccp-client workspace workspaces --profile "$HOME/.ccp-client/workspaces/office"
 ```
 
 Info is local metadata: format, pinned origins/instance/CA fingerprint, pending
-request UUID and optional client/credential UUIDs/expiry. It can show expired
-credentials as expired, but is not proof of current server authorization.
+request UUID/operation and optional client/credential UUIDs, expiry and renewal-due
+status. It can show expired credentials as expired, but is not proof of current
+server authorization.
 Online discovery revalidates the certificate and uses actual mTLS; the server
 checks current disable, credential and grant state. A denial never triggers
 implicit registration or a trust downgrade.
@@ -112,7 +158,7 @@ local descriptions and HTTP status, without echoing an untrusted server body.
 
 ## Profile storage and recovery limits
 
-Workspace profile format 1 uses `workspace-profile.sqlite3` with a separate
+Workspace profile format 2 uses `workspace-profile.sqlite3` with a separate
 application ID, DELETE journaling and FULL synchronization. Open profiles hold
 an exclusive SQLite lease across commits and network calls. Another invocation
 can fail busy after 2s; close the first profile before retrying. This serializes
@@ -128,8 +174,20 @@ Host operators remain trusted against path/file replacement races. Unix
 publication syncs the directory; Windows directory-sync and ACL behavior have
 not been independently verified locally.
 
-Automatic renewal and recovery commands are not connected in this batch. A
-client whose certificate has expired or been revoked cannot use that old
-certificate to regain access. The selected [fresh targeted recovery](workspace-recovery.md)
-workflow remains separate integration work. This draft is not a production
-rollout or a throughput/power-loss guarantee.
+Format 1 profiles upgrade when opened with this client. Before any migration,
+the exclusive lease protects a complete owner-only, content-addressed format-1
+SQLite snapshot named `workspace-profile-v1-HASH.sqlite3`. Publication is durable
+on supported Unix local file systems and never overwrites another snapshot.
+The transaction then preserves the key, CSR, nonce, invitation hash and identity
+while adding typed pending operations and compact completed-invitation history.
+A failure leaves the previous format and its snapshot intact. Snapshots are
+retained without automatic cleanup. Older format-1 clients refuse format 2;
+restore a deliberately chosen snapshot into a separate private directory for a
+controlled rollback. Restoring a local snapshot never restores revoked or
+superseded server authority. No backup is selected automatically if the main
+profile is missing or corrupt.
+
+Fresh targeted recovery remains separate client integration work. A client whose
+certificate has expired or been revoked cannot use that old certificate to
+regain access. The selected [recovery contract](workspace-recovery.md) applies.
+This draft is not a production rollout or a throughput/power-loss guarantee.

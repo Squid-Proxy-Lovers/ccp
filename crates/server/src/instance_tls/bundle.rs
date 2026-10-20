@@ -66,6 +66,7 @@ impl PrivateBundle {
         )?;
         server.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         server.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        server.use_authority_key_identifier_extension = true;
         let server_key = KeyPair::generate()?;
         let server = server.signed_by(&server_key, &ca, &ca_key)?;
         Ok(Self {
@@ -107,6 +108,7 @@ impl PrivateBundle {
         )?;
         params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        params.use_authority_key_identifier_extension = true;
         let key = KeyPair::generate()?;
         let leaf = params.signed_by(&key, &ca, &ca_key)?;
         Ok(Self {

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{Credential, Pending, WorkspaceTrust};
+use super::{Credential, Operation, Pending, WorkspaceTrust};
 use anyhow::{Context, bail};
 use rcgen::{CertificateParams, CertificateSigningRequestParams, KeyPair};
 use rustls::pki_types::{
@@ -102,26 +102,39 @@ fn private_key(value: &str) -> anyhow::Result<KeyPair> {
         .map_err(|_key| anyhow::anyhow!("invalid saved client key"))
 }
 pub(super) fn pending(invitation: &str) -> anyhow::Result<Pending> {
-    let key = KeyPair::generate()?;
+    pending_operation(Operation::Enrollment, Some(invitation), None)
+}
+
+pub(super) fn pending_operation(
+    operation: Operation,
+    invitation: Option<&str>,
+    active: Option<&Credential>,
+) -> anyhow::Result<Pending> {
+    let key = if operation == Operation::Admission {
+        private_key(&active.context("admission requires a registration")?.key_pem)?
+    } else {
+        KeyPair::generate()?
+    };
     let csr_pem = CertificateParams::new(Vec::<String>::new())?
         .serialize_request(&key)?
         .pem()?;
     Ok(Pending {
+        operation,
         request_id: Uuid::new_v4().to_string(),
-        invitation_hash: hash(invitation.as_bytes()),
+        invitation_hash: invitation.map(|s| hash(s.as_bytes())),
+        expected_client_id: active.map(|c| c.receipt.client_id.clone()),
+        expected_credential_id: active.map(|c| c.receipt.credential_id.clone()),
         key_pem: key.serialize_pem(),
         csr_pem,
     })
 }
 pub(super) fn validate_pending(pending: &Pending) -> anyhow::Result<()> {
     canonical_id(&pending.request_id)?;
-    if pending.invitation_hash.len() != 64
-        || !pending
-            .invitation_hash
-            .bytes()
-            .all(|b| b.is_ascii_hexdigit())
-    {
-        bail!("invalid pending enrollment reference");
+    match (&pending.invitation_hash, pending.operation) {
+        (None, Operation::Renewal) => {}
+        (Some(hash), Operation::Enrollment | Operation::Admission)
+            if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) => {}
+        _ => bail!("invalid pending invitation reference"),
     }
     let der = pem(&pending.csr_pem, "CERTIFICATE REQUEST")?;
     let (remaining, csr) =
@@ -136,6 +149,40 @@ pub(super) fn validate_pending(pending: &Pending) -> anyhow::Result<()> {
     CertificateSigningRequestParams::from_der(&CertificateSigningRequestDer::from(der.as_slice()))
         .map_err(|_proof| anyhow::anyhow!("invalid pending key possession proof"))?;
     Ok(())
+}
+
+pub(super) fn validate_state(
+    pending: Option<&Pending>,
+    active: Option<&Credential>,
+) -> anyhow::Result<()> {
+    let Some(p) = pending else {
+        return Ok(());
+    };
+    validate_pending(p)?;
+    if p.operation == Operation::Enrollment {
+        if active.is_some() || p.expected_client_id.is_some() || p.expected_credential_id.is_some()
+        {
+            bail!("invalid pending enrollment state");
+        }
+        return Ok(());
+    }
+    let active = active.context("pending operation requires its original credential")?;
+    if p.expected_client_id.as_deref() != Some(&active.receipt.client_id)
+        || p.expected_credential_id.as_deref() != Some(&active.receipt.credential_id)
+    {
+        bail!("pending operation identity mismatch");
+    }
+    let same =
+        private_key(&p.key_pem)?.public_key_der() == private_key(&active.key_pem)?.public_key_der();
+    if same != (p.operation == Operation::Admission) {
+        bail!("pending operation key mismatch");
+    }
+    Ok(())
+}
+
+pub(super) fn root_expiry(pem: &str) -> anyhow::Result<i64> {
+    let der = ca_der(pem)?;
+    Ok(cert(&der)?.validity().not_after.timestamp())
 }
 
 pub(super) fn credential(

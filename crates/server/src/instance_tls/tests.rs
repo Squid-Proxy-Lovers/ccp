@@ -499,3 +499,91 @@ fn server_leaf_constraints_and_exact_pem_are_enforced_before_pin() {
         .push_str(&f.bundle().ca_certificate);
     assert!(bundle.validate(f.instance, now().unwrap()).is_err());
 }
+
+fn assert_issuer_identifier(leaf_pem: &str, ca_pem: &str) {
+    use x509_parser::extensions::ParsedExtension;
+    let leaf = crate::foundation::strict_pem_der(leaf_pem, "CERTIFICATE").unwrap();
+    let ca = crate::foundation::strict_pem_der(ca_pem, "CERTIFICATE").unwrap();
+    let (_, leaf) = x509_parser::parse_x509_certificate(&leaf).unwrap();
+    let (_, ca) = x509_parser::parse_x509_certificate(&ca).unwrap();
+    let authority = leaf
+        .iter_extensions()
+        .find_map(|e| match e.parsed_extension() {
+            ParsedExtension::AuthorityKeyIdentifier(id) => {
+                id.key_identifier.as_ref().map(|id| id.0.to_vec())
+            }
+            _ => None,
+        })
+        .unwrap();
+    let subject = ca
+        .iter_extensions()
+        .find_map(|e| match e.parsed_extension() {
+            ParsedExtension::SubjectKeyIdentifier(id) => Some(id.0.to_vec()),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!authority.is_empty());
+    assert_eq!(authority, subject);
+}
+
+#[test]
+fn workspace_initial_renewed_and_client_leaves_identify_the_same_pinned_issuer() {
+    use crate::foundation::{
+        AccessStore, Actor, DataRole, IndividualInvitationRequest, RedemptionRequest,
+    };
+    let f = Fixture::new();
+    f.init();
+    let initial = f.bundle();
+    assert_issuer_identifier(&initial.server_certificate, &initial.ca_certificate);
+    let now = now().unwrap();
+    let mut db = f.connection();
+    let (workspace, owner): (String, String) = db
+        .query_row(
+            "SELECT id,owner_admin_id FROM ccp_workspaces WHERE owner_admin_id IS NOT NULL LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let mut store = AccessStore::new(&mut db).unwrap();
+    let token = store
+        .issue_individual_invitation(
+            Actor::Admin(Uuid::parse_str(&owner).unwrap()),
+            IndividualInvitationRequest {
+                workspace_id: Uuid::parse_str(&workspace).unwrap(),
+                role: DataRole::Read,
+                expires_at: now + 3600,
+            },
+            now,
+        )
+        .unwrap();
+    let key = KeyPair::generate().unwrap();
+    let csr = CertificateParams::new(Vec::<String>::new())
+        .unwrap()
+        .serialize_request(&key)
+        .unwrap()
+        .pem()
+        .unwrap();
+    let authority =
+        crate::foundation::IssuingAuthority::from_pem(&initial.ca_certificate, &initial.ca_key)
+            .unwrap();
+    let receipt = store
+        .redeem_invitation(
+            token.secret(),
+            &RedemptionRequest {
+                request_id: Uuid::new_v4(),
+                csr_pem: csr,
+                existing_credential: None,
+            },
+            &authority,
+            now,
+        )
+        .unwrap();
+    assert_issuer_identifier(&receipt.certificate_pem, &initial.ca_certificate);
+    drop(db);
+    renew(&f.directory, None).unwrap();
+    let pin = anchor(&f.connection()).unwrap().unwrap();
+    let renewed = decode_bundle(&files::read_pinned(&f.directory, &pin.hash).unwrap()).unwrap();
+    assert_eq!(renewed.ca_certificate, initial.ca_certificate);
+    assert_eq!(renewed.ca_key, initial.ca_key);
+    assert_issuer_identifier(&renewed.server_certificate, &renewed.ca_certificate);
+}

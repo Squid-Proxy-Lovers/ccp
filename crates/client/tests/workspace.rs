@@ -267,7 +267,7 @@ mod tests {
         let token = f.invitation();
         f.token_file(&token);
         let trusted = value(f.trust_cli().await);
-        assert_eq!(trusted["format"], 1);
+        assert_eq!(trusted["format"], 2);
         assert_eq!(trusted["instance_id"], f.trust.instance_id);
         let enrolled = value(f.enroll_cli().await);
         assert!(enrolled["client_id"].as_str().is_some());
@@ -589,6 +589,442 @@ mod tests {
         assert_eq!(new.workspaces(None, 10).await.unwrap().workspaces.len(), 1);
         drop(new);
         drop(old);
+        f.finish().await;
+    }
+    fn clock() -> i64 {
+        i64::try_from(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        )
+        .unwrap()
+    }
+    fn second_invitation(f: &Fixture) -> (String, Uuid) {
+        use server::foundation::{InitialOwner, OwnerProvisioning};
+        let mut db = f.db();
+        let mut store = AccessStore::new(&mut db).unwrap();
+        let actor = store
+            .authenticate_admin_key(f.setup.instance_key.secret(), clock())
+            .unwrap();
+        let w = store
+            .create_workspace_with_owner_key(
+                actor,
+                "second",
+                &OwnerProvisioning {
+                    owner: InitialOwner::Existing(f.setup.owner_key.principal_id),
+                    key_expires_at: None,
+                },
+                clock(),
+            )
+            .unwrap();
+        let owner = store
+            .authenticate_admin_key(w.owner_key.secret(), clock())
+            .unwrap();
+        let token = store
+            .issue_initial_invitation(
+                owner,
+                InitialInvitationRequest {
+                    workspace_id: w.workspace_id,
+                    role: DataRole::Read,
+                    max_clients: Some(1),
+                    expires_at: Some(clock() + 3600),
+                },
+                clock(),
+            )
+            .unwrap();
+        (token.secret().to_owned(), w.workspace_id)
+    }
+    fn private_invitation(f: &Fixture, name: &str, token: &str) -> PathBuf {
+        use std::io::Write;
+        let path = f.root.join(name);
+        let mut options = fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(&path)
+            .unwrap()
+            .write_all(token.as_bytes())
+            .unwrap();
+        path
+    }
+    async fn enroll_profile(f: &Fixture) -> client::workspace::ProfileInfo {
+        WorkspaceProfile::trust(&f.profile, f.config())
+            .await
+            .unwrap();
+        let token = f.invitation();
+        WorkspaceProfile::open(&f.profile)
+            .unwrap()
+            .enroll(&token)
+            .await
+            .unwrap()
+    }
+    fn fail_activation(f: &Fixture) {
+        Connection::open(f.profile.join("workspace-profile.sqlite3")).unwrap().execute_batch("CREATE TRIGGER fail_lifecycle BEFORE UPDATE OF credential ON profile BEGIN SELECT RAISE(ABORT,'injected lifecycle activation'); END;").unwrap();
+    }
+    fn allow_activation(f: &Fixture) {
+        Connection::open(f.profile.join("workspace-profile.sqlite3"))
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_lifecycle")
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn client_join_reuses_client_certificate_and_known_invitation_does_not_start_another_operation()
+     {
+        let f = Fixture::new().await;
+        let original = enroll_profile(&f).await;
+        let (token, second) = second_invitation(&f);
+        let mut p = WorkspaceProfile::open(&f.profile).unwrap();
+        let joined = p.join(&token).await.unwrap();
+        assert_eq!(joined.client_id, original.client_id);
+        assert_eq!(joined.credential_id, original.credential_id);
+        assert!(joined.pending_operation.is_none());
+        let page = p.workspaces(None, 100).await.unwrap();
+        assert_eq!(page.workspaces.len(), 2);
+        assert!(page.workspaces.iter().any(|w| w.id == second.to_string()));
+        assert!(p.join(&token).await.is_err());
+        assert!(p.info().unwrap().pending_operation.is_none());
+        assert_eq!(f.count("ccp_clients"), 1);
+        assert_eq!(f.count("ccp_credentials"), 1);
+        assert_eq!(f.count("ccp_grants"), 2);
+        drop(p);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn actual_cli_join_and_renew_preserve_registration_and_rotate_only_the_credential() {
+        let f = Fixture::new().await;
+        let original = enroll_profile(&f).await;
+        let (token, _) = second_invitation(&f);
+        let file = private_invitation(&f, "join.txt", &token);
+        let joined = value(
+            f.cli(&[
+                "workspace",
+                "join",
+                "--profile",
+                f.profile.to_str().unwrap(),
+                "--invitation-file",
+                file.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(
+            joined["client_id"],
+            original.client_id.as_ref().unwrap().as_str()
+        );
+        assert_eq!(
+            joined["credential_id"],
+            original.credential_id.as_ref().unwrap().as_str()
+        );
+        let renewed = value(
+            f.cli(&[
+                "workspace",
+                "renew",
+                "--profile",
+                f.profile.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(renewed["client_id"], joined["client_id"]);
+        assert_ne!(renewed["credential_id"], joined["credential_id"]);
+        let page = value(
+            f.cli(&[
+                "workspace",
+                "workspaces",
+                "--profile",
+                f.profile.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(page["workspaces"].as_array().unwrap().len(), 2);
+        assert_eq!(f.count("ccp_clients"), 1);
+        assert_eq!(f.count("ccp_credentials"), 2);
+        assert_eq!(f.count("ccp_grants"), 2);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn joined_grant_commit_with_local_failure_retries_same_join_after_cli_restart() {
+        let f = Fixture::new().await;
+        let original = enroll_profile(&f).await;
+        let (token, _) = second_invitation(&f);
+        let file = private_invitation(&f, "join-retry.txt", &token);
+        fail_activation(&f);
+        let args = [
+            "workspace",
+            "join",
+            "--profile",
+            f.profile.to_str().unwrap(),
+            "--invitation-file",
+            file.to_str().unwrap(),
+        ];
+        assert!(!f.cli(&args).await.status.success());
+        assert_eq!(f.count("ccp_grants"), 2);
+        assert_eq!(f.count("ccp_credentials"), 1);
+        let info = value(
+            f.cli(&[
+                "workspace",
+                "info",
+                "--profile",
+                f.profile.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(info["pending_operation"], "admission");
+        assert_eq!(
+            info["client_id"],
+            original.client_id.as_ref().unwrap().as_str()
+        );
+        let nonce = info["pending_request_id"].clone();
+        allow_activation(&f);
+        let done = value(f.cli(&args).await);
+        assert_eq!(
+            done["credential_id"],
+            original.credential_id.as_ref().unwrap().as_str()
+        );
+        assert_eq!(done["pending_request_id"], Value::Null);
+        assert_eq!(f.count("ccp_clients"), 1);
+        assert_eq!(f.count("ccp_grants"), 2);
+        assert_eq!(f.count("ccp_credentials"), 1);
+        let db = f.db();
+        let recorded: String = db
+            .query_row(
+                "SELECT request_id FROM ccp_invitation_receipts WHERE request_id=?1",
+                [nonce.as_str().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(recorded, nonce.as_str().unwrap());
+        drop(db);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn superseded_renewal_resumes_exact_receipt_before_discovery_after_process_restart() {
+        let f = Fixture::new().await;
+        let original = enroll_profile(&f).await;
+        let old = f.root.join("old-profile");
+        let mut dirs = fs::DirBuilder::new();
+        dirs.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            dirs.mode(0o700);
+        }
+        dirs.create(&old).unwrap();
+        fs::copy(
+            f.profile.join("workspace-profile.sqlite3"),
+            old.join("workspace-profile.sqlite3"),
+        )
+        .unwrap();
+        fail_activation(&f);
+        assert!(
+            !f.cli(&[
+                "workspace",
+                "renew",
+                "--profile",
+                f.profile.to_str().unwrap()
+            ])
+            .await
+            .status
+            .success()
+        );
+        assert_eq!(f.count("ccp_credentials"), 2);
+        let info = value(
+            f.cli(&[
+                "workspace",
+                "info",
+                "--profile",
+                f.profile.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(info["pending_operation"], "renewal");
+        assert_eq!(
+            info["credential_id"],
+            original.credential_id.as_ref().unwrap().as_str()
+        );
+        let mut stale = WorkspaceProfile::open(&old).unwrap();
+        assert!(stale.workspaces(None, 10).await.is_err());
+        drop(stale);
+        allow_activation(&f);
+        let page = value(
+            f.cli(&[
+                "workspace",
+                "workspaces",
+                "--profile",
+                f.profile.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(page["workspaces"].as_array().unwrap().len(), 1);
+        let current = value(
+            f.cli(&[
+                "workspace",
+                "info",
+                "--profile",
+                f.profile.to_str().unwrap(),
+            ])
+            .await,
+        );
+        assert_eq!(current["pending_operation"], Value::Null);
+        assert_eq!(current["client_id"], info["client_id"]);
+        assert_ne!(current["credential_id"], info["credential_id"]);
+        assert_eq!(f.count("ccp_credentials"), 2);
+        assert_eq!(f.count("ccp_clients"), 1);
+        f.finish().await;
+    }
+
+    fn short_credential(f: &Fixture, expired: bool) {
+        use rcgen::{CertificateParams, KeyPair};
+        use server::foundation::{IssuingAuthority, RedemptionRequest};
+        let token = f.invitation();
+        let bundle: Value =
+            serde_json::from_slice(&fs::read(f.root.join("server/ccp-instance-tls.json")).unwrap())
+                .unwrap();
+        let ca_key = KeyPair::from_pem(bundle["ca_key"].as_str().unwrap()).unwrap();
+        let mut ca = CertificateParams::from_ca_cert_pem(&f.trust.ca_certificate_pem).unwrap();
+        ca.not_after = ca.not_before
+            + std::time::Duration::from_secs(if expired { 30 } else { 3 * 24 * 60 * 60 });
+        let issued_at = if expired {
+            ca.not_before.unix_timestamp() + 10
+        } else {
+            clock()
+        };
+        let short_ca = ca.self_signed(&ca_key).unwrap();
+        let issuer =
+            IssuingAuthority::from_pem(&short_ca.pem(), bundle["ca_key"].as_str().unwrap())
+                .unwrap();
+        let key = KeyPair::generate().unwrap();
+        let csr = CertificateParams::new(Vec::<String>::new())
+            .unwrap()
+            .serialize_request(&key)
+            .unwrap()
+            .pem()
+            .unwrap();
+        let mut db = f.db();
+        let receipt = AccessStore::new(&mut db)
+            .unwrap()
+            .redeem_invitation(
+                &token,
+                &RedemptionRequest {
+                    request_id: Uuid::new_v4(),
+                    csr_pem: csr,
+                    existing_credential: None,
+                },
+                &issuer,
+                issued_at,
+            )
+            .unwrap();
+        let record = json!({"receipt":{"instance_id":f.trust.instance_id,"client_id":receipt.client_id.to_string(),"credential_id":receipt.credential_id.to_string(),"certificate_pem":receipt.certificate_pem,"expires_at":receipt.expires_at},"key_pem":key.serialize_pem()});
+        Connection::open(f.profile.join("workspace-profile.sqlite3"))
+            .unwrap()
+            .execute("UPDATE profile SET credential=?1", [record.to_string()])
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn readable_short_lived_credential_renews_automatically_once_but_grantless_discovery_does_not()
+     {
+        for readable in [true, false] {
+            let f = Fixture::new().await;
+            WorkspaceProfile::trust(&f.profile, f.config())
+                .await
+                .unwrap();
+            short_credential(&f, false);
+            if !readable {
+                f.db()
+                    .execute("UPDATE ccp_grants SET revoked_at=?1", [clock()])
+                    .unwrap();
+            }
+            let mut p = WorkspaceProfile::open(&f.profile).unwrap();
+            let old = p.info().unwrap();
+            assert!(old.renewal_due);
+            let page = p.workspaces(None, 10).await.unwrap();
+            assert_eq!(page.workspaces.len(), usize::from(readable));
+            let next = p.info().unwrap();
+            assert_eq!(next.client_id, old.client_id);
+            assert_eq!(next.credential_id == old.credential_id, !readable);
+            assert!(next.pending_operation.is_none());
+            assert_eq!(f.count("ccp_credentials"), if readable { 2 } else { 1 });
+            p.workspaces(None, 10).await.unwrap();
+            assert_eq!(f.count("ccp_credentials"), if readable { 2 } else { 1 });
+            drop(p);
+            f.finish().await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn active_pending_join_blocks_renewal_and_different_invitation_without_losing_working_identity()
+     {
+        let f = Fixture::new().await;
+        let original = enroll_profile(&f).await;
+        let (token, _) = second_invitation(&f);
+        fail_activation(&f);
+        let mut p = WorkspaceProfile::open(&f.profile).unwrap();
+        assert!(p.join(&token).await.is_err());
+        let pending = p.info().unwrap().pending_request_id;
+        assert!(p.renew().await.is_err());
+        assert!(
+            p.join(&format!("ccp_join_{}", "f".repeat(64)))
+                .await
+                .is_err()
+        );
+        assert_eq!(p.info().unwrap().pending_request_id, pending);
+        assert_eq!(p.info().unwrap().credential_id, original.credential_id);
+        assert_eq!(p.workspaces(None, 10).await.unwrap().workspaces.len(), 2);
+        drop(p);
+        allow_activation(&f);
+        let mut p = WorkspaceProfile::open(&f.profile).unwrap();
+        p.join(&token).await.unwrap();
+        p.renew().await.unwrap();
+        assert_eq!(f.count("ccp_credentials"), 2);
+        drop(p);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn disabled_client_cannot_renew_resume_or_create_another_registration() {
+        let f = Fixture::new().await;
+        let original = enroll_profile(&f).await;
+        f.db()
+            .execute("UPDATE ccp_clients SET disabled=1", [])
+            .unwrap();
+        let mut p = WorkspaceProfile::open(&f.profile).unwrap();
+        assert!(p.renew().await.is_err());
+        assert!(p.workspaces(None, 10).await.is_err());
+        assert_eq!(p.info().unwrap().client_id, original.client_id);
+        assert_eq!(f.count("ccp_clients"), 1);
+        assert_eq!(f.count("ccp_credentials"), 1);
+        drop(p);
+        f.finish().await;
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn expired_certificate_never_starts_join_or_renewal_and_its_identity_remains_inspectable()
+    {
+        let f = Fixture::new().await;
+        WorkspaceProfile::trust(&f.profile, f.config())
+            .await
+            .unwrap();
+        short_credential(&f, true);
+        let (token, _) = second_invitation(&f);
+        let mut p = WorkspaceProfile::open(&f.profile).unwrap();
+        let original = p.info().unwrap();
+        assert!(original.expired);
+        assert!(p.renew().await.is_err());
+        assert!(p.join(&token).await.is_err());
+        assert!(p.workspaces(None, 10).await.is_err());
+        assert!(p.info().unwrap().pending_operation.is_none());
+        assert_eq!(p.info().unwrap().client_id, original.client_id);
+        assert_eq!(f.count("ccp_clients"), 1);
+        assert_eq!(f.count("ccp_credentials"), 1);
+        assert_eq!(f.count("ccp_grants"), 1);
+        drop(p);
         f.finish().await;
     }
 }

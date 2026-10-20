@@ -2,7 +2,9 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{Credential, Pending, WorkspaceProfile, WorkspaceTrust, crypto};
+use super::{Credential, Operation, Pending, WorkspaceProfile, WorkspaceTrust, crypto};
+
+mod migration;
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OpenFlags, params};
 use serde::de::DeserializeOwned;
@@ -11,6 +13,7 @@ use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x4343_5043;
 const PROFILE: &str = "workspace-profile.sqlite3";
+const HISTORY_SCHEMA: &str = "CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY, operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission')))";
 
 pub(super) fn create(directory: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
     private_directory(directory, true)?;
@@ -42,8 +45,9 @@ fn initialize(path: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
     connection.pragma_update(None, "synchronous", "FULL")?;
     let tx = connection.transaction()?;
     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-    tx.pragma_update(None, "user_version", 1)?;
+    tx.pragma_update(None, "user_version", 2)?;
     tx.execute_batch("CREATE TABLE profile(singleton INTEGER PRIMARY KEY CHECK(singleton=1),trust TEXT NOT NULL,pending TEXT,credential TEXT)")?;
+    tx.execute_batch(HISTORY_SCHEMA)?;
     tx.execute(
         "INSERT INTO profile(singleton,trust) VALUES (1,?1)",
         [serde_json::to_string(trust)?],
@@ -68,7 +72,7 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
     connection
         .execute_batch("BEGIN EXCLUSIVE; COMMIT;")
         .context("workspace profile is busy or unavailable")?;
-    format(&connection)?;
+    let version = format(&connection)?;
     let (trust, pending, credential) = connection.query_row(
         "SELECT trust,pending,credential FROM profile WHERE singleton=1",
         [],
@@ -82,31 +86,36 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
     )?;
     let trust: WorkspaceTrust = decode(&trust)?;
     trust.validate()?;
+    let saved_pending = pending.clone();
+    let saved_credential = credential.clone();
     let pending: Option<Pending> = pending.as_deref().map(decode).transpose()?;
     let credential: Option<Credential> = credential.as_deref().map(decode).transpose()?;
-    if pending.is_some() && credential.is_some() {
+    if version == 1 && pending.is_some() && credential.is_some() {
         bail!("unsupported simultaneous pending and active profile state");
     }
-    if let Some(pending) = &pending {
-        crypto::validate_pending(pending)?;
-    }
-    let profile = WorkspaceProfile {
+    crypto::validate_state(pending.as_ref(), credential.as_ref())?;
+    let mut profile = WorkspaceProfile {
         connection,
         trust,
         pending,
         credential,
+        pending_record: saved_pending,
+        credential_record: saved_credential,
     };
     profile.info()?;
+    if version == 1 {
+        migration::upgrade(&mut profile, directory)?;
+    }
     Ok(profile)
 }
 
-fn format(connection: &Connection) -> anyhow::Result<()> {
+fn format(connection: &Connection) -> anyhow::Result<u32> {
     let app: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if app != APPLICATION_ID || version != 1 {
+    if app != APPLICATION_ID || !(1..=2).contains(&version) {
         bail!("unrecognized or unsupported workspace profile format");
     }
-    Ok(())
+    Ok(u32::try_from(version)?)
 }
 fn decode<T: DeserializeOwned>(value: &str) -> anyhow::Result<T> {
     serde_json::from_str(value)
@@ -115,22 +124,49 @@ fn decode<T: DeserializeOwned>(value: &str) -> anyhow::Result<T> {
 
 impl WorkspaceProfile {
     pub(super) fn prepare(&mut self, invitation: &str) -> anyhow::Result<()> {
+        self.prepare_operation(Operation::Enrollment, Some(invitation))
+    }
+    pub(super) fn prepare_operation(
+        &mut self,
+        operation: Operation,
+        invitation: Option<&str>,
+    ) -> anyhow::Result<()> {
         if let Some(pending) = &self.pending {
-            if pending.invitation_hash != crypto::hash(invitation.as_bytes()) {
+            if pending.operation != operation
+                || pending.invitation_hash != invitation.map(|s| crypto::hash(s.as_bytes()))
+            {
                 bail!(
-                    "pending enrollment requires its original invitation; do not replace its key or request"
+                    "finish the original pending operation with its original invitation before starting another"
                 );
             }
-            crypto::validate_pending(pending)?;
-            return Ok(());
+            return crypto::validate_state(self.pending.as_ref(), self.credential.as_ref());
         }
-        let pending = crypto::pending(invitation)?;
-        let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS NULL",
-            [serde_json::to_string(&pending)?]).map_err(|_write|anyhow::anyhow!("cannot persist pending enrollment; no request was sent"))?;
+        if let Some(invitation) = invitation {
+            let completed: bool = self.connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM completed_invitations WHERE invitation_hash=?1)",
+                [crypto::hash(invitation.as_bytes())],
+                |r| r.get(0),
+            )?;
+            if completed {
+                bail!(
+                    "this invitation already completed locally; inspect current workspaces instead of joining again"
+                );
+            }
+        }
+        let pending = if operation == Operation::Enrollment {
+            crypto::pending(invitation.context("enrollment needs an invitation")?)?
+        } else {
+            crypto::pending_operation(operation, invitation, self.credential.as_ref())?
+        };
+        crypto::validate_state(Some(&pending), self.credential.as_ref())?;
+        let record = serde_json::to_string(&pending)?;
+        let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS ?2",
+            params![record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot persist pending operation; no request was sent"))?;
         if changed != 1 {
             bail!("workspace profile state changed");
         }
         self.pending = Some(pending);
+        self.pending_record = Some(record);
         Ok(())
     }
     pub(super) fn activate(&mut self, credential: Credential) -> anyhow::Result<()> {
@@ -141,18 +177,32 @@ impl WorkspaceProfile {
         if credential.key_pem != pending.key_pem {
             bail!("credential key differs from durable pending enrollment");
         }
+        crypto::validate_state(self.pending.as_ref(), self.credential.as_ref())?;
+        super::lifecycle::validate_result(pending, &credential, self.credential.as_ref())?;
         crypto::credential(&self.trust, &credential, crypto::now()?)?;
+        let record = serde_json::to_string(&credential)?;
         let tx = self.connection.transaction()?;
-        let changed=tx.execute("UPDATE profile SET credential=?1,pending=NULL WHERE singleton=1 AND pending=?2 AND credential IS NULL",
-            params![serde_json::to_string(&credential)?,serde_json::to_string(pending)?])
-            .map_err(|_write|anyhow::anyhow!("cannot activate credential; pending enrollment retained for retry"))?;
+        let changed=tx.execute("UPDATE profile SET credential=?1,pending=NULL WHERE singleton=1 AND pending IS ?2 AND credential IS ?3",
+            params![record,self.pending_record,self.credential_record])
+            .map_err(|_write|anyhow::anyhow!("cannot activate credential; pending operation retained for retry"))?;
         if changed != 1 {
             bail!("workspace profile state changed; preserve pending enrollment");
+        }
+        if let Some(hash) = &pending.invitation_hash {
+            tx.execute(
+                "INSERT INTO completed_invitations(invitation_hash,operation) VALUES (?1,?2)",
+                params![hash, pending.operation.name()],
+            )
+            .map_err(|_history| {
+                anyhow::anyhow!("cannot record completed operation; pending retained")
+            })?;
         }
         tx.commit().map_err(|_commit| {
             anyhow::anyhow!("credential activation failed; inspect profile before retry")
         })?;
         self.pending = None;
+        self.pending_record = None;
+        self.credential_record = Some(record);
         self.credential = Some(credential);
         Ok(())
     }

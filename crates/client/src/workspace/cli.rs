@@ -39,6 +39,16 @@ enum Command {
         #[arg(long)]
         invitation_file: PathBuf,
     },
+    Join {
+        #[arg(long)]
+        profile: PathBuf,
+        #[arg(long)]
+        invitation_file: PathBuf,
+    },
+    Renew {
+        #[arg(long)]
+        profile: PathBuf,
+    },
     Workspaces {
         #[arg(long)]
         profile: PathBuf,
@@ -73,6 +83,14 @@ pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
                     .await?,
             )
         }
+        Command::Join {
+            profile,
+            invitation_file,
+        } => {
+            let invitation = read(&invitation_file, 256, true)?;
+            output(&WorkspaceProfile::open(&profile)?.join(&invitation).await?)
+        }
+        Command::Renew { profile } => output(&WorkspaceProfile::open(&profile)?.renew().await?),
         Command::Workspaces {
             profile,
             after,

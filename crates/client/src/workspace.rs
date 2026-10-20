@@ -5,6 +5,7 @@
 //! Explicit, private workspace profiles, separate from native session storage.
 pub(crate) mod cli;
 mod crypto;
+mod lifecycle;
 mod network;
 mod store;
 
@@ -61,17 +62,42 @@ pub struct ProfileInfo {
     pub mtls_origin: String,
     pub ca_sha256: String,
     pub pending_request_id: Option<String>,
+    pub pending_operation: Option<String>,
     pub client_id: Option<String>,
     pub credential_id: Option<String>,
     pub expires_at: Option<i64>,
     pub expired: bool,
+    pub renewal_due: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Operation {
+    #[default]
+    Enrollment,
+    Admission,
+    Renewal,
+}
+
+impl Operation {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Enrollment => "enrollment",
+            Self::Admission => "admission",
+            Self::Renewal => "renewal",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Pending {
+    #[serde(default)]
+    operation: Operation,
     request_id: String,
-    invitation_hash: String,
+    invitation_hash: Option<String>,
+    expected_client_id: Option<String>,
+    expected_credential_id: Option<String>,
     key_pem: String,
     csr_pem: String,
 }
@@ -90,6 +116,8 @@ pub struct WorkspaceProfile {
     trust: WorkspaceTrust,
     pending: Option<Pending>,
     credential: Option<Credential>,
+    pending_record: Option<String>,
+    credential_record: Option<String>,
 }
 
 impl WorkspaceProfile {
@@ -113,16 +141,21 @@ impl WorkspaceProfile {
         }
         let receipt = self.credential.as_ref().map(|c| &c.receipt);
         Ok(ProfileInfo {
-            format: 1,
+            format: 2,
             instance_id: self.trust.instance_id.clone(),
             https_origin: self.trust.https_origin.clone(),
             mtls_origin: self.trust.mtls_origin.clone(),
             ca_sha256: crypto::hash(&crypto::ca_der(&self.trust.ca_pem)?),
             pending_request_id: self.pending.as_ref().map(|p| p.request_id.clone()),
+            pending_operation: self
+                .pending
+                .as_ref()
+                .map(|p| p.operation.name().to_string()),
             client_id: receipt.map(|r| r.client_id.clone()),
             credential_id: receipt.map(|r| r.credential_id.clone()),
             expires_at: receipt.map(|r| r.expires_at),
             expired: receipt.is_some_and(|r| now >= r.expires_at),
+            renewal_due: self.renewal_due(now)?,
         })
     }
 
@@ -164,6 +197,29 @@ impl WorkspaceProfile {
         if limit == 0 || limit > 500 || after.is_some_and(|a| a.len() > 1024) {
             bail!("invalid workspace page bounds");
         }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.operation == Operation::Renewal)
+        {
+            self.renew().await?;
+        }
+        let page = self.fetch_workspaces(after, limit).await?;
+        if self.pending.is_none()
+            && !page.workspaces.is_empty()
+            && self.renewal_due(crypto::now()?)?
+        {
+            self.renew().await?;
+            return self.fetch_workspaces(after, limit).await;
+        }
+        Ok(page)
+    }
+
+    async fn fetch_workspaces(
+        &self,
+        after: Option<&str>,
+        limit: u32,
+    ) -> anyhow::Result<api::Workspaces> {
         let material = self
             .credential
             .as_ref()

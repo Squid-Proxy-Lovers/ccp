@@ -40,6 +40,13 @@ identities, keys, grants, closed enrollment and runtime mode remain unchanged.
 Clients that trust the CA and use a retained valid name can verify the renewed
 certificate. A separately pinned server-leaf fingerprint needs an explicit update.
 
+Newly issued workspace server and client certificates include the issuer's key
+identifier for strict X.509 verification. If an earlier draft generated your
+server certificate without that extension, run the renewal command above and
+restart the server. This keeps the same CA and instance identity. Existing client
+certificates gain the extension when renewed or replaced through authorized
+recovery; installing new software alone does not rewrite stored certificates.
+
 An expired server leaf can be renewed if the pinned bundle is otherwise valid
 and the CA is currently valid. The old certificate/key/profile/chain are checked
 at the leaf's valid historical interval; CA validity is also checked at the

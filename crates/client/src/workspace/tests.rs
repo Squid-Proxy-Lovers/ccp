@@ -9,6 +9,7 @@ use rcgen::{
 };
 use std::{fs, path::PathBuf};
 
+mod lifecycle;
 mod responses;
 
 const WHEN: i64 = 1_705_000_000;
