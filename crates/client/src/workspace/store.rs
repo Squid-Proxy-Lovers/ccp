@@ -16,10 +16,18 @@ const PROFILE: &str = "workspace-profile.sqlite3";
 const HISTORY_SCHEMA: &str = "CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY, operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission','recovery')))";
 
 pub(super) fn create(directory: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
+    publish(directory, PROFILE, |path| initialize(path, trust))
+}
+
+pub(super) fn publish(
+    directory: &Path,
+    filename: &str,
+    initialize: impl FnOnce(&Path) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     private_directory(directory, true)?;
-    let target = directory.join(PROFILE);
+    let target = directory.join(filename);
     if target.try_exists()? {
-        bail!("workspace profile already exists; it will not be replaced");
+        bail!("private state already exists; it will not be replaced");
     }
     let temporary = directory.join(format!(".workspace-profile-{}.sqlite3", Uuid::new_v4()));
     let mut options = fs::OpenOptions::new();
@@ -30,7 +38,7 @@ pub(super) fn create(directory: &Path, trust: &WorkspaceTrust) -> anyhow::Result
         options.mode(0o600);
     }
     options.open(&temporary)?.sync_all()?;
-    let result = initialize(&temporary, trust).and_then(|()| {
+    let result = initialize(&temporary).and_then(|()| {
         fs::hard_link(&temporary, &target)
             .context("cannot publish workspace profile without replacement")
     });
@@ -253,7 +261,7 @@ impl WorkspaceProfile {
     }
 }
 
-fn private_directory(path: &Path, create: bool) -> anyhow::Result<()> {
+pub(super) fn private_directory(path: &Path, create: bool) -> anyhow::Result<()> {
     if create && !path.try_exists()? {
         let mut builder = fs::DirBuilder::new();
         builder.recursive(true);

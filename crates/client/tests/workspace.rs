@@ -6,6 +6,7 @@
 #[path = "workspace"]
 mod tests {
     mod recovery;
+    mod selection;
     use anyhow::Context;
     use client::workspace::{WorkspaceProfile, WorkspaceTrust};
     use rusqlite::Connection;

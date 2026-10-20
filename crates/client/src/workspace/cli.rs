@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-use super::{WorkspaceProfile, WorkspaceTrust, store};
+use super::{WorkspaceProfile, WorkspaceTrust, selection, store};
 use anyhow::bail;
 use clap::{Args, Subcommand};
 use std::{
@@ -17,6 +17,10 @@ pub(crate) struct WorkspaceArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    Selection {
+        #[command(flatten)]
+        args: selection::cli::SelectionArgs,
+    },
     Trust {
         #[arg(long)]
         profile: PathBuf,
@@ -68,6 +72,7 @@ enum Command {
 }
 pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
     match args.command {
+        Command::Selection { args } => selection::cli::run(args).await,
         Command::Trust {
             profile,
             instance_id,

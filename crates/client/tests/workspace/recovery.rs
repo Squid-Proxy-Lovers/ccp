@@ -6,7 +6,7 @@ use super::*;
 use server::foundation::{RecoveryInvitationRequest, RecoveryScope};
 use std::path::Path;
 
-fn invitation(f: &Fixture, client: &str, global: bool) -> String {
+pub(super) fn invitation(f: &Fixture, client: &str, global: bool) -> String {
     let mut db = f.db();
     let mut store = AccessStore::new(&mut db).unwrap();
     let actor = store
@@ -38,7 +38,7 @@ fn invitation(f: &Fixture, client: &str, global: bool) -> String {
         .to_owned()
 }
 
-async fn destination(f: &Fixture) -> PathBuf {
+pub(super) async fn destination(f: &Fixture) -> PathBuf {
     let dir = f.root.join("recovered");
     WorkspaceProfile::trust(&dir, f.config()).await.unwrap();
     dir

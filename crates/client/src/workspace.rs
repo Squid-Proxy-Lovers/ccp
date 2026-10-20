@@ -8,7 +8,10 @@ mod crypto;
 mod lifecycle;
 mod network;
 mod recovery;
+mod selection;
 mod store;
+
+pub use selection::{Selection, SelectionUpdate, Target};
 
 use anyhow::{Context, bail};
 use protocol::workspace as api;

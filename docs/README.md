@@ -26,6 +26,7 @@ the other guides describe the supported native interface.
 | Renew the unreleased instance server certificate or change its names | [Server certificate renewal](server-certificate-renewal.md) |
 | Run the unreleased TLS workspace API and inspect its request contract | [Workspace HTTPS API](workspace-http-api.md) |
 | Pin instance trust and enroll an unreleased workspace client | [Workspace client](workspace-client.md) |
+| Select workspace targets independently for each caller | [Workspace selection](workspace-selection.md) |
 | Appoint workspace admins, rotate keys or transfer ownership | [Owner administration](workspace-owner-administration.md) |
 | Report a vulnerability or read bounty terms | [Security policy](../SECURITY.md) |
 | Find disclosure credits | [Hall of Fame](../HALL-OF-FAME.md) |

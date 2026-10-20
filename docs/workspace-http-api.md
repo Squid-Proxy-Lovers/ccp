@@ -282,7 +282,8 @@ curl --cacert ./ccp-ca.pem --cert ./client-cert.pem --key ./client-key.pem \
 
 The [workspace client](workspace-client.md) connects trust, private profiles,
 initial enrollment/readmission, discovery, same-registration joining, renewal and
-separate-profile recovery. Context selection and workspace MCP remain later
+separate-profile recovery. Explicit [caller selection](workspace-selection.md)
+resolves current target metadata. Context contents and workspace MCP remain later
 integration work. Native commands keep their
 supported native-mode behavior.
 

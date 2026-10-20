@@ -12,6 +12,7 @@ use std::{fs, path::PathBuf};
 mod lifecycle;
 mod recovery;
 mod responses;
+mod selection;
 
 const WHEN: i64 = 1_705_000_000;
 fn authority() -> (Certificate, KeyPair) {
