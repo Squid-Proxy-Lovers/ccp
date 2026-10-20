@@ -126,27 +126,8 @@ impl WorkspaceProfile {
         request: &Q,
         check: impl Fn(&T) -> anyhow::Result<()>,
     ) -> anyhow::Result<T> {
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|p| p.operation == Operation::Renewal)
-        {
-            self.renew().await?;
-        }
-        let value = self.content_request(path, request).await?;
-        check(&value)?;
-        // An authorized, validated target response proves a usable grant even
-        // when its page is empty. No renewal is attempted after a denied read.
-        if self.pending.is_none()
-            && !self.content_state.is_pending()
-            && self.renewal_due(crypto::now()?)?
-        {
-            self.renew().await?;
-            let value = self.content_request(path, request).await?;
-            check(&value)?;
-            return Ok(value);
-        }
-        Ok(value)
+        self.authenticated_read(&format!("api/v1/content/{path}"), request, true, check)
+            .await
     }
 
     async fn content_request<Q: Serialize, T: DeserializeOwned>(
@@ -154,20 +135,7 @@ impl WorkspaceProfile {
         path: &str,
         request: &Q,
     ) -> anyhow::Result<T> {
-        let material = self
-            .credential
-            .as_ref()
-            .context("content access requires an enrolled profile")?;
-        crypto::credential(&self.trust, material, crypto::now()?)?;
-        let http = network::client(&self.trust, Some(material))?;
-        network::health(&http, &self.trust.mtls_origin, &self.trust.instance_id).await?;
-        let request = http
-            .post(format!("{}api/v1/content/{path}", self.trust.mtls_origin))
-            .json(request);
-        if path == "entries/get" {
-            network::snapshot_json(request).await
-        } else {
-            network::json(request).await
-        }
+        self.authenticated_request(&format!("api/v1/content/{path}"), request)
+            .await
     }
 }

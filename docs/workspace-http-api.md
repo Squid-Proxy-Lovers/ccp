@@ -376,9 +376,10 @@ global updates remain readable alongside that preserved workspace guidance.
 Current grant revocation and client disable block unauthorized reads. Storage
 failures, including a missing published revision, return sanitized 503 without
 substituting an empty board. This explicit read API adds no guidance freshness
-gate to other operations. CLI/MCP guidance commands, automatic initial/changed
-guidance with tool responses, stale warnings and desktop editors remain later
-work. See the [storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
+gate to other operations. The normal client now supports
+[explicit guidance reads](workspace-client.md#read-current-guidance). MCP guidance,
+automatic initial/changed guidance with tool responses, stale warnings and desktop
+editors remain later work. See the [storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
 
 ## Limits and errors
 

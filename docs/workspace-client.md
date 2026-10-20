@@ -254,3 +254,44 @@ Each command names an explicit workspace; it does not alter caller selections.
 Use [entry mutations](workspace-content-mutations.md) to edit entries and retain
 the original request safely across uncertain results.
 Entry mutations and workspace MCP content tools remain subsequent work.
+
+## Read current guidance
+
+Use an enrolled profile and the trusted instance to retrieve current guidance.
+Omitting the workspace requests global guidance only. Supply an accessible
+workspace UUID to retrieve its board alongside global guidance:
+
+```bash
+ccp-client workspace guidance --profile ./my-profile
+ccp-client workspace guidance --profile ./my-profile \
+  --workspace-id 11111111-1111-4111-8111-111111111111
+```
+
+These commands return the validated bundle as JSON: `precedence`, `global` and
+optional `workspace`. Each board carries its exact text, source, revision and
+historical publisher key/principal/time. Revision 0 with empty text and no
+publisher means unpublished; a positive revision with empty text is an explicit
+clear. Global guidance takes precedence within CCP; host instructions and actual
+server permissions retain priority. The client preserves text, including controls,
+up to 8192 UTF-8 bytes per board. Terminal or UI renderers should display that
+JSON as data. See the [guidance API contract](workspace-http-api.md#read-and-save-guidance).
+
+The library exposes `WorkspaceProfile::guidance(Option<&str>)`. Omission never
+uses or changes caller selections. Reads require the pinned CA, verified server
+name, expected instance and current authenticated client. Explicit workspace
+reads recheck current grants; archived workspace guidance remains readable.
+Malformed source/revision/publisher metadata fails without partial output or
+remote body fragments. Known metadata is validated before output or renewal.
+Additive bundle, board and publisher fields are dropped; source descriptors and
+publisher kinds remain closed typed values and reject unknown forms.
+
+An authorized, validated workspace response may trigger one due renewal and
+reread. A global-only response proves identity without proving a usable workspace
+grant, so it does not initiate renewal, including after all grants are revoked.
+Already pending renewal resumes first. Pending admission and uncertain entry
+intents stay intact and suppress new renewal; reads do not replay an entry write.
+Scoped recovery profiles read only their captured still-authorized workspaces.
+
+This explicit reader does not publish guidance or implement automatic initial/
+changed guidance delivery with other tool results. MCP delivery, stale/unavailable
+sideband warnings and desktop editors remain subsequent work.

@@ -17,6 +17,13 @@ pub(crate) struct WorkspaceArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Read current global guidance and an optional explicit workspace board.
+    Guidance {
+        #[arg(long)]
+        profile: PathBuf,
+        #[arg(long)]
+        workspace_id: Option<String>,
+    },
     Content {
         #[command(flatten)]
         args: super::content::cli::ContentArgs,
@@ -76,6 +83,14 @@ enum Command {
 }
 pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
     match args.command {
+        Command::Guidance {
+            profile,
+            workspace_id,
+        } => output(
+            &WorkspaceProfile::open(&profile)?
+                .guidance(workspace_id.as_deref())
+                .await?,
+        ),
         Command::Content { args } => super::content::cli::run(args).await,
         Command::Selection { args } => selection::cli::run(args).await,
         Command::Trust {

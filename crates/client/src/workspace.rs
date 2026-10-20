@@ -6,8 +6,10 @@
 pub(crate) mod cli;
 pub mod content;
 mod crypto;
+pub mod guidance;
 mod lifecycle;
 mod network;
+mod read;
 mod recovery;
 mod selection;
 mod store;

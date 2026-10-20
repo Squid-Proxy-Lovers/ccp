@@ -166,3 +166,11 @@ revocation/disable, archived-workspace behavior, historical retries and conflict
 empty clearing, malformed nested scope/identity claims, listener separation,
 8192-byte UTF-8/control bounds and unchanged encoded budgets. Injected audit and
 missing-published-version faults verify atomic rollback and sanitized failures.
+
+Client guidance tests validate known source/revision/publisher metadata, explicit
+empty versus unpublished states, exact UTF-8/control bounds, safe additive-field
+projection and malformed-response errors. Six real TLS/library/CLI cases cover
+profile/selection stability, current scope/disable/archive, scoped recovery,
+pending renewal/admission/entry preservation and due renewal only after an
+authorized workspace read. Global-only grantless reads never initiate renewal.
+Corrupt publisher metadata delivered over real TLS fails before renewal or output.

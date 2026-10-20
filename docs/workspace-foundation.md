@@ -184,5 +184,7 @@ Existing native content is preserved and is never promoted into guidance.
 A schema-19 server refuses schema 20; rollback requires the complete matching
 pre-upgrade backup and producing software.
 [Authenticated guidance reads and scoped saves](workspace-http-api.md#read-and-save-guidance)
-now expose these APIs over TLS. CLI, MCP, desktop editors, automatic initial/changed
-delivery and explicit stale/unavailable warnings remain subsequent work.
+now expose these APIs over TLS, with
+[normal client guidance reads](workspace-client.md#read-current-guidance). MCP,
+desktop editors, automatic initial/changed delivery and explicit stale/unavailable
+warnings remain subsequent work.
