@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    State, Surface, invitations,
+    State, Surface, invitations, management,
     request::Input,
     response::{self, Error, Reply},
     session::Context,
@@ -61,12 +61,18 @@ fn https(
     if matches!(input.path.as_str(), "/api/v1/enroll" | "/api/v1/recover") {
         return public_certificate(state, store, &input, now);
     }
-    if input.path != "/api/v1/admin/workspaces" && !invitations::handles(&input.path) {
+    if input.path != "/api/v1/admin/workspaces"
+        && !invitations::handles(&input.path)
+        && !management::handles(&input.path)
+    {
         return Err(Error::NotFound);
     }
     let actor = admin(store, input.authorization.as_deref(), now)?;
     if invitations::handles(&input.path) {
         return invitations::dispatch(store, actor, &input, now);
+    }
+    if management::handles(&input.path) {
+        return management::dispatch(store, actor, &input, now);
     }
     if input.method != Method::GET {
         return Err(Error::Method);

@@ -3,7 +3,7 @@
 This unreleased API connects the reviewed workspace identity, key and certificate
 foundations to direct TLS listeners. It supports invitations, enrollment,
 discovery, existing-client admission, credential renewal and targeted recovery.
-Content endpoints, complete workspace/team/key management, browser login, client profiles,
+Content endpoints, owner-team/key management, browser login, client profiles,
 MCP integration and the human panel remain subsequent work. Keep this draft
 implementation separate from a production rollout.
 
@@ -59,6 +59,11 @@ There is no automatic OS/browser trust installation or server update.
 | --- | --- | --- |
 | HTTPS or client mTLS | `GET /api/v1/health` | Public instance UUID and API version; the client listener still requires its TLS certificate |
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
+| HTTPS | `POST /api/v1/admin/workspaces/create` or `/first-owner` | Current instance key; atomic workspace/first-owner key provisioning |
+| HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |
+| HTTPS | `POST /api/v1/admin/workspaces/archive` or `/reactivate` | Current workspace owner or instance key; recoverable lifecycle change |
+| HTTPS | `POST /api/v1/admin/grants/revoke` | Current owner/admin key for the grant's workspace; terminal membership revocation |
+| HTTPS | `POST /api/v1/admin/clients/disable` | Current instance key; disables a client across the instance |
 | HTTPS | `POST /api/v1/admin/invitations/initial` | Current workspace owner/admin key; bounded initial group link |
 | HTTPS | `POST /api/v1/admin/invitations/individual` | Current workspace owner/admin key; individual link under existing window/expiry policy |
 | HTTPS | `POST /api/v1/admin/enrollment/close` | Scoped security authority; terminal initial-window closure |
@@ -118,6 +123,63 @@ the existing credential from the actual peer; renewal never converts a
 superseded peer into an ordinary actor. Preserve the request UUID and CSR key
 to retry a lost enrollment/renewal response. Newly granted workspaces are
 available for discovery; no routine context selection is made by these APIs.
+
+## Manage workspaces and client access
+
+Use authenticated HTTPS POST with an admin Bearer key and JSON. These endpoints
+use current server permissions; a global key's read access does not give it
+workspace grant-revocation, admission or team-management powers.
+
+| Action suffix under `/api/v1/admin/` | JSON fields | Result |
+| --- | --- | --- |
+| `workspaces/create` | `name`, `owner`, optional `key_expires_at` | New workspace and one-time first owner key |
+| `workspaces/first-owner` | `workspace_id`, `owner`, optional `key_expires_at` | Appoints an owner only when none is assigned; one-time first key |
+| `workspaces/inspect` | `workspace_id` | `workspace` metadata and optional `owner_id` |
+| `workspaces/grants` | `workspace_id`, optional `after`, optional `limit` | `grants` and optional `next_cursor` |
+| `workspaces/archive`, `workspaces/reactivate` | `workspace_id` | `completed: true` |
+| `grants/revoke` | `grant_id` | `completed: true` |
+| `clients/disable` | `client_id` | `completed: true` |
+
+The owner selector must be exactly `{"kind":"existing","principal_id":"UUID"}`
+for an enabled existing principal, or
+`{"kind":"new_principal","name":"OWNER_LABEL"}` for a fresh principal.
+Replace illustrative values with the intended target. Names never claim an
+existing identity. Omitted or null key expiry means valid until revoked;
+a supplied expiry is a future Unix timestamp. Creation and first appointment
+require an instance key and atomically return `workspace_id`, `owner_id`,
+`owner_key_id` and `owner_key`. Deliver the secret privately to that owner.
+An instance key cannot repeatedly retrieve the secret or replace an assigned
+owner through this endpoint. See [first-owner provisioning](initial-workspace-owners.md).
+
+There is no automatic retry guarantee for workspace creation. After a lost
+response, inspect the workspace listing and its owner metadata before making
+another request. Repeating first-owner appointment after success is denied.
+Neither inspect nor grants returns admin secrets. A lost owner key requires
+another working owner key or the explicit [physical-host reset](local-workspace-administration.md).
+SQL conflicts, including a duplicate name, use the current generic 503 storage
+error; inspect state before retrying a failed creation request.
+
+Grant history includes each retained grant's `id`, `client_id`, `client_name`,
+`role`, `revoked_at` and current `client_disabled`. It exposes no certificate,
+credential ID, secret or membership in another workspace. Instance keys may
+read any nonpurged workspace under global read authority; owner/admin keys
+remain scoped. Data-client credentials cannot call these administrative reads.
+Pagination defaults to 100, maximum 500, ordered by grant UUID. Pass the returned
+UUID cursor as `after` in the next POST body. Each page is a current snapshot;
+a cursor conveys no permissions, and concurrent new grants can sort before a
+previous cursor. Revoked and disabled records remain visible to authorized
+administrators, including while the workspace is archived.
+
+Only the owner or global admin can archive/reactivate. Archiving preserves
+memberships and data while freezing new admission and content writes; authorized
+security administration remains available. Repeating an already applied
+archive/reactivate transition is denied. Permanent deletion is not exposed by
+this batch. Grant revocation derives its workspace from the stored grant and
+requires that workspace's owner/admin key. It preserves history and other
+workspace access. Global client disable instead blocks the client's identity
+across the instance, including renewal and recovery, on the next protected
+request over an existing connection. It retains stored grants and history.
+There is no enable-client endpoint in this batch.
 
 ## Manage invitations and recover a client
 

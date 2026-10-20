@@ -101,3 +101,25 @@ pub struct WorkspacePage {
     pub workspaces: Vec<WorkspaceSummary>,
     pub next_cursor: Option<String>,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceAdministration {
+    pub workspace: WorkspaceSummary,
+    pub owner_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantSummary {
+    pub id: Uuid,
+    pub client_id: Uuid,
+    pub client_name: String,
+    pub role: DataRole,
+    pub revoked_at: Option<i64>,
+    pub client_disabled: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GrantPage {
+    pub grants: Vec<GrantSummary>,
+    pub next_cursor: Option<Uuid>,
+}

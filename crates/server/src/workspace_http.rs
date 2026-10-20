@@ -6,6 +6,7 @@
 //! browser cookie authentication, content endpoint or native transport fallback.
 mod dispatch;
 mod invitations;
+mod management;
 mod request;
 mod response;
 mod session;

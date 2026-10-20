@@ -2122,4 +2122,783 @@ mod tests {
         );
         f.finish().await;
     }
+    fn managed_admin(f: &Fixture) -> server::foundation::IssuedAdminKey {
+        use server::foundation::{AdminKeyRequest, AdminKeyScope};
+        let mut db = f.db();
+        let mut store = AccessStore::new(&mut db).unwrap();
+        let actor = store
+            .authenticate_admin_key(f.setup.owner_key.secret(), now())
+            .unwrap();
+        let admin = store
+            .appoint_workspace_admin(actor, f.setup.workspace_id, "scoped admin", now())
+            .unwrap();
+        store
+            .issue_admin_key(
+                actor,
+                &AdminKeyRequest {
+                    principal_id: admin,
+                    scope: AdminKeyScope::Workspace(f.setup.workspace_id),
+                    name: "admin".into(),
+                    expires_at: None,
+                },
+                now(),
+            )
+            .unwrap()
+    }
+    async fn inspect_workspace(f: &Fixture, key: &str, workspace: &Value, status: u16) -> Value {
+        admin_action(
+            f,
+            key,
+            "/api/v1/admin/workspaces/inspect",
+            &json!({"workspace_id":workspace}),
+            status,
+        )
+        .await
+    }
+    async fn grant_page(
+        f: &Fixture,
+        key: &str,
+        workspace: Uuid,
+        after: Option<&str>,
+        limit: u32,
+        status: u16,
+    ) -> Value {
+        admin_action(
+            f,
+            key,
+            "/api/v1/admin/workspaces/grants",
+            &json!({"workspace_id":workspace.to_string(),"after":after,"limit":limit}),
+            status,
+        )
+        .await
+    }
+    fn management_counts(f: &Fixture) -> Vec<i64> {
+        [
+            "ccp_workspaces",
+            "ccp_admin_principals",
+            "ccp_admin_keys",
+            "ccp_access_audit",
+        ]
+        .iter()
+        .map(|table| {
+            f.db()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        })
+        .collect()
+    }
+    async fn create_workspace(
+        f: &Fixture,
+        name: &str,
+        owner: Value,
+        expires: Option<i64>,
+        status: u16,
+    ) -> Value {
+        admin_action(
+            f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/create",
+            &json!({"name":name,"owner":owner,"key_expires_at":expires}),
+            status,
+        )
+        .await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn workspace_creation_delivers_initial_owner_key_once_and_preserves_scope() {
+        let f = Fixture::new().await;
+        let owner = json!({"kind":"new_principal","name":"new owner"});
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/workspaces/create",
+            &json!({"name":"forbidden","owner":owner}),
+            403,
+        )
+        .await;
+        let created = create_workspace(&f, "created", owner, None, 200).await;
+        assert_ne!(
+            created["owner_id"],
+            f.setup.instance_key.principal_id.to_string()
+        );
+        let secret = created["owner_key"].as_str().unwrap();
+        assert!(secret.starts_with("ccp_admin_"));
+        let info = inspect_workspace(&f, secret, &created["workspace_id"], 200).await;
+        assert_eq!(info["owner_id"], created["owner_id"]);
+        assert_eq!(info["workspace"]["name"], "created");
+        assert_eq!(info["workspace"]["archived"], false);
+        assert!(info.get("owner_key").is_none());
+        inspect_workspace(
+            &f,
+            f.setup.owner_key.secret(),
+            &created["workspace_id"],
+            403,
+        )
+        .await;
+        let global = inspect_workspace(
+            &f,
+            f.setup.instance_key.secret(),
+            &created["workspace_id"],
+            200,
+        )
+        .await;
+        assert_eq!(global, info);
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/invitations/individual",
+            &json!({"workspace_id":created["workspace_id"],"role":"read","expires_at":now()+3600}),
+            403,
+        )
+        .await;
+        let before = management_counts(&f);
+        admin_action(&f,f.setup.instance_key.secret(),"/api/v1/admin/workspaces/first-owner",
+            &json!({"workspace_id":created["workspace_id"],"owner":{"kind":"new_principal","name":"retry"}}),403).await;
+        assert_eq!(management_counts(&f), before);
+        let expiry: Option<i64> = f
+            .db()
+            .query_row(
+                "SELECT expires_at FROM ccp_admin_keys WHERE id=?1",
+                [created["owner_key_id"].as_str().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(expiry, None);
+        let audit:String=f.db().query_row("SELECT admin_key_id FROM ccp_access_audit WHERE action='create_workspace' AND workspace_id=?1",
+            [created["workspace_id"].as_str().unwrap()],|r|r.get(0)).unwrap();
+        assert_eq!(audit, f.setup.instance_key.id.to_string());
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM ccp_server_admins WHERE admin_id=?1",
+                    [created["owner_id"].as_str().unwrap()],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_owner_lost_response_has_metadata_but_no_remote_secret_reissue() {
+        let f = Fixture::new().await;
+        let workspace = Uuid::new_v4().to_string();
+        f.db()
+            .execute(
+                "INSERT INTO ccp_workspaces(id,name,state) VALUES (?1,'unowned','archived')",
+                [&workspace],
+            )
+            .unwrap();
+        let info =
+            inspect_workspace(&f, f.setup.instance_key.secret(), &json!(workspace), 200).await;
+        assert_eq!(info["owner_id"], Value::Null);
+        let body = json!({"workspace_id":workspace,"owner":{"kind":"existing","principal_id":f.setup.instance_key.principal_id.to_string()},"key_expires_at":now()+3600});
+        let response = f
+            .public_client()
+            .post(f.url("/api/v1/admin/workspaces/first-owner"))
+            .bearer_auth(f.setup.instance_key.secret())
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        drop(response);
+        let info =
+            inspect_workspace(&f, f.setup.instance_key.secret(), &json!(workspace), 200).await;
+        assert_eq!(
+            info["owner_id"],
+            f.setup.instance_key.principal_id.to_string()
+        );
+        assert_eq!(info["workspace"]["archived"], true);
+        assert!(info.get("owner_key").is_none());
+        let before = management_counts(&f);
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/first-owner",
+            &body,
+            403,
+        )
+        .await;
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/reset-owner-key",
+            &body,
+            404,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        let expiry: i64 = f
+            .db()
+            .query_row(
+                "SELECT expires_at FROM ccp_admin_keys WHERE workspace_id=?1",
+                [&workspace],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(expiry, body["key_expires_at"].as_i64().unwrap());
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn archive_and_reactivate_require_owner_or_global_while_scoped_security_stays_available()
+    {
+        let f = Fixture::new().await;
+        let (_old, _key) = f.enroll().await;
+        let admin = managed_admin(&f);
+        let second = f.second();
+        let target = json!({"workspace_id":f.setup.workspace_id.to_string()});
+        for bad in [admin.secret(), second.owner_key.secret()] {
+            admin_action(&f, bad, "/api/v1/admin/workspaces/archive", &target, 403).await;
+        }
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/workspaces/archive",
+            &target,
+            200,
+        )
+        .await;
+        let info = inspect_workspace(&f, admin.secret(), &target["workspace_id"], 200).await;
+        assert_eq!(info["workspace"]["archived"], true);
+        admin_action(
+            &f,
+            admin.secret(),
+            "/api/v1/admin/workspaces/reactivate",
+            &target,
+            403,
+        )
+        .await;
+        admin_action(&f,admin.secret(),"/api/v1/admin/invitations/individual",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"role":"read","expires_at":now()+3600}),403).await;
+        let grants = grant_page(&f, admin.secret(), f.setup.workspace_id, None, 10, 200).await;
+        admin_action(
+            &f,
+            admin.secret(),
+            "/api/v1/admin/grants/revoke",
+            &json!({"grant_id":grants["grants"][0]["id"]}),
+            200,
+        )
+        .await;
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/reactivate",
+            &target,
+            200,
+        )
+        .await;
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/archive",
+            &target,
+            200,
+        )
+        .await;
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/workspaces/reactivate",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(
+            inspect_workspace(&f, f.setup.owner_key.secret(), &target["workspace_id"], 200).await["workspace"]
+                ["archived"],
+            false
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_grants", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn grant_inspection_and_revocation_preserve_history_and_unrelated_workspace_access() {
+        let f = Fixture::new().await;
+        let (old, key, second) = joined_pair(&f).await;
+        let grants = grant_page(
+            &f,
+            f.setup.owner_key.secret(),
+            f.setup.workspace_id,
+            None,
+            10,
+            200,
+        )
+        .await;
+        assert_eq!(grants["grants"].as_array().unwrap().len(), 1);
+        assert_eq!(grants["grants"][0]["client_id"], old["client_id"]);
+        assert_eq!(grants["grants"][0]["role"], "read_write");
+        assert_eq!(grants["grants"][0]["revoked_at"], Value::Null);
+        assert_eq!(grants["grants"][0]["client_disabled"], false);
+        assert!(grants["grants"][0].get("certificate_pem").is_none());
+        assert!(grants["grants"][0].get("credential_id").is_none());
+        let global = grant_page(
+            &f,
+            f.setup.instance_key.secret(),
+            f.setup.workspace_id,
+            None,
+            10,
+            200,
+        )
+        .await;
+        assert_eq!(global, grants);
+        grant_page(
+            &f,
+            second.owner_key.secret(),
+            f.setup.workspace_id,
+            None,
+            10,
+            403,
+        )
+        .await;
+        let target = json!({"grant_id":grants["grants"][0]["id"]});
+        for bad in [f.setup.instance_key.secret(), second.owner_key.secret()] {
+            admin_action(&f, bad, "/api/v1/admin/grants/revoke", &target, 403).await;
+        }
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/grants/revoke",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(
+            workspace_ids(&f, &old, &key).await,
+            vec![second.workspace_id.to_string()]
+        );
+        let after = grant_page(
+            &f,
+            f.setup.owner_key.secret(),
+            f.setup.workspace_id,
+            None,
+            10,
+            200,
+        )
+        .await;
+        assert!(after["grants"][0]["revoked_at"].as_i64().is_some());
+        assert_eq!(after["grants"][0]["id"], grants["grants"][0]["id"]);
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_grants", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        let renewkey = KeyPair::generate().unwrap();
+        let next = json_reply(
+            f.private_client(old["certificate_pem"].as_str().unwrap(), &key)
+                .post(f.mtls("/api/v1/credentials/renew"))
+                .json(&json!({"request_id":Uuid::new_v4().to_string(),"csr_pem":csr(&renewkey)}))
+                .send()
+                .await
+                .unwrap(),
+            200,
+        )
+        .await;
+        assert_eq!(
+            workspace_ids(&f, &next["data"], &renewkey).await,
+            vec![second.workspace_id.to_string()]
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn global_disable_endpoint_takes_effect_on_same_tls_connection_and_preserves_history() {
+        let f = Fixture::new().await;
+        let (old, key, _second) = joined_pair(&f).await;
+        let target = json!({"client_id":old["client_id"]});
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/clients/disable",
+            &target,
+            403,
+        )
+        .await;
+        let mut wire =
+            Wire::connect(&f, Some((old["certificate_pem"].as_str().unwrap(), &key))).await;
+        wire.send("GET /api/v1/workspaces HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await;
+        assert_eq!(wire.response().await.0, 200);
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/clients/disable",
+            &target,
+            200,
+        )
+        .await;
+        wire.send("GET /api/v1/workspaces HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await;
+        assert_eq!(wire.response().await.0, 403);
+        let private = f.private_client(old["certificate_pem"].as_str().unwrap(), &key);
+        for path in ["/api/v1/credentials/renew", "/api/v1/admissions"] {
+            json_reply(private.post(f.mtls(path)).json(&json!({"request_id":Uuid::new_v4().to_string(),"csr_pem":csr(&KeyPair::generate().unwrap())})).send().await.unwrap(),403).await;
+        }
+        let page = grant_page(
+            &f,
+            f.setup.owner_key.secret(),
+            f.setup.workspace_id,
+            None,
+            10,
+            200,
+        )
+        .await;
+        assert_eq!(page["grants"][0]["client_disabled"], true);
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_clients", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM ccp_grants WHERE revoked_at IS NULL",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            2
+        );
+        drop(wire);
+        drop(private);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn creation_and_first_owner_audit_failures_roll_back_keys_principals_and_workspace() {
+        let f = Fixture::new().await;
+        let before = management_counts(&f);
+        f.db().execute_batch("CREATE TRIGGER fail_http_owner BEFORE INSERT ON ccp_access_audit WHEN NEW.action='issue_initial_owner_key' BEGIN SELECT RAISE(ABORT,'injected owner audit failure'); END;").unwrap();
+        create_workspace(
+            &f,
+            "rollback",
+            json!({"kind":"new_principal","name":"rollback owner"}),
+            None,
+            503,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        let unowned = Uuid::new_v4().to_string();
+        f.db()
+            .execute(
+                "INSERT INTO ccp_workspaces(id,name) VALUES (?1,'rollback first owner')",
+                [&unowned],
+            )
+            .unwrap();
+        let unowned_before = management_counts(&f);
+        admin_action(&f,f.setup.instance_key.secret(),"/api/v1/admin/workspaces/first-owner",
+            &json!({"workspace_id":unowned,"owner":{"kind":"new_principal","name":"rollback initial owner"}}),503).await;
+        assert_eq!(management_counts(&f), unowned_before);
+        assert_eq!(
+            inspect_workspace(&f, f.setup.instance_key.secret(), &json!(unowned), 200).await["owner_id"],
+            Value::Null
+        );
+        f.db()
+            .execute_batch("DROP TRIGGER fail_http_owner")
+            .unwrap();
+        let created = create_workspace(
+            &f,
+            "rollback",
+            json!({"kind":"new_principal","name":"rollback owner"}),
+            None,
+            200,
+        )
+        .await;
+        assert!(
+            created["owner_key"]
+                .as_str()
+                .unwrap()
+                .starts_with("ccp_admin_")
+        );
+        let before = management_counts(&f);
+        create_workspace(
+            &f,
+            "rollback",
+            json!({"kind":"new_principal","name":"duplicate owner"}),
+            None,
+            503,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        let missing = Uuid::new_v4().to_string();
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/first-owner",
+            &json!({"workspace_id":missing,"owner":{"kind":"new_principal","name":"orphan"}}),
+            403,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn first_owner_concurrent_network_appointments_create_exactly_one_principal_and_key() {
+        let f = Fixture::new().await;
+        let workspace = Uuid::new_v4().to_string();
+        f.db()
+            .execute(
+                "INSERT INTO ccp_workspaces(id,name) VALUES (?1,'raced')",
+                [&workspace],
+            )
+            .unwrap();
+        let before = management_counts(&f);
+        let a = f
+            .public_client()
+            .post(f.url("/api/v1/admin/workspaces/first-owner"))
+            .bearer_auth(f.setup.instance_key.secret())
+            .json(
+                &json!({"workspace_id":workspace,"owner":{"kind":"new_principal","name":"alice"}}),
+            );
+        let b = f
+            .public_client()
+            .post(f.url("/api/v1/admin/workspaces/first-owner"))
+            .bearer_auth(f.setup.instance_key.secret())
+            .json(&json!({"workspace_id":workspace,"owner":{"kind":"new_principal","name":"bob"}}));
+        let (a, b) = tokio::join!(a.send(), b.send());
+        let a = a.unwrap();
+        let b = b.unwrap();
+        let codes = [a.status().as_u16(), b.status().as_u16()];
+        assert!(codes == [200, 403] || codes == [403, 200]);
+        let win = if codes[0] == 200 {
+            json_reply(b, 403).await;
+            json_reply(a, 200).await
+        } else {
+            json_reply(a, 403).await;
+            json_reply(b, 200).await
+        };
+        let counts = management_counts(&f);
+        assert_eq!(counts[0], before[0]);
+        assert_eq!(counts[1], before[1] + 1);
+        assert_eq!(counts[2], before[2] + 1);
+        assert_eq!(
+            inspect_workspace(&f, f.setup.instance_key.secret(), &json!(workspace), 200).await["owner_id"],
+            win["data"]["owner_id"]
+        );
+        f.finish().await;
+    }
+
+    async fn reject_owner_selectors(f: &Fixture) {
+        for owner in [
+            Value::Null,
+            json!({"kind":"instance"}),
+            json!({"kind":"existing","principal_id":"bad"}),
+            json!({"kind":"existing","principal_id":f.setup.instance_key.principal_id.to_string(),"name":"claim"}),
+            json!({"kind":"new_principal","name":"claim","principal_id":f.setup.instance_key.principal_id.to_string()}),
+        ] {
+            create_workspace(f, "invalid", owner, None, 400).await;
+        }
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn management_requests_reject_ambiguous_identity_claims_and_wrong_surfaces() {
+        let f = Fixture::new().await;
+        let (old, key) = f.enroll().await;
+        let before = management_counts(&f);
+        reject_owner_selectors(&f).await;
+        let target = json!({"workspace_id":f.setup.workspace_id.to_string()});
+        for path in [
+            "workspaces/inspect",
+            "workspaces/archive",
+            "workspaces/reactivate",
+            "workspaces/grants",
+        ] {
+            let path = format!("/api/v1/admin/{path}");
+            let mut spoof = target.clone();
+            spoof["actor"] = json!("global");
+            admin_action(&f, f.setup.instance_key.secret(), &path, &spoof, 400).await;
+            json_reply(
+                f.public_client()
+                    .get(f.url(&path))
+                    .bearer_auth(f.setup.instance_key.secret())
+                    .send()
+                    .await
+                    .unwrap(),
+                405,
+            )
+            .await;
+            admin_action(
+                &f,
+                f.setup.instance_key.secret(),
+                &format!("{path}?workspace_id=claimed"),
+                &target,
+                400,
+            )
+            .await;
+            json_reply(
+                f.private_client(old["certificate_pem"].as_str().unwrap(), &key)
+                    .post(f.mtls(&path))
+                    .json(&target)
+                    .send()
+                    .await
+                    .unwrap(),
+                404,
+            )
+            .await;
+        }
+        for limit in [0, 501] {
+            grant_page(
+                &f,
+                f.setup.instance_key.secret(),
+                f.setup.workspace_id,
+                None,
+                limit,
+                400,
+            )
+            .await;
+        }
+        grant_page(
+            &f,
+            f.setup.instance_key.secret(),
+            f.setup.workspace_id,
+            Some("bad"),
+            10,
+            400,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        f.finish().await;
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn grant_history_paginates_through_authenticated_https_without_cursor_authority() {
+        let f = Fixture::new().await;
+        let (_old, _key) = f.enroll().await;
+        for _ in 0..3 {
+            let invite=admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/invitations/individual",
+                &json!({"workspace_id":f.setup.workspace_id.to_string(),"role":"read","expires_at":now()+3600}),200).await;
+            public_action(
+                &f,
+                "/api/v1/enroll",
+                &redemption(&invite, &KeyPair::generate().unwrap()),
+                200,
+            )
+            .await;
+        }
+        let second = f.second();
+        let mut after = None;
+        let mut found = Vec::new();
+        loop {
+            let page = grant_page(
+                &f,
+                f.setup.owner_key.secret(),
+                f.setup.workspace_id,
+                after.as_deref(),
+                2,
+                200,
+            )
+            .await;
+            let grants = page["grants"].as_array().unwrap();
+            assert!(grants.len() <= 2);
+            found.extend(grants.iter().map(|g| g["id"].as_str().unwrap().to_string()));
+            after = page["next_cursor"].as_str().map(str::to_string);
+            if after.is_none() {
+                break;
+            }
+        }
+        assert_eq!(found.len(), 4);
+        let mut sorted = found.clone();
+        sorted.sort();
+        assert_eq!(found, sorted);
+        sorted.dedup();
+        assert_eq!(sorted.len(), 4);
+        grant_page(
+            &f,
+            f.setup.owner_key.secret(),
+            second.workspace_id,
+            Some(&found[0]),
+            2,
+            403,
+        )
+        .await;
+        let end = grant_page(
+            &f,
+            f.setup.owner_key.secret(),
+            f.setup.workspace_id,
+            Some(&Uuid::max().to_string()),
+            2,
+            200,
+        )
+        .await;
+        assert!(end["grants"].as_array().unwrap().is_empty());
+        assert_eq!(end["next_cursor"], Value::Null);
+        let defaults = admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/workspaces/grants",
+            &json!({"workspace_id":f.setup.workspace_id.to_string()}),
+            200,
+        )
+        .await;
+        assert_eq!(defaults["grants"].as_array().unwrap().len(), 4);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_key_expiry_and_disabled_initial_owner_are_current_network_decisions() {
+        let f = Fixture::new().await;
+        let created = create_workspace(
+            &f,
+            "expiring",
+            json!({"kind":"new_principal","name":"limited owner"}),
+            Some(now() + 3600),
+            200,
+        )
+        .await;
+        let secret = created["owner_key"].as_str().unwrap();
+        inspect_workspace(&f, secret, &created["workspace_id"], 200).await;
+        f.db()
+            .execute(
+                "UPDATE ccp_admin_keys SET expires_at=?1 WHERE id=?2",
+                rusqlite::params![now() - 1, created["owner_key_id"].as_str().unwrap()],
+            )
+            .unwrap();
+        inspect_workspace(&f, secret, &created["workspace_id"], 401).await;
+        let info = inspect_workspace(
+            &f,
+            f.setup.instance_key.secret(),
+            &created["workspace_id"],
+            200,
+        )
+        .await;
+        assert_eq!(info["owner_id"], created["owner_id"]);
+        f.db()
+            .execute(
+                "UPDATE ccp_admin_principals SET enabled=0 WHERE id=?1",
+                [created["owner_id"].as_str().unwrap()],
+            )
+            .unwrap();
+        let before = management_counts(&f);
+        create_workspace(
+            &f,
+            "disabled owner",
+            json!({"kind":"existing","principal_id":created["owner_id"]}),
+            None,
+            403,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        create_workspace(
+            &f,
+            "invalid expiry",
+            json!({"kind":"new_principal","name":"early"}),
+            Some(now() - 1),
+            403,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        f.finish().await;
+    }
 }

@@ -3,7 +3,8 @@
 These unreleased server commands run on the CCP host with write access to its
 data directory. Stop every server using that directory first: setup, inspection
 and reset take an exclusive maintenance lease. They do not stop processes for
-you. The workspace HTTPS server and browser login are still subsequent work.
+you. The [workspace HTTPS server](workspace-http-api.md) uses this setup;
+browser login remains subsequent work.
 These commands provision its administrative foundation without starting a
 listener, activating workspace mode or generating a CA.
 

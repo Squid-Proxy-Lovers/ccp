@@ -169,3 +169,77 @@ pub struct RecoveryStatus {
     pub redeemed: bool,
     pub issuer_authorized: bool,
 }
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum InitialOwner {
+    Existing { principal_id: String },
+    NewPrincipal { name: String },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CreateWorkspace {
+    pub name: String,
+    pub owner: InitialOwner,
+    pub key_expires_at: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FirstOwner {
+    pub workspace_id: String,
+    pub owner: InitialOwner,
+    pub key_expires_at: Option<i64>,
+}
+
+// One-time owner key delivery must be an explicit projection, never a log.
+#[derive(Serialize, Deserialize)]
+pub struct ProvisionedWorkspace {
+    pub workspace_id: String,
+    pub owner_id: String,
+    pub owner_key_id: String,
+    pub owner_key: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorkspaceAdministration {
+    pub workspace: Workspace,
+    pub owner_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantPage {
+    pub workspace_id: String,
+    pub after: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Grant {
+    pub id: String,
+    pub client_id: String,
+    pub client_name: String,
+    pub role: Role,
+    pub revoked_at: Option<i64>,
+    pub client_disabled: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Grants {
+    pub grants: Vec<Grant>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantTarget {
+    pub grant_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientTarget {
+    pub client_id: String,
+}

@@ -64,8 +64,9 @@ The `server::foundation` APIs are internal server building blocks. An `Actor`
 must come from a trusted authentication layer; accepting a caller-supplied
 principal UUID would not authenticate it. Scoped admin-key primitives are documented in [Workspace admin keys](workspace-admin-keys.md).
 Internal certificate enrollment and renewal are documented in
-[Workspace enrollment](workspace-enrollment.md); their network adapters remain
-subsequent integration work.
+[Workspace enrollment](workspace-enrollment.md). Their limited
+[workspace HTTPS adapters](workspace-http-api.md) now support actual TLS requests;
+normal client/MCP profiles and selection remain subsequent work.
 
 A client data action requires a live, unexpired, nonrevoked, unsuperseded credential, an
 enabled client, a live workspace grant bound to that credential, a suitable
@@ -114,8 +115,9 @@ The new tests exercise role/scope matrices, cross-workspace denial, credential
 bindings, expiry and revocation, global disable, archived read/write boundaries,
 owner-only administration, audit rollback, persistent reopening, legacy-data
 preservation, migration rollback and refusal of a future schema. Native CLI/MCP
-and compatibility checks still apply. Passing these checks does not establish
-the new HTTP, browser or enrollment flows before those phases are implemented.
+and compatibility checks still apply. Separate actual localhost TLS suites
+exercise the implemented management/enrollment adapters. Normal client/MCP,
+content, browser and production-deployment flows remain incomplete.
 
 ## Runtime mode isolation
 

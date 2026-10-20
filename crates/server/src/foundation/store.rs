@@ -10,6 +10,7 @@ mod discovery;
 mod invitations;
 mod keys;
 mod local;
+mod management;
 mod peer;
 mod provisioning;
 mod readmission;

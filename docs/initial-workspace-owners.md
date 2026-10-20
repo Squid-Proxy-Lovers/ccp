@@ -1,8 +1,9 @@
 # Provision the first workspace owner
 
 The unreleased workspace foundation can atomically appoint the first owner and
-deliver that owner's first scoped admin key. This is an internal server API;
-HTTPS administration and the human creation flow are not exposed yet.
+deliver that owner's first scoped admin key. The
+[workspace HTTPS API](workspace-http-api.md) exposes creation and first-owner
+appointment with the same transactions. The browser creation flow remains later.
 
 [Documentation index](README.md) · [Scoped admin keys](workspace-admin-keys.md)
 
@@ -38,7 +39,7 @@ display labels, client grants and closed enrollment remain unchanged.
 
 `ProvisionedWorkspace` contains the workspace UUID and an `IssuedAdminKey`
 whose principal UUID identifies the owner. The result has no automatic
-Debug, Serialize or Clone implementation. Future HTTPS adapters must explicitly
+Debug, Serialize or Clone implementation. HTTPS adapters explicitly
 return the key once, for delivery to the selected owner. Do not log it or put it
 in audit records, discovery output or ordinary workspace metadata.
 
@@ -62,8 +63,8 @@ perform routine workspace-key issuance or reset. An authorized workspace owner
 uses the normal owner-only key operations to manage their team and credentials.
 Owner-initiated ownership transfer remains separate implementation work.
 
-If delivery is lost, inspect the current IDs through
-[local administration](local-workspace-administration.md). A working owner key
+If delivery is lost, inspect the current IDs through the authenticated workspace
+listing/inspection API or [local administration](local-workspace-administration.md). A working owner key
 can issue a replacement. If all owner keys are lost, the trusted host operator
 can run the existing scoped local reset. It preserves the owner UUID and other
 keys/scopes, and requires exclusive data-directory access. No remote universal
@@ -71,7 +72,6 @@ reset, first-visitor claim, reusable onboarding token or deterministic secret
 reconstruction is introduced.
 
 Older low-level creation/appointment primitives remain available for trusted
-embedded callers, but they do not deliver credentials. Future external creation
-flows must use these composite operations so an owner is not appointed without
-the promised first-key delivery boundary. HTTP session, CSRF, error normalization
-and secret-delivery integration remain pending.
+embedded callers, but they do not deliver credentials. The HTTPS creation routes
+use these composite operations to preserve the first-key delivery boundary.
+Browser session, CSRF and human secret-delivery workflows remain pending.
