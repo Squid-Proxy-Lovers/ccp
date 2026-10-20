@@ -293,5 +293,6 @@ intents stay intact and suppress new renewal; reads do not replay an entry write
 Scoped recovery profiles read only their captured still-authorized workspaces.
 
 This explicit reader does not publish guidance or implement automatic initial/
-changed guidance delivery with other tool results. MCP delivery, stale/unavailable
-sideband warnings and desktop editors remain subsequent work.
+changed guidance delivery with other tool results. The MCP bridge now supports
+[explicit guidance refresh](workspace-mcp.md#refresh-guidance-explicitly). Automatic
+delivery, stale/unavailable sideband warnings and desktop editors remain later.

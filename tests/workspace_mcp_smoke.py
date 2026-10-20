@@ -16,6 +16,7 @@ from mcp_smoke import data
 from workspace_mcp_content_smoke import check as check_content
 from workspace_mcp_entry_smoke import check as check_entries
 from workspace_mcp_fixture import WorkspaceFixture
+from workspace_mcp_guidance import check_guidance
 from workspace_mcp_write_smoke import check as check_writes
 
 
@@ -93,6 +94,7 @@ async def stdio_protocol(fixture):
         assert (await call(client, "workspace_profile", profile="office"))[
             "client_id"
         ] == fixture.client_id
+        await check_guidance(fixture, client)
     assert not list(scratch.glob("ccp-workspace-mcp-*"))
     async with Client(transport) as raw:
         old = await raw.call_tool(
@@ -148,6 +150,10 @@ async def permission_changes(fixture, one, two, provisioned):
     assert (await call(one, "workspace_selection", profile="recovered"))["workspace_ids"] == []
     await refused(one, "workspace_target", profile="office")
     await refused(one, "workspace_target", profile="recovered", workspace_id=second)
+    await refused(one, "workspace_guidance", profile="recovered", scope={"workspace_id": second})
+    assert (
+        await call(one, "workspace_guidance", profile="recovered", scope={"workspace_id": first})
+    )["workspace"]["scope"]["workspace_id"] == first
     assert (await call(two, "workspace_target", profile="office"))["workspace"]["id"] == second
     error = await refused(one, "workspace_profile", profile=str(fixture.root))
     assert str(fixture.root) not in error
@@ -159,6 +165,7 @@ async def permission_changes(fixture, one, two, provisioned):
         "grants/revoke", {"grant_id": grants["grants"][0]["id"]}, provisioned["owner_key"]
     )
     await refused(two, "workspace_target", profile="office")
+    await refused(two, "workspace_guidance", profile="office", scope={"workspace_id": second})
     assert (await call(two, "workspace_selection", profile="office"))[
         "default_workspace_id"
     ] == second
@@ -168,6 +175,7 @@ async def permission_changes(fixture, one, two, provisioned):
         fixture.setup["instance_admin_key"]["secret"],
     )
     await refused(one, "workspace_list", profile="recovered")
+    await refused(one, "workspace_guidance", profile="recovered")
     assert (await call(one, "workspace_selection", profile="office"))["workspace_ids"] == [first]
 
 

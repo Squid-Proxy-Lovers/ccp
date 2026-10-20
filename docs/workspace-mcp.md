@@ -4,7 +4,8 @@ This unreleased stdio bridge connects an agent host to configured workspace
 client profiles. It exposes current workspace metadata and explicit caller
 selections, shelves, books, entries and revision history, plus shelf/book creation.
 It also exposes durable entry mutations and guarded outcome controls.
-Boards, status and the browser panel remain later work. The supported native
+Current guidance can also be refreshed explicitly. Automatic guidance delivery,
+status and the browser panel remain later work. The supported native
 `ccp-mcp-server` entry point stays available.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md) ·
@@ -105,6 +106,53 @@ A default must be in the selected set; omitting it leaves it unset. A successful
 update increments the revision. A stale revision fails instead of overwriting
 newer choices. An empty set clears preferences locally. An explicit target does
 not need a selection handle and never changes any handle's choices.
+
+## Refresh guidance explicitly
+
+Call `workspace_guidance` with a configured profile alias. Omit `scope` for global
+guidance only; omission never uses the selected set or default:
+
+```json
+{"profile":"office"}
+```
+
+Supply one explicit workspace UUID, or a bridge-issued handle for its default:
+
+```json
+{"profile":"office","scope":{"workspace_id":"11111111-1111-4111-8111-111111111111"}}
+```
+
+```json
+{"profile":"office","scope":{"selection_id":"00000000-0000-4000-8000-000000000001"}}
+```
+
+Replace illustrative UUIDs with an accessible workspace or your issued handle.
+If both are supplied, the explicit UUID takes precedence without changing choices.
+A missing handle default is an error, with no fallback. The resolved workspace
+is captured once for the request. New grants are never selected automatically.
+
+The result contains `precedence: "global_first"`, a `global` board and optional
+`workspace` board, with separate source, revision, text and historical publisher
+key/principal/time. Global CCP guidance wins workspace conflicts; host instructions
+and actual server permissions retain priority. Text cannot grant authority or
+change the structural source labels. Revision 0 with no publisher is unpublished;
+positive empty text is an explicitly cleared board. Controls and UTF-8 text are
+preserved up to 8192 bytes per board and returned as JSON data.
+
+The configured Rust client authenticates through pinned mTLS and rechecks current
+workspace access. The bridge validates known metadata before returning it, drops
+additive bundle/board/publisher fields, and refuses malformed or unexpected scope
+without echoing the prose. Unknown request fields and identity claims are refused
+before SDK parsing. Archived workspace guidance remains readable; recovery,
+revocation and instance-wide disable do not widen or preserve stale authority.
+See the [client guidance contract](workspace-client.md#read-current-guidance) for
+renewal and pending-operation behavior. Reads preserve caller choices and pending
+intents; authorized renewal may update the credential.
+
+This tool performs an explicit current read with no delivery cache or emission
+cursor. Automatic initial/changed guidance attached to other tool responses and
+stale/unavailable sideband warnings remain subsequent work. A failed explicit
+read remains an error; guidance publication uses separate scoped admin APIs.
 
 ## Read content in one workspace
 
@@ -330,6 +378,7 @@ use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-The bridge exposes 23 tools: eight metadata/selection tools, nine content reads,
+The bridge exposes 24 tools: eight metadata/selection tools, one guidance reader,
+nine content reads,
 two container creations and four entry-intent/outcome tools. It does not publish
 guidance, manage tasks or start a server.

@@ -191,6 +191,7 @@ A schema-19 server refuses schema 20; rollback requires the complete matching
 pre-upgrade backup and producing software.
 [Authenticated guidance reads and scoped saves](workspace-http-api.md#read-and-save-guidance)
 now expose these APIs over TLS, with
-[normal client guidance reads](workspace-client.md#read-current-guidance). MCP,
-desktop editors, automatic initial/changed delivery and explicit stale/unavailable
+[normal client guidance reads](workspace-client.md#read-current-guidance) and
+[explicit MCP refresh](workspace-mcp.md#refresh-guidance-explicitly). Desktop
+editors, automatic initial/changed delivery and explicit stale/unavailable
 warnings remain subsequent work.

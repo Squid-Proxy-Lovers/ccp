@@ -190,3 +190,10 @@ archived workspaces, current key revocation/demotion, unchanged client powers,
 strict inputs and request budgets, and audit abort/ignore rollback with sanitized
 errors. Original client mutation outcomes remain resolvable after purge without
 recreating payload; sibling content and retained proofs are checked.
+
+MCP guidance tests validate provenance, exact bounds/empty states, closed scope
+and publisher kinds, safe additive-field projection, UTF-8 failures, captured
+selection defaults and strict pre-SDK request guards. Real stdio/CLI/TLS exercises
+current publication/updates/clear/archive, profile/selection preservation, scoped
+recovery, grant revocation and global disable. Tool discovery now expects 24
+tools, preserving every existing capability and adding explicit guidance refresh.

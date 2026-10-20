@@ -34,6 +34,7 @@ from ccp_mcp_server.workspace_write import (
 from fastmcp import Client
 from fastmcp.exceptions import ToolError, ValidationError
 from workspace_entry_tests import WorkspaceEntryTests as WorkspaceEntryTests
+from workspace_guidance_tests import WorkspaceGuidanceTests as WorkspaceGuidanceTests
 
 
 class WorkspaceConfigurationTests(unittest.TestCase):
@@ -266,7 +267,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 23)
+                self.assertEqual(len(tools), 24)
                 self.assertTrue(
                     {
                         "workspace_profiles",
@@ -277,6 +278,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
                         "workspace_select",
                         "workspace_resolve",
                         "workspace_target",
+                        "workspace_guidance",
                     }
                     <= {tool.name for tool in tools}
                 )
