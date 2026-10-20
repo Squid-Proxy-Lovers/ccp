@@ -53,7 +53,7 @@ const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 20;
+pub const SCHEMA_VERSION: u32 = 21;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;

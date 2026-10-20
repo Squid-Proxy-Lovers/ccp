@@ -38,8 +38,8 @@ pub use content::{
 };
 pub use entry::{
     ContentError, EntryChange, EntryContent, EntryMutation, EntryOperationOutcome,
-    EntryOperationTarget, EntryPageRequest, EntryReceipt, EntryRevision, EntrySnapshot,
-    EntrySummary, RevisionPage, RevisionPageRequest,
+    EntryOperationTarget, EntryPageRequest, EntryPurge, EntryPurgeReceipt, EntryReceipt,
+    EntryRevision, EntrySnapshot, EntrySummary, RevisionPage, RevisionPageRequest,
 };
 pub use guidance::{
     GUIDANCE_TEXT_BYTES, GuidanceBoard, GuidanceBundle, GuidancePrecedence, GuidancePublisher,
@@ -77,6 +77,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(include_str!("operation_resolution.sql"))?;
     transaction.execute_batch(include_str!("shelf_lifecycle.sql"))?;
     transaction.execute_batch(include_str!("guidance.sql"))?;
+    transaction.execute_batch(include_str!("entry_purge.sql"))?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

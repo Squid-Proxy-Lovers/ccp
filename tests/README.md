@@ -174,3 +174,12 @@ profile/selection stability, current scope/disable/archive, scoped recovery,
 pending renewal/admission/entry preservation and due renewal only after an
 authorized workspace read. Global-only grantless reads never initiate renewal.
 Corrupt publisher metadata delivered over real TLS fails before renewal or output.
+
+Twelve entry-purge core cases cover scoped authority in active and archived
+workspaces, explicit confirmation, individual archive/revision checks, stale
+restore/rearchive requests, instance-key scope, exact historical retries/current
+revocation, maximum revision, legacy refusal, immutable purge proof and UUID
+reuse prevention. Abort and ignored-write faults verify rollback of proof,
+payload/history removal and audit. Earlier write receipts/cancellation fences,
+siblings and guidance survive; file reopen, stale independent writers and failed
+schema-21 migration are covered. External purge commands remain subsequent work.

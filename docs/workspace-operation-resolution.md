@@ -131,4 +131,8 @@ server refuses that schema. Schema 19 makes entry receipts independent of
 version-row foreign keys, preserves their body-free proof and protects them
 against UPDATE and DELETE. A schema-18 server refuses schema 19; keep the whole
 matching pre-upgrade backup. No payload purge or new resolution permission is
-introduced. No power-loss, deployment or throughput guarantee is claimed.
+introduced. Schema 21 adds internal
+[explicit archived-entry purge](workspace-content.md#permanently-purge-an-archived-entry)
+without erasing these original receipts or cancellation fences. A schema-20
+server refuses schema 21; keep its complete matching pre-upgrade backup.
+No power-loss, deployment or throughput guarantee is claimed.

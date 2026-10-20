@@ -101,8 +101,10 @@ A same-name active entry in the original book causes a conflict: restoration
 never replaces it. The caller can resolve the collision separately and retry the
 uncommitted restore operation. Workspace archival still allows reads but blocks
 content writes, including archive/restore and replay. Permanent purge and optional
-timed retention remain subsequent work; manual retention is the default and this
-slice starts no cleanup worker.
+timed retention are separate from ordinary client writes. The
+[internal explicit purge core](#permanently-purge-an-archived-entry) is available
+to scoped admins; network/CLI/MCP purge commands and timed cleanup remain later
+work. Manual retention is the default.
 
 ## Recover a whole shelf
 
@@ -160,6 +162,51 @@ current read access and the original binding. Current revocation, identity and
 cancellation checks stay in force. This migration does not delete any entry,
 version, archive or history and adds no purge endpoint or cleanup timer.
 
+## Permanently purge an archived entry
+
+The internal `AccessStore::purge_entry` API permanently removes an individually
+archived entry and all its stored versions, including text, metadata and append
+contributions. It requires a currently authorized workspace owner/admin. This
+explicit privileged action is also allowed while the workspace is archived;
+ordinary client writes stay blocked and automatic cleanup remains paused.
+Instance-wide admin keys cannot borrow their principal's workspace role.
+An active entry hidden only by an archived shelf is ineligible: the entry must
+have its own archive flag. An individually archived entry inside an archived
+shelf remains eligible.
+
+A trusted caller supplies `EntryPurge` with a non-nil operation UUID, entry UUID,
+the expected positive revision and `confirm_purge: true`. The explicit flag
+records caller intent; it does not prove a human confirmed through a UI. A stale
+revision or a restored entry conflicts, including after a restore/rearchive
+cycle. The target's current archived revision is the receipt's revision; purge
+does not increment it, so the maximum stored revision can also be removed.
+
+Permission, current target checks, retained body-free purge proof, all version
+and entry-row removals, and the administrative audit commit in one transaction.
+An error, ignored proof/entry/audit write or injected storage failure rolls back
+the operation. Siblings, books, shelves, workspace guidance, prior write receipts,
+client cancellation fences and administrative audit stay intact.
+
+The receipt records the operation, entry UUID, last archived revision and purge
+time. Exact retries require current scoped authority and the original admin
+principal/key, UUID and revision, and return that historical receipt without
+reapplying. Changing actor or intent under the same workspace/operation conflicts.
+Purge operations have a separate namespace from entry mutations. A new operation
+against an already purged entry returns not found.
+
+Schema 21 retains immutable body-free proof and prevents reuse of a purged entry
+UUID, including through later imports. The original write receipts remain, so
+an old exact create/append retry returns its historical proof and cannot recreate
+content. Current own-client outcome resolution also remains body-free. The
+original entry name may be reused with a new UUID through a fresh authorized
+create. Full payload/history reads and restoration of the purged UUID fail.
+
+This is logical database-row deletion, with no forensic erasure promise for
+SQLite free pages, journals or separate backups. No existing data is purged by
+the upgrade itself. HTTP/CLI/MCP adapters, human confirmation screens, timed
+retention and whole-shelf/book/workspace purge remain subsequent work. The
+verified legacy-content conversion gate remains in force.
+
 ## Schema and legacy data
 
 Schema 15 adds `ccp_content_shelves` and `ccp_content_books`; schema 16 adds
@@ -171,8 +218,10 @@ preserved. Schema 19 retains entry-operation receipts independently of entry
 version rows, with direct workspace references and immutable update/delete
 guards. Schema 20 adds the separate internal
 [guidance publication foundation](workspace-foundation.md#guidance-publication-foundation).
-These additions leave native session payload, history, archives and journal
-storage intact. Instance identities,
+Schema 21 adds retained entry-purge proof and prevents reusing purged UUIDs.
+Upgrading preserves all payloads; only a subsequent authorized explicit purge
+removes an entry. These additions leave native session payload, history, archives
+and journal storage intact. Instance identities,
 CA material, admin keys, grants and client profiles retain their existing formats.
 Native wire protocol 1 and workspace JSON API 1 are unchanged.
 
@@ -186,8 +235,8 @@ Do not activate workspace mode for legacy content yet: activation blocks native
 access and has no in-place deactivation. See the
 [activation and backup boundary](workspace-runtime-mode.md#explicit-workspace-activation).
 
-Keep a complete protected backup before upgrading. A schema-19 binary refuses
-schema 20; rollback uses the matching whole pre-upgrade backup and its
+Keep a complete protected backup before upgrading. A schema-20 binary refuses
+schema 21; rollback uses the matching whole pre-upgrade backup and its
 producing software. Do not lower the version or discard new tables to force an
 older server to open it. No power-loss, throughput or full-content migration claim
 is made by this storage foundation.

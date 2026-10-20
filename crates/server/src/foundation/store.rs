@@ -495,7 +495,7 @@ fn audit(
             ("admin", principal, Some(key))
         }
     };
-    connection.execute(
+    require_changed(connection.execute(
         "INSERT INTO ccp_access_audit
          (actor_kind, actor_id, action, workspace_id, target_id, recorded_at, admin_key_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -508,8 +508,7 @@ fn audit(
             now,
             key.map(|id| id.to_string())
         ],
-    )?;
-    Ok(())
+    )?)
 }
 
 fn content_conflict(error: rusqlite::Error) -> anyhow::Error {

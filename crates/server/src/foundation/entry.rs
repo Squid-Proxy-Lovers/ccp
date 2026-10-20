@@ -147,3 +147,20 @@ pub struct RevisionPage {
     pub items: Vec<EntryRevision>,
     pub next_cursor: Option<u64>,
 }
+
+/// Explicit permanent deletion intent for an individually archived entry.
+pub struct EntryPurge {
+    pub operation_id: Uuid,
+    pub entry_id: Uuid,
+    pub expected_revision: u64,
+    pub confirm_purge: bool,
+}
+
+/// Body-free historical proof; not a claim about forensic media erasure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EntryPurgeReceipt {
+    pub operation_id: Uuid,
+    pub entry_id: Uuid,
+    pub revision: u64,
+    pub purged_at: i64,
+}

@@ -28,6 +28,7 @@ pub enum Action {
     ArchiveWorkspace,
     ReactivateWorkspace,
     PurgeWorkspace,
+    PurgeEntry,
     ManageArchives,
     CreateWorkspace,
     SaveGlobalBoard,

@@ -98,6 +98,7 @@ fn admin_allowed(
 fn admin_capability(action: Action, state: &str, global: bool, owner: bool, scoped: bool) -> bool {
     match action {
         Action::ReadContext => global || owner || scoped,
+        Action::PurgeEntry => matches!(state, "active" | "archived") && (owner || scoped),
         Action::RevokeGrant | Action::RecoverWorkspaceClient => owner || scoped,
         Action::RevokeAdmin | Action::ManageWorkspaceKeys => owner,
         Action::ArchiveWorkspace => state == "active" && (owner || global),

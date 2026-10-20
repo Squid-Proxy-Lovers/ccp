@@ -16,7 +16,9 @@ revisions and exact admin retry receipts. Schema 19 makes entry-operation
 receipts a retained body-free ledger independent of version rows. It prepares
 future purge safety without deleting content. Schema 20 adds the internal
 [guidance publication foundation](#guidance-publication-foundation). Verified
-legacy content conversion remains subsequent work.
+legacy content conversion remains subsequent work. Schema 21 adds
+[explicit archived-entry purge](workspace-content.md#permanently-purge-an-archived-entry)
+with retained proof; migration itself deletes no content.
 See [instance TLS setup](instance-tls-identity.md) for its separate private
 bundle. The existing native mTLS client protocol and CLI remain in service in
 native mode. The separate [workspace HTTPS API](workspace-http-api.md)
@@ -53,7 +55,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 20. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 21. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -99,7 +101,9 @@ owner reference per workspace; initial assignment cannot replace an owner.
 Targeted recovery and retained binding revocations are documented in
 [Client recovery](workspace-recovery.md).
 [Owner administration](workspace-owner-administration.md) adds scoped team/key
-management and ownership transfer. Payload purge remains subsequent work.
+management and ownership transfer.
+[Explicit archived-entry purge](workspace-content.md#permanently-purge-an-archived-entry)
+now has an internal core; network purge adapters remain subsequent work.
 Initial-owner appointment is an explicit, audited global-admin operation for an
 unowned workspace. The appointee may be that same global administrator; they
 then exercise workspace powers through the separately recorded owner role.

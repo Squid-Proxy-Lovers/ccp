@@ -8,6 +8,7 @@ mod ledger;
 mod lifecycle;
 mod ownership;
 mod persistence;
+mod purge;
 mod validation;
 
 fn content(text: &str) -> EntryContent {
