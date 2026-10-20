@@ -14,8 +14,9 @@ for the original client after renewal or recovery. Schema 18 adds internal
 [shelf archive/restore](workspace-content.md#recover-a-whole-shelf) lifecycle
 revisions and exact admin retry receipts. Schema 19 makes entry-operation
 receipts a retained body-free ledger independent of version rows. It prepares
-future purge safety without deleting content. Verified legacy content conversion
-remains subsequent work.
+future purge safety without deleting content. Schema 20 adds the internal
+[guidance publication foundation](#guidance-publication-foundation). Verified
+legacy content conversion remains subsequent work.
 See [instance TLS setup](instance-tls-identity.md) for its separate private
 bundle. The existing native mTLS client protocol and CLI remain in service in
 native mode. The separate [workspace HTTPS API](workspace-http-api.md)
@@ -52,7 +53,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 12. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 20. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -145,3 +146,42 @@ The [local administration CLI](local-workspace-administration.md) implements the
 exclusive OS/data-directory boundary for first-instance provisioning and scoped
 key recovery. It does not expose these operations through client or admin
 network routes, change ownership or reopen enrollment.
+
+## Guidance publication foundation
+
+Internal server callers can use `AccessStore::save_guidance` to save the global
+board or an explicitly named workspace board. The trusted authentication layer
+supplies the actor. Global admins publish global guidance; workspace owners and
+admins publish their workspace guidance. An instance-wide admin key cannot use
+its principal's workspace role to publish there. Ordinary clients cannot publish.
+Archived workspaces keep readable guidance but reject workspace saves and retries.
+
+Supply a non-nil operation UUID, the expected revision (0 for an unpublished
+board) and at most 8192 UTF-8 bytes of exact text. A successful new operation
+immediately creates an immutable revision and makes it live. Saving identical
+text with a new operation still records a new revision. Saving empty text
+explicitly clears the published board; its positive revision and publisher
+distinguish it from an unpublished board. A stale expected revision conflicts.
+
+An exact retry rechecks current publishing authority and returns its original
+body-free receipt without applying the save again. The operation binds its scope,
+expected revision, exact text and authenticated publisher principal or key.
+Operation namespaces are separate for each board. A changed request or publisher
+under the same board and operation conflicts. The historical
+receipt does not describe current board state or prove delivery or obedience.
+Version, live pointer, receipt and publisher audit commit in one transaction.
+
+`AccessStore::guidance` returns global and optional explicitly targeted workspace
+guidance in one authorized database snapshot. Global guidance requires a current
+authenticated identity; workspace guidance also requires current context-read
+access. Source, revision, actual publisher, principal and server timestamp are
+separate metadata. The bundle labels CCP precedence as global first, with
+workspace text adding compatible detail. Host instructions and actual server
+permissions remain authoritative; board text cannot grant permissions.
+
+Schema 20 adds version, live-head and retained body-free operation tables.
+Existing native content is preserved and is never promoted into guidance.
+A schema-19 server refuses schema 20; rollback requires the complete matching
+pre-upgrade backup and producing software. These are internal storage APIs only.
+HTTP, CLI, MCP, desktop editors, automatic initial/changed delivery and explicit
+stale/unavailable warnings remain subsequent work.

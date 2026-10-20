@@ -9,6 +9,7 @@ use uuid::Uuid;
 mod content;
 mod discovery;
 mod entries;
+mod guidance;
 mod invitations;
 mod keys;
 mod local;

@@ -149,3 +149,13 @@ payload removal, exact replay without recreating entries, current read/write
 checks, cancellation exclusion, genuine schema-18 foreign-key migration, reopen
 without recopy, rollback after a schema-record failure and enforced-FK migration.
 No production payload purge is introduced by these tests or the schema change.
+
+Guidance foundation tests cover live saves, source/precedence metadata, scoped
+publishers, current key revocation, archived-workspace freezes, exact historical
+retries, revision conflicts and explicit empty saves. Nine cases also exercise
+8192-byte UTF-8/control boundaries, immutable history/proofs, injected transaction
+failures, corrupted published heads, file reopen and independent stale writers.
+Migration failure also rolls back all new guidance tables and retains the old
+schema record and workspace data before a successful retry.
+These test the internal store; automatic guidance delivery and editors remain
+subsequent work.

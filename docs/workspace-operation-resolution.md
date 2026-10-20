@@ -123,9 +123,9 @@ Server schema 17 adds body-free cancellation records while retaining schema-16
 content, versions, receipts, identity and trust material. Keep a complete protected
 pre-upgrade backup; a schema-16 server refuses schema 17, and rollback uses the
 matching whole backup and software. Backup restoration can also roll back the
-operation ledger. Future payload purge must preserve body-free terminal records
-before removing version-backed receipts; this slice implements no purge or
-cleanup worker. Current schema 18 also adds separate
+operation ledger. Future payload purge must retain body-free terminal records
+while removing payloads; this slice implements no purge or cleanup worker.
+Schema 18 also adds separate
 [shelf lifecycle records](workspace-content.md#recover-a-whole-shelf); a schema-17
 server refuses that schema. Schema 19 makes entry receipts independent of
 version-row foreign keys, preserves their body-free proof and protects them

@@ -117,7 +117,7 @@ fn failed_schema_record_rolls_back_table_rebuild_and_guards_before_a_successful_
     let before = get(&mut f, entry);
     let rows = ledger(&f.connection);
     schema18(&mut f);
-    f.connection.execute_batch("CREATE TRIGGER fail_schema19 BEFORE INSERT ON schema_version WHEN NEW.version=19 BEGIN SELECT RAISE(ABORT,'fixture schema fault'); END;").unwrap();
+    f.connection.execute_batch(&format!("CREATE TRIGGER fail_schema_record BEFORE INSERT ON schema_version WHEN NEW.version={} BEGIN SELECT RAISE(ABORT,'fixture schema fault'); END;", crate::init::SCHEMA_VERSION)).unwrap();
     drop(f.connection);
     assert!(crate::init::init_sqlite(&path).is_err());
     f.connection = Connection::open(&path).unwrap();
@@ -134,7 +134,7 @@ fn failed_schema_record_rolls_back_table_rebuild_and_guards_before_a_successful_
     assert_eq!(f.connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('ccp_immutable_content_operation','ccp_retain_content_operation','ccp_validate_content_operation')",[],|r|r.get::<_,u32>(0)).unwrap(),0);
     assert_eq!(f.connection.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name IN ('ccp_cancellation_excludes_own_commit','ccp_operation_excludes_own_cancellation')",[],|r|r.get::<_,u32>(0)).unwrap(),2);
     f.connection
-        .execute_batch("DROP TRIGGER fail_schema19")
+        .execute_batch("DROP TRIGGER fail_schema_record")
         .unwrap();
     drop(f.connection);
     crate::init::init_sqlite(&path).unwrap();
