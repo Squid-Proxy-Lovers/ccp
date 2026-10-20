@@ -38,6 +38,7 @@ BEGIN SELECT RAISE(ABORT, 'content versions are immutable'); END;
 CREATE TRIGGER IF NOT EXISTS ccp_immutable_entry_identity
 BEFORE UPDATE OF id,workspace_id,book_id,name,owner_client_id,created_at ON ccp_content_entries
 BEGIN SELECT RAISE(ABORT, 'entry identity and ownership are immutable'); END;
+-- Body-free historical proof survives later payload/version removal.
 CREATE TABLE IF NOT EXISTS ccp_content_operations (
     workspace_id TEXT NOT NULL,
     operation_id TEXT NOT NULL,
@@ -45,8 +46,18 @@ CREATE TABLE IF NOT EXISTS ccp_content_operations (
     actor_id TEXT NOT NULL,
     request_hash BLOB NOT NULL CHECK(length(request_hash)=32),
     entry_id TEXT NOT NULL,
-    revision INTEGER NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision > 0),
     PRIMARY KEY(workspace_id, operation_id),
-    FOREIGN KEY(entry_id, revision, workspace_id)
-        REFERENCES ccp_content_versions(entry_id, revision, workspace_id) ON DELETE RESTRICT
+    FOREIGN KEY(workspace_id) REFERENCES ccp_workspaces(id) ON DELETE RESTRICT
 );
+CREATE TRIGGER IF NOT EXISTS ccp_immutable_content_operation
+BEFORE UPDATE ON ccp_content_operations
+BEGIN SELECT RAISE(ABORT, 'content operation receipts are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS ccp_retain_content_operation
+BEFORE DELETE ON ccp_content_operations
+BEGIN SELECT RAISE(ABORT, 'content operation receipts must be retained'); END;
+CREATE TRIGGER IF NOT EXISTS ccp_validate_content_operation
+BEFORE INSERT ON ccp_content_operations
+WHEN NOT EXISTS(SELECT 1 FROM ccp_content_versions v
+    WHERE v.entry_id=NEW.entry_id AND v.revision=NEW.revision AND v.workspace_id=NEW.workspace_id)
+BEGIN SELECT RAISE(ABORT, 'content receipt requires a matching committed version'); END;

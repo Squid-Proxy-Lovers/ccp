@@ -16,6 +16,7 @@ mod content;
 mod entry;
 mod invitation;
 mod model;
+mod operation_ledger;
 mod provisioning;
 mod recovery;
 mod store;
@@ -67,6 +68,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(include_str!("content.sql"))?;
     transaction.execute_batch(include_str!("entry.sql"))?;
+    operation_ledger::migrate(transaction)?;
     transaction.execute_batch(include_str!("operation_resolution.sql"))?;
     transaction.execute_batch(include_str!("shelf_lifecycle.sql"))?;
     let has_key_audit = transaction

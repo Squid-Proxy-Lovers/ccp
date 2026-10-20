@@ -127,5 +127,8 @@ operation ledger. Future payload purge must preserve body-free terminal records
 before removing version-backed receipts; this slice implements no purge or
 cleanup worker. Current schema 18 also adds separate
 [shelf lifecycle records](workspace-content.md#recover-a-whole-shelf); a schema-17
-server refuses that schema. No power-loss, deployment or throughput guarantee
-is claimed.
+server refuses that schema. Schema 19 makes entry receipts independent of
+version-row foreign keys, preserves their body-free proof and protects them
+against UPDATE and DELETE. A schema-18 server refuses schema 19; keep the whole
+matching pre-upgrade backup. No payload purge or new resolution permission is
+introduced. No power-loss, deployment or throughput guarantee is claimed.

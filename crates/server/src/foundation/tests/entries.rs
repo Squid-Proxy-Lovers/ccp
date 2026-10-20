@@ -4,6 +4,7 @@
 
 use super::*;
 
+mod ledger;
 mod lifecycle;
 mod ownership;
 mod persistence;

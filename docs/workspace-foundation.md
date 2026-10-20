@@ -12,7 +12,9 @@ client-owned entries, immutable versions and recoverable entry archives there.
 Schema 17 adds [body-free operation resolution](workspace-operation-resolution.md)
 for the original client after renewal or recovery. Schema 18 adds internal
 [shelf archive/restore](workspace-content.md#recover-a-whole-shelf) lifecycle
-revisions and exact admin retry receipts. Verified legacy content conversion
+revisions and exact admin retry receipts. Schema 19 makes entry-operation
+receipts a retained body-free ledger independent of version rows. It prepares
+future purge safety without deleting content. Verified legacy content conversion
 remains subsequent work.
 See [instance TLS setup](instance-tls-identity.md) for its separate private
 bundle. The existing native mTLS client protocol and CLI remain in service in

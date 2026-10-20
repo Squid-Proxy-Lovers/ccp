@@ -141,6 +141,22 @@ The store retains all shelf and descendant data. This operation starts no timed
 cleanup, permanent purge or book-deletion workflow. Associated boards and status
 are not yet implemented; their later associations need an explicit contract.
 
+## Retain operation proof independently of payloads
+
+Entry-operation receipts contain actor, nonce, request hash, entry UUID and result
+revision, with no content. Schema 19 removes their foreign key to version rows
+while preserving each receipt. The ledger remains workspace-bound and rejects
+UPDATE and DELETE. New receipt inserts still require a matching committed
+version in the same workspace through an insertion trigger. Future payload purge must retain these records so an old
+uncertain create or append cannot be executed again after its body disappears.
+
+An exact receipt is historical proof, not proof that the entry still has readable
+content. A current writer's exact retry returns the original body-free receipt;
+[current own-client resolution](workspace-operation-resolution.md) still requires
+current read access and the original binding. Current revocation, identity and
+cancellation checks stay in force. This migration does not delete any entry,
+version, archive or history and adds no purge endpoint or cleanup timer.
+
 ## Schema and legacy data
 
 Schema 15 adds `ccp_content_shelves` and `ccp_content_books`; schema 16 adds
@@ -148,7 +164,8 @@ entries, immutable versions and operation receipts. Schema 17 adds permanent
 body-free [client operation resolution fences](workspace-operation-resolution.md).
 Schema 18 adds shelf lifecycle revisions and immutable body-free transition
 receipts, backfilling existing shelves at revision 1 with their archive bits
-preserved. These additions leave native
+preserved. Schema 19 retains entry-operation receipts independently of entry
+version rows, with direct workspace references and immutable update/delete guards. These additions leave native
 session payload, history, archives and journal storage intact. Instance identities,
 CA material, admin keys, grants and client profiles retain their existing formats.
 Native wire protocol 1 and workspace JSON API 1 are unchanged.
@@ -163,8 +180,8 @@ Do not activate workspace mode for legacy content yet: activation blocks native
 access and has no in-place deactivation. See the
 [activation and backup boundary](workspace-runtime-mode.md#explicit-workspace-activation).
 
-Keep a complete protected backup before upgrading. A schema-17 binary refuses
-schema 18; rollback uses the matching whole pre-upgrade backup and its
+Keep a complete protected backup before upgrading. A schema-18 binary refuses
+schema 19; rollback uses the matching whole pre-upgrade backup and its
 producing software. Do not lower the version or discard new tables to force an
 older server to open it. No power-loss, throughput or full-content migration claim
 is made by this storage foundation.

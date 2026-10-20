@@ -143,3 +143,9 @@ drop unknown response additions before typed output. Real CLI/TLS and MCP flows
 check active-list omission, archive metadata privacy/paging, restoration without
 ownership/history changes, due renewal versus denied reads, pending-intent
 preservation, scoped recovery and global disable without permission union.
+
+Operation-ledger tests verify receipt immutability and retention after test-only
+payload removal, exact replay without recreating entries, current read/write
+checks, cancellation exclusion, genuine schema-18 foreign-key migration, reopen
+without recopy, rollback after a schema-record failure and enforced-FK migration.
+No production payload purge is introduced by these tests or the schema change.
