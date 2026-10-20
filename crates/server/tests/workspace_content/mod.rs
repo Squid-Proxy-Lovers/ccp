@@ -8,6 +8,7 @@ mod boundaries;
 mod lifecycle;
 mod ownership;
 mod resolution;
+mod shelves;
 
 struct User {
     client: Client,

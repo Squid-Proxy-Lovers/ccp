@@ -6,7 +6,9 @@
 use serde::{Deserialize, Serialize};
 
 mod fingerprint;
+mod shelves;
 pub use fingerprint::fingerprint_bytes;
+pub use shelves::{ArchivedShelf, ShelfState, ShelfTransition, ShelfTransitionReceipt};
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

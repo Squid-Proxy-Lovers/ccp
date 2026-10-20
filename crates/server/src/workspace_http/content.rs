@@ -14,13 +14,19 @@ use protocol::workspace::content as api;
 mod entries;
 mod nodes;
 mod project;
+mod shelves;
+
+pub(super) const SHELF_TRANSITION_PATH: &str = "/api/v1/admin/content/shelves/transition";
 
 pub(super) const MUTATION_PATH: &str = "/api/v1/content/entries/mutate";
 
 pub(super) fn handles(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/content/shelves/create"
+        SHELF_TRANSITION_PATH
+            | "/api/v1/content/shelves/state"
+            | "/api/v1/content/shelves/archived"
+            | "/api/v1/content/shelves/create"
             | "/api/v1/content/shelves/get"
             | "/api/v1/content/shelves/list"
             | "/api/v1/content/books/create"
@@ -34,6 +40,10 @@ pub(super) fn handles(path: &str) -> bool {
     )
 }
 
+pub(super) fn client_handles(path: &str) -> bool {
+    path != SHELF_TRANSITION_PATH && handles(path)
+}
+
 pub(super) fn dispatch(
     store: &mut AccessStore<'_>,
     actor: Actor,
@@ -44,6 +54,9 @@ pub(super) fn dispatch(
         return Err(Error::Method);
     }
     match input.path.as_str() {
+        SHELF_TRANSITION_PATH => shelves::transition(store, actor, input, now),
+        "/api/v1/content/shelves/state" => shelves::state(store, actor, input, now),
+        "/api/v1/content/shelves/archived" => shelves::archived(store, actor, input, now),
         MUTATION_PATH => entries::mutate(store, actor, input, now),
         "/api/v1/content/entries/get" => entries::get(store, actor, input, now),
         "/api/v1/content/entries/list" => entries::list(store, actor, input, now),

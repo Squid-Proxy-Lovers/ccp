@@ -16,7 +16,8 @@ and guarded entry mutations. The human panel remains later work. Native commands
 Use the mandatory-mTLS listener with a registered client's valid certificate and
 key. Its current workspace grant determines access. Do not send an Authorization
 header there. Use the separate HTTPS listener with an admin bearer key for
-administration. Both listeners use the same content routes and store checks. The client
+administration. Both listeners expose authenticated content reads and entry actions
+through the same store checks. Shelf transitions are admin HTTPS only. The client
 self-service `entries/resolve-operation` route requires mTLS client identity;
 admin keys receive 403 for that operation.
 An instance-wide admin key can read all workspaces but cannot create or edit
@@ -53,6 +54,8 @@ All paths below start with `/api/v1/content/`. Each request includes
 | `books/create` | `shelf_id`, `name`, `description` | Book |
 | `shelves/get`, `books/get` | `node_id` | Shelf or book |
 | `shelves/list` | Optional `after`, `limit` | `items`, `next_cursor` |
+| `shelves/state` | `node_id` | Current shelf ID, workspace, lifecycle revision and archive state |
+| `shelves/archived` | Optional `after`, `limit` | Safe shelf-summary `items`, `next_cursor` |
 | `books/list` | `shelf_id`; optional `after`, `limit` | `items`, `next_cursor` |
 | `entries/get` | `entry_id`; optional `revision` | Entry snapshot |
 | `entries/list` | `book_id`, `archived`; optional `after`, `limit` | Summary `items`, `next_cursor` |
@@ -147,11 +150,65 @@ original book causes a conflict and is never replaced. Resolve that collision
 separately before retrying the uncommitted restore operation.
 
 Archived workspaces remain readable, including archive summaries, but reject all
-content mutations and operation replay. Whole-shelf lifecycle, permanent purge,
-optional timed retention and verified legacy conversion are subsequent work.
+content mutations and operation replay. Permanent purge, optional timed retention
+and verified legacy conversion remain subsequent work.
 No cleanup worker starts in this slice. Workspaces mapped from native sessions
 return `content_conversion_required` until their journal-aware conversion exists;
 continue using the original native data under the [mode rules](workspace-runtime-mode.md).
+
+## Archive or restore a shelf
+
+Use an authorized workspace owner/admin key on the HTTPS listener. POST to
+`/api/v1/admin/content/shelves/transition`; it is unavailable on client mTLS,
+including for ordinary writers. Global instance keys cannot borrow workspace
+archive-management powers. The workspace must be active.
+
+First read `/api/v1/content/shelves/state` with `workspace_id` and `node_id` for
+its current lifecycle revision. Current readers and scoped admins can read
+state and page `/api/v1/content/shelves/archived`; global admins can read across
+workspaces. Summaries include only ID, workspace, name, lifecycle revision and
+creation time, with no descriptions or descendant content. Pages default to 32,
+accept 1–32, and use UUID `after` cursors.
+
+Choose an operation UUID once. Save this request in `content-request.json`,
+replacing the illustrative IDs and revision:
+
+```json
+{
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "shelf_id": "22222222-2222-4222-8222-222222222222",
+  "operation_id": "33333333-3333-4333-8333-333333333333",
+  "expected_revision": 1,
+  "archived": true
+}
+```
+
+Use the same verified CA and private header file from the setup above:
+
+```bash
+curl --cacert ./ccp-ca.pem --header @owner-auth-header.txt \
+  --header 'Content-Type: application/json' \
+  --data-binary @content-request.json \
+  https://127.0.0.1:8443/api/v1/admin/content/shelves/transition
+```
+
+The `data` contains `operation_id` and a body-free `result`: `shelf_id`,
+`workspace_id`, lifecycle `revision` and `archived`. To restore, deliberately
+choose a new operation UUID, use the current lifecycle revision and set
+`archived` false. Entry revisions are independent of shelf lifecycle revisions.
+Archive hides descendants together while preserving IDs, ownership, metadata,
+history and individual archive state. Restore leaves individually archived
+entries archived. An active same-name shelf causes a conflict without renaming,
+overwriting or partially restoring anything.
+
+After a lost response, preserve the exact original key and request. An authorized
+exact retry returns its historical receipt without reapplying, even after a later
+operation changed visibility. The receipt does not prove current shelf state;
+fetch state separately. Changing the original key, shelf, revision or desired
+state under that UUID conflicts. Revoked authority also blocks retries. Reading
+current state does not prove which uncertain operation produced it. Do not
+blindly replace a retry's UUID or revision. Bounds stay 64 KiB encoded requests
+and 1 MiB responses. This operation does not purge payloads or start timed cleanup.
 
 ## Bounds and failures
 

@@ -20,7 +20,9 @@ native mode. The separate [workspace HTTPS API](workspace-http-api.md)
 now exposes a limited TLS-only invitation/enrollment/discovery surface; browser
 login and the workspace panel remain later work.
 [Content endpoints](workspace-content-http.md) expose hierarchy and entry actions;
-shelf archive/restore currently remains an internal API.
+[Shelf archive/restore](workspace-content-http.md#archive-or-restore-a-shelf) is
+also exposed through scoped admin HTTPS, with state/archive summaries available
+to current readers.
 
 ## Database upgrade
 

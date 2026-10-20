@@ -109,7 +109,9 @@ slice starts no cleanup worker.
 The internal `transition_shelf` API archives or restores an explicit shelf UUID.
 It requires a currently authorized workspace owner/admin under `ManageArchives`
 in an active workspace. Ordinary writers and global admin keys cannot do this.
-HTTP, CLI, MCP and panel commands for this operation are subsequent work.
+The [HTTPS adapter](workspace-content-http.md#archive-or-restore-a-shelf) exposes
+this operation to scoped admins, plus state/summary reads for current readers.
+CLI, MCP and panel shelf-management commands remain subsequent work.
 
 Archive changes the parent shelf's visibility in one transaction. Its books,
 entries, ownership, metadata, versions and entry-operation receipts stay intact.

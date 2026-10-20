@@ -6,7 +6,8 @@ discovery, existing-client admission, credential renewal and targeted recovery.
 Initial [client trust/profiles, enrollment and discovery](workspace-client.md)
 are connected, along with client lifecycle, explicit selections and workspace MCP
 metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
-entries and revisions on both authenticated listeners. The normal client now
+entries, revisions and shelf state/archive summaries on both authenticated
+listeners, plus shelf transitions on admin HTTPS. The normal client now
 supports [content reads](workspace-content-client.md) and
 [entry mutations](workspace-content-mutations.md). The [workspace MCP bridge](workspace-mcp.md)
 exposes content reads, shelf/book creation and guarded entry mutations. Browser login
@@ -69,6 +70,8 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
 | HTTPS | `POST /api/v1/admin/workspaces/create` or `/first-owner` | Current instance key; atomic workspace/first-owner key provisioning |
 | HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |
+| HTTPS | `POST /api/v1/admin/content/shelves/transition` | Current scoped workspace owner/admin key; exact revision-bound shelf archive/restore |
+| HTTPS or client mTLS | `POST /api/v1/content/shelves/state` or `/archived` | Current workspace read authority; body-free state or safe paged archived-shelf summaries |
 | HTTPS | `POST /api/v1/admin/workspaces/archive` or `/reactivate` | Current workspace owner or instance key; recoverable lifecycle change |
 | HTTPS | `POST /api/v1/admin/grants/revoke` | Current owner/admin key for the grant's workspace; terminal membership revocation |
 | HTTPS | `POST /api/v1/admin/clients/disable` | Current instance key; disables a client across the instance |

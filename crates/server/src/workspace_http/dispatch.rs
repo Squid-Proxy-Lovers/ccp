@@ -152,7 +152,7 @@ fn client(
     if !matches!(
         input.path.as_str(),
         "/api/v1/workspaces" | "/api/v1/admissions" | "/api/v1/credentials/renew"
-    ) && !content::handles(&input.path)
+    ) && !content::client_handles(&input.path)
     {
         return Err(Error::NotFound);
     }
@@ -190,7 +190,7 @@ fn client(
     let actor = store
         .authenticate_peer(&peer, now)
         .map_err(|error| response::operation(error, Error::Forbidden))?;
-    if content::handles(&input.path) {
+    if content::client_handles(&input.path) {
         return content::dispatch(store, actor, &input, now);
     }
     match (input.method, input.path.as_str()) {

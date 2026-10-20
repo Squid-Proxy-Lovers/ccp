@@ -131,4 +131,8 @@ reads/history/writes, preserved ownership and individual archives, revision CAS,
 exact historical replay, name collisions and injected audit/receipt failures.
 They also check archive-summary paging, current key revocation, legacy refusal,
 schema-17 backfill, file reopen and independent stale database writers. Shelf
-HTTP/CLI/MCP adapters and payload purge remain subsequent work.
+CLI/MCP adapters and payload purge remain subsequent work.
+Six additional shelf HTTP cases use real HTTPS/mTLS to cover scoped transitions,
+historical retries, restore collisions, storage rollback, metadata privacy,
+current revocation/archive/disable, strict request types, listener separation,
+paging and unchanged body bounds.

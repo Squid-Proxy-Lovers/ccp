@@ -47,7 +47,7 @@ the other guides describe the supported native interface.
 | Create shelves/books and read workspace entries and history through the normal client | [Workspace content client](workspace-content-client.md) |
 | Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |
 | Resolve an uncertain client entry operation after renewal or recovery | [Operation resolution](workspace-operation-resolution.md) |
-| Read and edit unreleased workspace content through authenticated HTTPS | [Workspace content HTTP](workspace-content-http.md) |
+| Read, edit and archive unreleased workspace content through authenticated HTTPS | [Workspace content HTTP](workspace-content-http.md) |
 | Understand workspace hierarchy, ownership, revisions, shelf recovery and its legacy boundary | [Workspace content foundation](workspace-content.md) |
 | Understand atomic first-owner appointment and initial key delivery | [Initial workspace owners](initial-workspace-owners.md) |
 | Understand unreleased scoped-key authentication | [Workspace admin keys](workspace-admin-keys.md) |
