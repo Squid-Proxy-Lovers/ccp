@@ -5,7 +5,7 @@ UUID to read shelves, books, entries and their history. These unreleased command
 use the authenticated [content HTTPS API](workspace-content-http.md). Entry
 mutations have their own [client guide](workspace-content-mutations.md).
 The client also creates shelves and books. The [workspace MCP bridge](workspace-mcp.md)
-exposes these reads and shelf/book creation with explicit scopes. MCP entry mutations are later work.
+exposes these reads, shelf/book creation and guarded entry mutations with explicit scopes.
 
 [Documentation index](README.md) · [Caller selections](workspace-selection.md) ·
 [Content ownership and revisions](workspace-content.md)

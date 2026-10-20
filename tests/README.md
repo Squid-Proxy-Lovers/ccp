@@ -62,8 +62,11 @@ and archived entry rules, large escaped snapshots and scoped recovery without
 authority union. CI runs both across supported Python/FastMCP combinations.
 It also runs private-file shelf/book creation through MCP, including pending
 entry guards, exact explicit targets across default changes, current denials,
-recovery isolation and temporary-file cleanup. MCP entry mutation tools remain
-later work.
+recovery isolation and temporary-file cleanup. Entry tests exercise all five
+actions, safe metadata projections, exact guarded retry after local save failure,
+read-only cancellation, large private payloads, recovered-profile resolution and
+refusal of stale CLI guards before action. SDK input/error privacy checks cover
+both creation and entry-intent envelopes.
 
 The compatibility smoke enrolls clients, verifies the existing wire codec,
 reads/appends context, and reopens persisted data. For a dependency update, test

@@ -6,7 +6,7 @@ These unreleased library and CLI operations create, append, revise, archive and
 restore entries through the [content HTTPS API](workspace-content-http.md).
 Use [shelf/book creation](workspace-content-client.md#create-shelves-and-books)
 to prepare the hierarchy. The [workspace MCP bridge](workspace-mcp.md) exposes
-content reads and shelf/book creation; MCP entry mutations remain later work.
+content reads, shelf/book creation and [entry-intent/outcome tools](workspace-mcp.md#edit-entries-and-recover-outcomes).
 
 [Documentation index](README.md) · [Ownership and revisions](workspace-content.md) ·
 [Server operation resolution](workspace-operation-resolution.md)
@@ -115,6 +115,15 @@ These controls do not accept a new body, revision or nonce. A cancellation or
 binding conflict is terminal locally and returns an error from mutation/resume;
 inspect current state before explicitly deciding on another operation. Network,
 authorization, malformed-response and persistence failures retain uncertain state.
+
+For shared-profile automation, `resume` and `resolve` also accept an optional
+expected binding. Supply all four flags together: `--workspace-id`,
+`--operation-id`, `--credential-id`, `--request-hash`. The values come from the
+original operation metadata. They are checked against the current pending or
+most recent terminal binding while the profile lease is held, before any request
+or recovery-profile opening. A stale/mismatched or partial guard fails. Existing
+operator invocations without these flags keep their current profile-slot behaviour;
+the MCP controls always supply a complete guard and never fall back without it.
 
 While content is pending, normal authorized reads remain available. Automatic
 renewal pauses, and explicit renewal, admission and other credential transitions

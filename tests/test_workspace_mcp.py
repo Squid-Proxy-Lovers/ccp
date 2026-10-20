@@ -25,14 +25,15 @@ from ccp_mcp_server.workspace_content import (
 )
 from ccp_mcp_server.workspace_process import WorkspaceProcess
 from ccp_mcp_server.workspace_runtime import WorkspaceRuntime
+from ccp_mcp_server.workspace_validation import WorkspaceValidationMiddleware
 from ccp_mcp_server.workspace_write import (
     BookDraft,
     ShelfDraft,
-    WorkspaceValidationMiddleware,
     WorkspaceWriteTools,
 )
 from fastmcp import Client
 from fastmcp.exceptions import ToolError, ValidationError
+from workspace_entry_tests import WorkspaceEntryTests as WorkspaceEntryTests
 
 
 class WorkspaceConfigurationTests(unittest.TestCase):
@@ -265,7 +266,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 17)
+                self.assertEqual(len(tools), 21)
                 self.assertTrue(
                     {
                         "workspace_profiles",

@@ -76,6 +76,15 @@ class WorkspaceRuntime:
         arguments = ("content", "--profile", str(self.profile(alias)), action)
         return await self.process.run_input(self.root, payload, arguments)
 
+    async def control(self, alias: str, action: str, arguments: tuple[str, ...]) -> Any:
+        return await self.process.run(
+            "content",
+            "--profile",
+            str(self.profile(alias)),
+            action,
+            *arguments,
+        )
+
     async def explicit_target(self, alias: str, workspace: str) -> Any:
         return await self.process.run(
             "selection",

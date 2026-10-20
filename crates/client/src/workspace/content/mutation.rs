@@ -115,6 +115,21 @@ impl State {
 }
 
 impl WorkspaceProfile {
+    fn require_expected_operation(
+        &self,
+        expected: &wire::ResolveEntryOperation,
+    ) -> anyhow::Result<()> {
+        let binding = self.content_binding()?;
+        if binding.workspace_id != expected.workspace_id
+            || binding.operation_id != expected.operation_id
+            || binding.credential_id != expected.credential_id
+            || binding.request_hash != expected.request_hash
+        {
+            bail!("saved entry intent differs from the expected binding; no request was sent");
+        }
+        Ok(())
+    }
+
     pub(crate) fn require_no_content_pending(&self) -> anyhow::Result<()> {
         if self.content_state.is_pending() {
             bail!(

@@ -6,7 +6,7 @@ entry archives. The [authenticated HTTP adapter](workspace-content-http.md) now
 exposes this store. The [normal client](workspace-content-client.md) now supports
 content reads, shelf/book creation and [entry mutations](workspace-content-mutations.md).
 The [workspace MCP bridge](workspace-mcp.md) also returns content reads alongside
-metadata, selections and shelf/book creation; MCP entry mutations follow later.
+metadata, selections, shelf/book creation and guarded entry mutations.
 
 [Documentation index](README.md) · [Workspace access](workspace-foundation.md) ·
 [Workspace MCP](workspace-mcp.md)

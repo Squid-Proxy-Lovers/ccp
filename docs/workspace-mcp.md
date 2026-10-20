@@ -3,7 +3,8 @@
 This unreleased stdio bridge connects an agent host to configured workspace
 client profiles. It exposes current workspace metadata and explicit caller
 selections, shelves, books, entries and revision history, plus shelf/book creation.
-Entry mutations, boards, status and the browser panel remain later work. The supported native
+It also exposes durable entry mutations and guarded outcome controls.
+Boards, status and the browser panel remain later work. The supported native
 `ccp-mcp-server` entry point stays available.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md) ·
@@ -158,7 +159,7 @@ historical-body and history reads fail while that entry is archived. An archived
 workspace remains readable to authorized clients. Current revocation and global
 disable still apply. The [client content guide](workspace-content-client.md)
 explains response validation, bounded snapshots and renewal; creation and durable
-entry writes remain available through that CLI; the MCP creation tools below
+entry writes and outcome controls are described below. The creation tools
 prepare shelves and books.
 
 ## Create shelves and books
@@ -204,6 +205,77 @@ to retry. Use `workspace_profile` to inspect pending-entry metadata when a share
 profile blocks a new operation. Successful node metadata includes descriptions;
 errors and partial stdout do not expose payloads, child stderr or private paths.
 
+## Edit entries and recover outcomes
+
+Use matching client and MCP builds. These four tools share the client's
+[durable entry-intent contract](workspace-content-mutations.md). Every mutation
+names an explicit workspace and caller-chosen operation UUID. Retain that UUID,
+request and expected revision for retries; the bridge never invents replacements.
+An `agent` name is attribution; the registered client owns the entry.
+
+| Tool | Arguments and result |
+| --- | --- |
+| `workspace_mutate_entry` | `profile`, typed `request`; returns workspace, receipt in `data`, ready-to-copy `target` |
+| `workspace_entry_pending` | `profile`; returns body-free `pending`, `last` and a `target` for pending, otherwise the most recent terminal intent |
+| `workspace_entry_resume` | `profile`, original `target`; retries/resolves only that saved binding |
+| `workspace_entry_resolve` | `profile`, original `target`, optional configured `via_profile` alias; proves commit or cancels an uncommitted intent |
+
+For example, call `workspace_mutate_entry` with your actual identifiers and a
+UUID chosen once for this append. These identifiers are illustrative:
+
+```json
+{
+  "profile": "office",
+  "request": {
+    "workspace_id": "00000000-0000-4000-8000-000000000002",
+    "operation_id": "00000000-0000-4000-8000-000000000004",
+    "agent": "research agent",
+    "change": {
+      "action": "append",
+      "entry_id": "00000000-0000-4000-8000-000000000003",
+      "expected_revision": 2,
+      "text": "\nAdditional finding."
+    }
+  }
+}
+```
+
+`change.action` selects `create`, `append`, `revise`, `archive` or `restore`.
+Fields match the [action table](workspace-content-mutations.md#choose-an-action).
+Create/revise content requires `text`; omitted `description` and `labels` become
+empty. Append text must be nonempty. Text is at most 256 KiB UTF-8, descriptions
+4096 bytes, at most 32 distinct labels of 128 bytes without control characters,
+and agent/name limits are 256 bytes. Encoded entry requests are at most 2 MiB.
+Unknown fields and identity claims fail before SDK parsing or file staging.
+The client saves the full original intent before POST and checks current permissions.
+
+Use the returned `target` unchanged with resume/resolve. Its four fields are
+`workspace_id`, `operation_id`, original `credential_id` and `request_hash`.
+They identify the saved intent and do not authenticate it. The Rust client checks
+all four under the same exclusive profile lease used by the operation, before
+network requests, renewal or opening another recovery profile. If another intent
+has replaced it in a shared profile, the call fails. No unguarded fallback is used.
+Check that inspected metadata's operation UUID matches your intended request.
+
+`pending`/`last` expose no body or key and do not prove current authority. The
+profile retains one pending body and one most recent terminal binding. Older
+bindings cannot be controlled through this cache after replacement. A cancelled
+intent is terminal; inspect current state before deliberately choosing another
+UUID/revision. Failures never imply a successful replacement or task completion.
+
+If the original credential expires or loses its grant, resolve through a separate
+configured recovery alias with `via_profile`. The original key and unrelated grants
+stay separate. The replacement must be the same registered client and pinned
+instance/CA with current read access; global disable still wins. The guard is
+checked before the replacement is opened. See [recovery](workspace-recovery.md).
+
+Pending/profile inspection remains available offline. Mutation/resume errors
+return static guidance without partial receipts or body fragments. Preserve the
+original intent and inspect metadata rather than blindly choosing a new nonce or
+expected revision. Temporary input files are cleaned independently of the durable
+Rust pending record; a failed local outcome save or lost MCP response can be
+recovered with the exact returned/inspected target.
+
 ## Scope, lifetime and failures
 
 The server still checks current credential bindings, grants, workspace lifecycle
@@ -226,7 +298,7 @@ or resumed automatically. Existing credential profiles are retained. Unix
 permissions and the [profile storage limits](workspace-client.md#profile-storage-and-recovery-limits)
 apply; Windows ACL and directory durability are not independently verified here.
 
-Creation payloads travel through bridge-generated private files, never argv or
+Content payloads travel through bridge-generated private files, never argv or
 tool-selected paths. A process slot is acquired before staging, limiting active
 request files to eight. On Unix the runtime directory is private and request files
 use mode `0600`. Files are closed before the Rust child opens them and removed
@@ -248,6 +320,6 @@ use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-The bridge exposes 17 tools: eight metadata/selection tools, seven content reads
-and two container creations. It does not mutate entries, publish guidance,
-manage tasks or start a server.
+The bridge exposes 21 tools: eight metadata/selection tools, seven content reads,
+two container creations and four entry-intent/outcome tools. It does not publish
+guidance, manage tasks or start a server.

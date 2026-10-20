@@ -6,40 +6,16 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
-from typing import Any, ClassVar
+from typing import Any
 
-from fastmcp.exceptions import ToolError, ValidationError
-from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
+from fastmcp.exceptions import ToolError
 
+from .workspace_payload import StrictRequest, bounded_text, encode_request
 from .workspace_runtime import WorkspaceRuntime
 from .workspace_values import canonical_uuid, object_result
 
 MAX_REQUEST = 64 * 1024
-
-
-class WorkspaceValidationMiddleware(Middleware):
-    async def on_call_tool(
-        self, context: MiddlewareContext[Any], call_next: CallNext[Any, Any]
-    ) -> Any:
-        try:
-            validate_creation_arguments(context.message.name, context.message.arguments)
-            return await call_next(context)
-        except (ValueError, ValidationError):
-            # FastMCP 2 raises Pydantic's ValueError subclass; 4 wraps it.
-            # The outer callable's error formatting can ignore nested config.
-            raise ToolError(
-                "invalid workspace tool arguments; check the schema and original targets"
-            ) from None
-
-
-def bounded_text(value: str, limit: int) -> None:
-    try:
-        if len(value) > limit or len(value.encode("utf-8")) > limit:
-            raise ValueError("bound")
-    except (ValueError, UnicodeError):
-        raise ToolError("workspace request text is invalid or exceeds its byte limit") from None
 
 
 def node_input(workspace: str, name: str, description: str) -> None:
@@ -53,24 +29,7 @@ def node_input(workspace: str, name: str, description: str) -> None:
 
 
 def encode(payload: dict[str, Any]) -> bytes:
-    try:
-        data = json.dumps(
-            payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")
-        ).encode("utf-8")
-    except (ValueError, TypeError, UnicodeError):
-        raise ToolError("invalid workspace creation request") from None
-    if len(data) > MAX_REQUEST:
-        raise ToolError("encoded workspace creation request exceeds 64 KiB")
-    return data
-
-
-class StrictRequest:
-    # Standard dataclasses retain this documented Pydantic configuration when
-    # FastMCP validates them. Avoid echoing input values in validation messages.
-    __pydantic_config__: ClassVar[dict[str, Any]] = {
-        "extra": "forbid",
-        "hide_input_in_errors": True,
-    }
+    return encode_request(payload, MAX_REQUEST)
 
 
 @dataclass(frozen=True)

@@ -15,9 +15,11 @@ from fastmcp.exceptions import ToolError
 
 from .workspace_config import environment_config
 from .workspace_content import WorkspaceContentTools
+from .workspace_entry import WorkspaceEntryTools
 from .workspace_runtime import WorkspaceRuntime
+from .workspace_validation import WorkspaceValidationMiddleware
 from .workspace_values import canonical_uuid, object_result
-from .workspace_write import WorkspaceValidationMiddleware, WorkspaceWriteTools
+from .workspace_write import WorkspaceWriteTools
 
 
 @dataclass(frozen=True)
@@ -117,7 +119,11 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
             "or scope.selection_id for its default and return the resolved workspace_id with data. "
             "Each read targets one workspace and does not change selections. "
             "Creation requests require an explicit workspace_id; resolve a default once and "
-            "retain that UUID. Creation has no receipt or automatic retry; inspect the original parent after uncertainty."
+            "retain that UUID. Shelf/book creation has no receipt or automatic retry; "
+            "inspect the original parent after uncertainty. Entry mutations require an explicit "
+            "operation UUID and expected revision; retain the exact intent. After uncertainty, "
+            "inspect entry pending metadata, match its operation to your intent and pass its "
+            "unchanged target to resume or resolve. Never generate a replacement retry UUID or revision."
         ),
     )
     tools = WorkspaceTools(runtime)
@@ -140,6 +146,11 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     writes = WorkspaceWriteTools(runtime)
     mcp.tool(writes.workspace_create_shelf)
     mcp.tool(writes.workspace_create_book)
+    entries = WorkspaceEntryTools(runtime)
+    mcp.tool(entries.workspace_mutate_entry)
+    mcp.tool(entries.workspace_entry_pending)
+    mcp.tool(entries.workspace_entry_resume)
+    mcp.tool(entries.workspace_entry_resolve)
     return mcp
 
 

@@ -5,8 +5,8 @@ entries. Start the [workspace HTTPS server](workspace-http-api.md#prepare-and-st
 and verify its instance CA first. The normal workspace client CLI and workspace
 MCP bridge expose access and selections; the [normal client](workspace-content-client.md)
 now also supports content reads and [entry mutations](workspace-content-mutations.md).
-The [workspace MCP bridge](workspace-mcp.md) also supports content reads and shelf/book creation.
-MCP entry mutations and the human panel remain later work. Native commands keep their native-mode API.
+The [workspace MCP bridge](workspace-mcp.md) also supports content reads, shelf/book creation
+and guarded entry mutations. The human panel remains later work. Native commands keep their native-mode API.
 
 [Documentation index](README.md) · [Content storage and ownership](workspace-content.md) ·
 [Workspace HTTPS setup](workspace-http-api.md)

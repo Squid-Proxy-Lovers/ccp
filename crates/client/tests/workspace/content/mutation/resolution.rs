@@ -5,7 +5,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
-fn stage(f: &Fixture, request: &api::EntryMutation) {
+pub(super) fn stage(f: &Fixture, request: &api::EntryMutation) {
     let info = WorkspaceProfile::open(&f.profile).unwrap().info().unwrap();
     let hash = format!(
         "{:x}",

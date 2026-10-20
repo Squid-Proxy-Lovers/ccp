@@ -303,6 +303,42 @@ fn maximum_escaped_payload_and_terminal_receipt_consistency_are_preserved() {
     fs::remove_dir_all(dir).unwrap();
 }
 
+#[test]
+fn expected_binding_checks_pending_and_terminal_without_changing_either_record() {
+    let (dir, mut p) = profile();
+    let request = request();
+    let hash = input::validate(&request).unwrap();
+    p.prepare_content(request, hash).unwrap();
+    let target = p.content_binding().unwrap().query();
+    let raw = p.content_state.pending_record.clone();
+    p.require_expected_operation(&target).unwrap();
+    let original = serde_json::to_value(&target).unwrap();
+    for field in [
+        "workspace_id",
+        "operation_id",
+        "credential_id",
+        "request_hash",
+    ] {
+        let mut changed = original.clone();
+        changed[field] = json!(if field == "request_hash" {
+            "f".repeat(64)
+        } else {
+            Uuid::new_v4().to_string()
+        });
+        let expected = serde_json::from_value(changed).unwrap();
+        assert!(p.require_expected_operation(&expected).is_err());
+        assert_eq!(p.content_state.pending_record, raw);
+        assert!(p.content_state.last_record.is_none());
+    }
+    p.finish_content(Terminal::Cancelled).unwrap();
+    let last = p.content_state.last_record.clone();
+    p.require_expected_operation(&target).unwrap();
+    assert_eq!(p.content_state.last_record, last);
+    assert!(p.content_state.pending.is_none());
+    drop(p);
+    fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 async fn via_profile_rejects_other_instances_pins_and_client_identities_before_network_use() {
     let (dir, mut original) = profile();

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::*;
+mod guard;
 mod resolution;
 
 fn request(f: &Fixture, change: api::EntryChange) -> api::EntryMutation {
