@@ -182,4 +182,11 @@ revocation, maximum revision, legacy refusal, immutable purge proof and UUID
 reuse prevention. Abort and ignored-write faults verify rollback of proof,
 payload/history removal and audit. Earlier write receipts/cancellation fences,
 siblings and guidance survive; file reopen, stale independent writers and failed
-schema-21 migration are covered. External purge commands remain subsequent work.
+schema-21 migration are covered. The admin HTTPS adapter is covered below; client/MCP purge commands remain later.
+
+Six purge HTTP cases use actual HTTPS/mTLS to verify explicit confirmation and
+revision conflicts, exact historical receipts, scoped owner/admin authority in
+archived workspaces, current key revocation/demotion, unchanged client powers,
+strict inputs and request budgets, and audit abort/ignore rollback with sanitized
+errors. Original client mutation outcomes remain resolvable after purge without
+recreating payload; sibling content and retained proofs are checked.

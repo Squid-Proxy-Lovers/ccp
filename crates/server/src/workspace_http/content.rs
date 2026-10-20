@@ -14,9 +14,12 @@ use protocol::workspace::content as api;
 mod entries;
 mod nodes;
 mod project;
+mod purge;
 mod shelves;
 
 pub(super) const SHELF_TRANSITION_PATH: &str = "/api/v1/admin/content/shelves/transition";
+
+pub(super) const ENTRY_PURGE_PATH: &str = "/api/v1/admin/content/entries/purge";
 
 pub(super) const MUTATION_PATH: &str = "/api/v1/content/entries/mutate";
 
@@ -24,6 +27,7 @@ pub(super) fn handles(path: &str) -> bool {
     matches!(
         path,
         SHELF_TRANSITION_PATH
+            | ENTRY_PURGE_PATH
             | "/api/v1/content/shelves/state"
             | "/api/v1/content/shelves/archived"
             | "/api/v1/content/shelves/create"
@@ -41,7 +45,7 @@ pub(super) fn handles(path: &str) -> bool {
 }
 
 pub(super) fn client_handles(path: &str) -> bool {
-    path != SHELF_TRANSITION_PATH && handles(path)
+    !matches!(path, SHELF_TRANSITION_PATH | ENTRY_PURGE_PATH) && handles(path)
 }
 
 pub(super) fn dispatch(
@@ -54,6 +58,7 @@ pub(super) fn dispatch(
         return Err(Error::Method);
     }
     match input.path.as_str() {
+        ENTRY_PURGE_PATH => purge::entry(store, actor, input, now),
         SHELF_TRANSITION_PATH => shelves::transition(store, actor, input, now),
         "/api/v1/content/shelves/state" => shelves::state(store, actor, input, now),
         "/api/v1/content/shelves/archived" => shelves::archived(store, actor, input, now),

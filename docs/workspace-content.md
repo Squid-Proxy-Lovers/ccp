@@ -103,8 +103,9 @@ uncommitted restore operation. Workspace archival still allows reads but blocks
 content writes, including archive/restore and replay. Permanent purge and optional
 timed retention are separate from ordinary client writes. The
 [internal explicit purge core](#permanently-purge-an-archived-entry) is available
-to scoped admins; network/CLI/MCP purge commands and timed cleanup remain later
-work. Manual retention is the default.
+to scoped admins through the
+[admin HTTPS purge route](workspace-content-http.md#permanently-purge-an-archived-entry).
+CLI/MCP purge commands and timed cleanup remain later work. Manual retention is the default.
 
 ## Recover a whole shelf
 
@@ -203,8 +204,10 @@ create. Full payload/history reads and restoration of the purged UUID fail.
 
 This is logical database-row deletion, with no forensic erasure promise for
 SQLite free pages, journals or separate backups. No existing data is purged by
-the upgrade itself. HTTP/CLI/MCP adapters, human confirmation screens, timed
-retention and whole-shelf/book/workspace purge remain subsequent work. The
+the upgrade itself. The
+[HTTPS admin adapter](workspace-content-http.md#permanently-purge-an-archived-entry)
+now exposes this operation. CLI/MCP purge commands, human confirmation screens,
+timed retention and whole-shelf/book/workspace purge remain subsequent work. The
 verified legacy-content conversion gate remains in force.
 
 ## Schema and legacy data

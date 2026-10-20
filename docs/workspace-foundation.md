@@ -103,7 +103,9 @@ Targeted recovery and retained binding revocations are documented in
 [Owner administration](workspace-owner-administration.md) adds scoped team/key
 management and ownership transfer.
 [Explicit archived-entry purge](workspace-content.md#permanently-purge-an-archived-entry)
-now has an internal core; network purge adapters remain subsequent work.
+now has an internal core and a
+[scoped HTTPS adapter](workspace-content-http.md#permanently-purge-an-archived-entry).
+Human confirmation screens and timed cleanup remain subsequent work.
 Initial-owner appointment is an explicit, audited global-admin operation for an
 unowned workspace. The appointee may be that same global administrator; they
 then exercise workspace powers through the separately recorded owner role.

@@ -43,6 +43,7 @@ the other guides describe the supported native interface.
 | Build the client crate | [Client crate](../crates/client/README.md) |
 | Build the server crate | [Server crate](../crates/server/README.md) |
 | Work with wire types and compatibility | [Protocol crate](../crates/protocol/README.md) |
+| Permanently purge an archived entry through scoped admin HTTPS | [Confirmed purge request](workspace-content-http.md#permanently-purge-an-archived-entry) |
 | Understand explicit archived-entry purge and retained proof | [Entry purge core](workspace-content.md#permanently-purge-an-archived-entry) |
 | Retrieve guidance with a registered client | [Client guidance reader](workspace-client.md#read-current-guidance) |
 | Read or edit live guidance over TLS | [Guidance HTTP API](workspace-http-api.md#read-and-save-guidance) |

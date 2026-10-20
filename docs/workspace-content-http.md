@@ -242,3 +242,78 @@ The [common API guide](workspace-http-api.md#limits-and-errors) documents method
 media, framing and timeout errors. Exact text and descriptions may contain
 controls; consumers must escape them when rendering. Real localhost TLS tests
 cover this contract; no deployment, throughput or power-loss guarantee is made.
+
+## Permanently purge an archived entry
+
+Use a current workspace owner/admin key on the HTTPS admin listener. Ordinary
+client certificates and instance-wide admin keys do not grant entry-purge power.
+The entry must be individually archived, and its expected revision must match.
+This explicit privileged operation is allowed in active and archived workspaces;
+automatic cleanup stays paused while archived, and ordinary client writes stay
+blocked. An active entry hidden only by an archived shelf is ineligible.
+
+First inspect an authorized archived-entry summary using `entries/list` with
+`archived: true`. Verify its immutable entry UUID, workspace and current revision.
+Purge removes the entry's payload and all versions permanently from live rows.
+Save a private request file only after deciding to remove that exact archived
+revision. Replace the illustrative UUIDs and revision below, and choose a fresh
+operation UUID for this new intent:
+
+```bash
+umask 077
+cat > purge-entry.json <<'JSON'
+{
+  "workspace_id":"11111111-1111-4111-8111-111111111111",
+  "entry_id":"22222222-2222-4222-8222-222222222222",
+  "operation_id":"33333333-3333-4333-8333-333333333333",
+  "expected_revision":7,
+  "confirm_purge":true
+}
+JSON
+curl --cacert ./ccp-ca.pem --header @./owner-auth-header.txt \
+  --header 'Content-Type: application/json' --data-binary @./purge-entry.json \
+  https://127.0.0.1:8443/api/v1/admin/content/entries/purge
+```
+
+Use the independently trusted CA and protected owner-header file from the
+[HTTPS setup guide](workspace-http-api.md#try-a-protected-request). Confirmation
+is required and must be boolean true. Unknown fields, claimed identities and
+malformed IDs or revisions are rejected. The confirmation flag records caller
+intent; no human confirmation screen is implemented yet.
+
+The response is body-free historical proof:
+
+```json
+{
+  "api_version":1,
+  "data":{
+    "workspace_id":"11111111-1111-4111-8111-111111111111",
+    "entry_id":"22222222-2222-4222-8222-222222222222",
+    "operation_id":"33333333-3333-4333-8333-333333333333",
+    "revision":7,
+    "purged_at":1770000000
+  }
+}
+```
+
+Retain the exact request file and operation ID until the outcome is known. If a
+reply is lost, retry that file with its original key while its current scoped
+authority remains valid. An exact retry returns the original receipt without
+reapplying. Changed actor or intent under that workspace/operation returns
+409 `content_conflict`; a new operation against a purged UUID returns 404.
+A restored or revised target also conflicts. Reread and decide whether to create
+a fresh confirmed intent; do not automatically confirm a different revision.
+
+Purge proof, payload/history removal and audit commit together. Storage failures
+return sanitized 503 and roll back; the API never substitutes a successful result
+for failed deletion. Prior client write receipts and cancellation fences remain,
+so old exact writes cannot resurrect the purged UUID. Siblings, books, shelves
+and workspace guidance stay intact. See the
+[storage and retained-proof contract](workspace-content.md#permanently-purge-an-archived-entry).
+This deletes logical rows, without a forensic erasure promise for SQLite free
+pages, journals or separate backups.
+
+The endpoint accepts POST only, with the existing 64 KiB encoded request and
+1 MiB response budgets. The client mTLS listener returns 404 for this admin route
+and rejects Bearer headers. Normal entry-mutation actions, client/MCP commands,
+timed cleanup and whole-shelf/book/workspace purge are unchanged.

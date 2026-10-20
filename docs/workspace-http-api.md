@@ -74,6 +74,7 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |
 | HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
 | HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |
+| HTTPS | `POST /api/v1/admin/content/entries/purge` | Current scoped owner/admin key; explicitly confirmed, revision-bound purge of an individually archived entry, including in archived workspaces |
 | HTTPS | `POST /api/v1/admin/content/shelves/transition` | Current scoped workspace owner/admin key; exact revision-bound shelf archive/restore |
 | HTTPS or client mTLS | `POST /api/v1/content/shelves/state` or `/archived` | Current workspace read authority; body-free state or safe paged archived-shelf summaries |
 | HTTPS | `POST /api/v1/admin/workspaces/archive` or `/reactivate` | Current workspace owner or instance key; recoverable lifecycle change |
