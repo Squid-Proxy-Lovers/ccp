@@ -5,6 +5,9 @@
 //! Additive JSON content DTOs. IDs are targets, never authentication claims.
 use serde::{Deserialize, Serialize};
 
+mod fingerprint;
+pub use fingerprint::fingerprint_bytes;
+
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreateShelf {

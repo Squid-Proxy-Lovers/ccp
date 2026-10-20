@@ -74,6 +74,8 @@ pub struct ProfileInfo {
     pub expires_at: Option<i64>,
     pub expired: bool,
     pub renewal_due: bool,
+    pub pending_content: Option<content::ContentOperationInfo>,
+    pub last_content: Option<content::ContentOperationInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,6 +128,7 @@ pub struct WorkspaceProfile {
     credential: Option<Credential>,
     pending_record: Option<String>,
     credential_record: Option<String>,
+    content_state: content::mutation::State,
 }
 
 impl WorkspaceProfile {
@@ -149,7 +152,7 @@ impl WorkspaceProfile {
         }
         let receipt = self.credential.as_ref().map(|c| &c.receipt);
         Ok(ProfileInfo {
-            format: 3,
+            format: store::PROFILE_FORMAT,
             instance_id: self.trust.instance_id.clone(),
             https_origin: self.trust.https_origin.clone(),
             mtls_origin: self.trust.mtls_origin.clone(),
@@ -168,6 +171,8 @@ impl WorkspaceProfile {
             expires_at: receipt.map(|r| r.expires_at),
             expired: receipt.is_some_and(|r| now >= r.expires_at),
             renewal_due: self.renewal_due(now)?,
+            pending_content: self.content_state.pending_info(),
+            last_content: self.content_state.last_info(),
         })
     }
 
@@ -218,6 +223,7 @@ impl WorkspaceProfile {
         }
         let page = self.fetch_workspaces(after, limit).await?;
         if self.pending.is_none()
+            && !self.content_state.is_pending()
             && !page.workspaces.is_empty()
             && self.renewal_due(crypto::now()?)?
         {

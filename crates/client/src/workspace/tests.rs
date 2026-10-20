@@ -10,19 +10,20 @@ use rcgen::{
 use std::{fs, path::PathBuf};
 
 mod lifecycle;
+mod migration4;
 mod recovery;
 mod responses;
 mod selection;
 
 const WHEN: i64 = 1_705_000_000;
-fn authority() -> (Certificate, KeyPair) {
+pub(super) fn authority() -> (Certificate, KeyPair) {
     let key = KeyPair::generate().unwrap();
     let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
     params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
     (params.self_signed(&key).unwrap(), key)
 }
-fn trust(ca: &Certificate) -> WorkspaceTrust {
+pub(super) fn trust(ca: &Certificate) -> WorkspaceTrust {
     WorkspaceTrust::new(
         &Uuid::new_v4().to_string(),
         "https://localhost:8443",
@@ -48,7 +49,7 @@ fn params(instance: &str, client: &str, credential: &Uuid) -> CertificateParams 
     .collect();
     p
 }
-fn material(
+pub(super) fn material(
     trust: &WorkspaceTrust,
     ca: &Certificate,
     ca_key: &KeyPair,
@@ -72,10 +73,10 @@ fn material(
         key_pem: key.serialize_pem(),
     }
 }
-fn directory() -> PathBuf {
+pub(super) fn directory() -> PathBuf {
     std::env::temp_dir().join(format!("ccp-profile-unit-{}", Uuid::new_v4()))
 }
-fn invite() -> String {
+pub(super) fn invite() -> String {
     format!("ccp_join_{}", "a".repeat(64))
 }
 

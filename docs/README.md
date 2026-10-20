@@ -45,6 +45,7 @@ the other guides describe the supported native interface.
 | Work with wire types and compatibility | [Protocol crate](../crates/protocol/README.md) |
 | Understand the unreleased workspace migration and permission foundation | [Workspace access foundation](workspace-foundation.md) |
 | Read unreleased workspace entries and history through the normal client | [Workspace content client](workspace-content-client.md) |
+| Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |
 | Resolve an uncertain client entry operation after renewal or recovery | [Operation resolution](workspace-operation-resolution.md) |
 | Read and edit unreleased workspace content through authenticated HTTPS | [Workspace content HTTP](workspace-content-http.md) |
 | Understand workspace hierarchy, ownership, revisions and its legacy boundary | [Workspace content foundation](workspace-content.md) |

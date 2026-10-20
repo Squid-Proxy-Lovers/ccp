@@ -12,6 +12,8 @@ use std::{fs, path::Path, time::Duration};
 use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x4343_5043;
+pub(super) const PROFILE_FORMAT: u32 = 4;
+const CONTENT_SCHEMA: &str = "CREATE TABLE content_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),pending TEXT CHECK(pending IS NULL OR length(CAST(pending AS BLOB))<=2101248),last TEXT CHECK(last IS NULL OR length(CAST(last AS BLOB))<=4096)); INSERT INTO content_state(singleton) VALUES(1);";
 const PROFILE: &str = "workspace-profile.sqlite3";
 const HISTORY_SCHEMA: &str = "CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY, operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission','recovery')))";
 
@@ -53,9 +55,10 @@ fn initialize(path: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
     connection.pragma_update(None, "synchronous", "FULL")?;
     let tx = connection.transaction()?;
     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-    tx.pragma_update(None, "user_version", 3)?;
+    tx.pragma_update(None, "user_version", PROFILE_FORMAT)?;
     tx.execute_batch("CREATE TABLE profile(singleton INTEGER PRIMARY KEY CHECK(singleton=1),trust TEXT NOT NULL,pending TEXT,credential TEXT)")?;
     tx.execute_batch(HISTORY_SCHEMA)?;
+    tx.execute_batch(CONTENT_SCHEMA)?;
     tx.execute(
         "INSERT INTO profile(singleton,trust) VALUES (1,?1)",
         [serde_json::to_string(trust)?],
@@ -67,7 +70,7 @@ fn initialize(path: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
 pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
     private_directory(directory, false)?;
     let path = directory.join(PROFILE);
-    private_file(&path)?;
+    private_file_limit(&path, 16 * 1024 * 1024)?;
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     connection.busy_timeout(Duration::from_secs(2))?;
     format(&connection)?;
@@ -81,6 +84,9 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
         .execute_batch("BEGIN EXCLUSIVE; COMMIT;")
         .context("workspace profile is busy or unavailable")?;
     let version = format(&connection)?;
+    if version < PROFILE_FORMAT {
+        private_file(&directory.join(PROFILE))?;
+    }
     let (trust, pending, credential) = connection.query_row(
         "SELECT trust,pending,credential FROM profile WHERE singleton=1",
         [],
@@ -109,6 +115,8 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
         bail!("recovery state requires profile format 3");
     }
     crypto::validate_state(pending.as_ref(), credential.as_ref())?;
+    let content_state = super::content::mutation::State::load(&connection, version)?;
+    content_state.validate(&trust, credential.as_ref(), pending.is_some())?;
     let mut profile = WorkspaceProfile {
         connection,
         trust,
@@ -116,9 +124,10 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
         credential,
         pending_record: saved_pending,
         credential_record: saved_credential,
+        content_state,
     };
     profile.info()?;
-    if version < 3 {
+    if version < PROFILE_FORMAT {
         migration::upgrade(&mut profile, directory, version)?;
     }
     Ok(profile)
@@ -127,7 +136,7 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
 fn format(connection: &Connection) -> anyhow::Result<u32> {
     let app: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if app != APPLICATION_ID || !(1..=3).contains(&version) {
+    if app != APPLICATION_ID || !(1..=i64::from(PROFILE_FORMAT)).contains(&version) {
         bail!("unrecognized or unsupported workspace profile format");
     }
     Ok(u32::try_from(version)?)
@@ -146,6 +155,7 @@ impl WorkspaceProfile {
         operation: Operation,
         invitation: Option<&str>,
     ) -> anyhow::Result<()> {
+        self.require_no_content_pending()?;
         if operation == Operation::Recovery {
             bail!("recovery requires an explicit expected client identity");
         }
@@ -175,6 +185,7 @@ impl WorkspaceProfile {
         client: &str,
         invitation: &str,
     ) -> anyhow::Result<()> {
+        self.require_no_content_pending()?;
         crypto::canonical_id(client)?;
         if self.credential.is_some() {
             bail!(
@@ -213,7 +224,7 @@ impl WorkspaceProfile {
     fn persist_pending(&mut self, pending: Pending) -> anyhow::Result<()> {
         crypto::validate_state(Some(&pending), self.credential.as_ref())?;
         let record = serde_json::to_string(&pending)?;
-        let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS ?2",
+        let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS ?2 AND NOT EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL)",
             params![record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot persist pending operation; no request was sent"))?;
         if changed != 1 {
             bail!("workspace profile state changed");
@@ -223,6 +234,7 @@ impl WorkspaceProfile {
         Ok(())
     }
     pub(super) fn activate(&mut self, credential: Credential) -> anyhow::Result<()> {
+        self.require_no_content_pending()?;
         let pending = self
             .pending
             .as_ref()
@@ -235,7 +247,7 @@ impl WorkspaceProfile {
         crypto::credential(&self.trust, &credential, crypto::now()?)?;
         let record = serde_json::to_string(&credential)?;
         let tx = self.connection.transaction()?;
-        let changed=tx.execute("UPDATE profile SET credential=?1,pending=NULL WHERE singleton=1 AND pending IS ?2 AND credential IS ?3",
+        let changed=tx.execute("UPDATE profile SET credential=?1,pending=NULL WHERE singleton=1 AND pending IS ?2 AND credential IS ?3 AND NOT EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL)",
             params![record,self.pending_record,self.credential_record])
             .map_err(|_write|anyhow::anyhow!("cannot activate credential; pending operation retained for retry"))?;
         if changed != 1 {
@@ -281,9 +293,11 @@ pub(super) fn private_directory(path: &Path, create: bool) -> anyhow::Result<()>
     Ok(())
 }
 pub(super) fn private_file(path: &Path) -> anyhow::Result<()> {
+    private_file_limit(path, 4 * 1024 * 1024)
+}
+fn private_file_limit(path: &Path, limit: u64) -> anyhow::Result<()> {
     let metadata = fs::symlink_metadata(path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 4 * 1024 * 1024
-    {
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > limit {
         bail!("invalid private profile file");
     }
     #[cfg(unix)]

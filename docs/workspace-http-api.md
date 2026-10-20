@@ -7,7 +7,8 @@ Initial [client trust/profiles, enrollment and discovery](workspace-client.md)
 are connected, along with client lifecycle, explicit selections and workspace MCP
 metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
 entries and revisions on both authenticated listeners. The normal client now
-supports [content reads](workspace-content-client.md); client mutations, MCP
+supports [content reads](workspace-content-client.md) and
+[entry mutations](workspace-content-mutations.md); MCP
 content tools, browser login and the human panel remain subsequent work. A
 [client operation resolution fence](workspace-operation-resolution.md) supports
 body-free outcome recovery without replaying a write under new credentials. Keep this
@@ -290,7 +291,8 @@ initial enrollment/readmission, discovery, same-registration joining, renewal an
 separate-profile recovery. Explicit [caller selection](workspace-selection.md)
 resolves current target metadata, including through the [workspace MCP bridge](workspace-mcp.md).
 Content HTTP and normal-client [content reads](workspace-content-client.md) are
-available; client mutations and MCP content tools remain later work. Native
+available, along with [entry mutations](workspace-content-mutations.md).
+MCP content tools remain later work. Native
 commands keep their supported native-mode behavior.
 
 ## Limits and errors

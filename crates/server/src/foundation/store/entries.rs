@@ -139,39 +139,56 @@ fn validate_content(content: &EntryContent) -> anyhow::Result<()> {
 }
 
 fn request_hash(request: &EntryMutation) -> anyhow::Result<Vec<u8>> {
-    use serde_json::json;
+    use protocol::workspace::content as wire;
+    let content = |value: &EntryContent| wire::EntryContent {
+        text: value.text.clone(),
+        description: value.description.clone(),
+        labels: value.labels.clone(),
+    };
     let change = match &request.change {
         EntryChange::Create {
             book_id,
             name,
-            content,
-        } => json!([book_id.to_string(), name, content]),
+            content: value,
+        } => wire::EntryChange::Create {
+            book_id: book_id.to_string(),
+            name: name.clone(),
+            content: content(value),
+        },
         EntryChange::Append {
             id,
             expected_revision,
             text,
-        } => json!([id.to_string(), expected_revision, text]),
+        } => wire::EntryChange::Append {
+            entry_id: id.to_string(),
+            expected_revision: *expected_revision,
+            text: text.clone(),
+        },
         EntryChange::Revise {
             id,
             expected_revision,
-            content,
-        } => json!([id.to_string(), expected_revision, content]),
+            content: value,
+        } => wire::EntryChange::Revise {
+            entry_id: id.to_string(),
+            expected_revision: *expected_revision,
+            content: content(value),
+        },
         EntryChange::Archive {
             id,
             expected_revision,
-        }
-        | EntryChange::Restore {
+        } => wire::EntryChange::Archive {
+            entry_id: id.to_string(),
+            expected_revision: *expected_revision,
+        },
+        EntryChange::Restore {
             id,
             expected_revision,
-        } => json!([id.to_string(), expected_revision]),
+        } => wire::EntryChange::Restore {
+            entry_id: id.to_string(),
+            expected_revision: *expected_revision,
+        },
     };
-    let encoded = serde_json::to_vec(&json!([
-        "entry-mutation-1",
-        change_name(&request.change),
-        request.agent,
-        change
-    ]))?;
-    Ok(Sha256::digest(encoded).to_vec())
+    Ok(Sha256::digest(wire::fingerprint_bytes(&change, request.agent.as_deref())?).to_vec())
 }
 
 fn replay(

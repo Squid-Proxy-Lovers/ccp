@@ -4,7 +4,8 @@ This unreleased server API exposes workspace shelves, books and client-owned
 entries. Start the [workspace HTTPS server](workspace-http-api.md#prepare-and-start)
 and verify its instance CA first. The normal workspace client CLI and workspace
 MCP bridge expose access and selections; the [normal client](workspace-content-client.md)
-now also supports content reads. Client mutation commands, MCP content tools and
+now also supports content reads and [entry mutations](workspace-content-mutations.md).
+MCP content tools and
 the human panel remain later work. Native commands keep their native-mode API.
 
 [Documentation index](README.md) · [Content storage and ownership](workspace-content.md) ·
@@ -129,7 +130,8 @@ with different input or identity conflicts. Lost write access blocks replay too.
 Renewal or recovery retains client ownership but changes credentials; do not
 assume a new credential can replay an uncertain old operation. Use the [client operation resolution fence](workspace-operation-resolution.md)
 to confirm the old commit or cancel the original intent before deciding on a
-fresh operation. No normal client mutation/retry adapter is added here.
+fresh operation. The [normal client adapter](workspace-content-mutations.md)
+saves the original request before sending and exposes resume/resolve controls.
 
 Shelf/book creation has no operation receipt: a repeated name conflicts instead
 of overwriting an existing node. Inspect the existing node after an uncertain

@@ -11,6 +11,13 @@ pub(super) fn upgrade(
     version: u32,
 ) -> anyhow::Result<()> {
     snapshot(directory, version)?;
+    if version == 3 {
+        let tx = profile.connection.transaction()?;
+        tx.execute_batch(CONTENT_SCHEMA)?;
+        tx.pragma_update(None, "user_version", PROFILE_FORMAT)?;
+        tx.commit()?;
+        return Ok(());
+    }
     let pending = profile
         .pending
         .as_ref()
@@ -36,7 +43,8 @@ pub(super) fn upgrade(
     if changed != 1 {
         bail!("profile changed before format upgrade");
     }
-    tx.pragma_update(None, "user_version", 3)?;
+    tx.execute_batch(CONTENT_SCHEMA)?;
+    tx.pragma_update(None, "user_version", PROFILE_FORMAT)?;
     tx.commit()?;
     profile.pending_record = pending;
     profile.credential_record = credential;

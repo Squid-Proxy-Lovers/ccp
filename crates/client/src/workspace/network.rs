@@ -92,27 +92,87 @@ pub(super) async fn health(http: &Client, origin: &str, instance: &str) -> anyho
 pub(super) async fn json<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
 ) -> anyhow::Result<T> {
-    limited_json(request, 1024 * 1024).await
+    limited_json(request, 1024 * 1024, false).await
 }
 
 pub(super) async fn snapshot_json<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
 ) -> anyhow::Result<T> {
-    limited_json(request, 4 * 1024 * 1024).await
+    limited_json(request, 4 * 1024 * 1024, false).await
+}
+
+pub(super) async fn operation_json<T: DeserializeOwned>(
+    request: reqwest::RequestBuilder,
+) -> anyhow::Result<T> {
+    limited_json(request, 1024 * 1024, true).await
+}
+
+#[derive(Debug)]
+struct Refusal {
+    status: u16,
+    conflict: bool,
+}
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "workspace request refused (HTTP {})", self.status)
+    }
+}
+impl std::error::Error for Refusal {}
+
+pub(super) fn content_conflict(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<Refusal>()
+        .is_some_and(|e| e.status == 409 && e.conflict)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConflictFailure {
+    api_version: u32,
+    error: ConflictCode,
+}
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConflictCode {
+    code: String,
+}
+
+async fn conflict_reply(response: &mut reqwest::Response) -> bool {
+    if response.status().as_u16() != 409
+        || response.headers().contains_key("content-encoding")
+        || response.content_length().is_some_and(|v| v > 8192)
+    {
+        return false;
+    }
+    let mut bytes = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if bytes.len().saturating_add(chunk.len()) > 8192 {
+                    return false;
+                }
+                bytes.extend_from_slice(&chunk);
+            }
+            Ok(None) => break,
+            Err(_error) => return false,
+        }
+    }
+    serde_json::from_slice::<ConflictFailure>(&bytes)
+        .is_ok_and(|v| v.api_version == api::API_VERSION && v.error.code == "content_conflict")
 }
 
 async fn limited_json<T: DeserializeOwned>(
     request: reqwest::RequestBuilder,
     max_bytes: usize,
+    inspect_conflict: bool,
 ) -> anyhow::Result<T> {
     let mut response = request.send().await.map_err(|_network| {
         anyhow::anyhow!("workspace HTTPS request failed; trust, name and connection must be valid")
     })?;
     if !response.status().is_success() {
-        bail!(
-            "workspace request refused (HTTP {})",
-            response.status().as_u16()
-        );
+        let status = response.status().as_u16();
+        let conflict = inspect_conflict && conflict_reply(&mut response).await;
+        return Err(Refusal { status, conflict }.into());
     }
     if response.headers().get("content-encoding").is_some()
         || response

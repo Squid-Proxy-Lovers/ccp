@@ -2,16 +2,19 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Explicit workspace content reads using the profile's current pinned mTLS.
+//! Explicit workspace content reads and durable entry intents over pinned mTLS.
 pub use protocol::workspace::content::{
-    Book, BookPage, ContentActor, EntryContent, EntryPage, EntryRevision, EntrySnapshot,
-    EntrySummary, EntryTarget, History, HistoryPage, NodeTarget, Page, Shelf, ShelfPage,
+    Book, BookPage, ContentActor, EntryChange, EntryContent, EntryMutation, EntryOperationOutcome,
+    EntryOperationResolution, EntryPage, EntryReceipt, EntryRevision, EntrySnapshot, EntrySummary,
+    EntryTarget, History, HistoryPage, NodeTarget, Page, Shelf, ShelfPage,
 };
 
 use super::*;
 use serde::de::DeserializeOwned;
 
 pub(crate) mod cli;
+pub(crate) mod mutation;
+pub use mutation::ContentOperationInfo;
 mod validate;
 
 #[cfg(test)]
@@ -131,7 +134,10 @@ impl WorkspaceProfile {
         check(&value)?;
         // An authorized, validated target response proves a usable grant even
         // when its page is empty. No renewal is attempted after a denied read.
-        if self.pending.is_none() && self.renewal_due(crypto::now()?)? {
+        if self.pending.is_none()
+            && !self.content_state.is_pending()
+            && self.renewal_due(crypto::now()?)?
+        {
             self.renew().await?;
             let value = self.fetch_content(path, request).await?;
             check(&value)?;

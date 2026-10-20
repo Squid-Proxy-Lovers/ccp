@@ -83,7 +83,7 @@ fn recovery_checks_expected_identity_and_rejects_active_or_malformed_state() {
 
 fn version2(dir: &Path) {
     let db = rusqlite::Connection::open(dir.join("workspace-profile.sqlite3")).unwrap();
-    db.execute_batch("ALTER TABLE completed_invitations RENAME TO history3; CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY,operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission'))); INSERT INTO completed_invitations SELECT * FROM history3; DROP TABLE history3; PRAGMA user_version=2;").unwrap();
+    db.execute_batch("DROP TABLE content_state; ALTER TABLE completed_invitations RENAME TO history3; CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY,operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission'))); INSERT INTO completed_invitations SELECT * FROM history3; DROP TABLE history3; PRAGMA user_version=2;").unwrap();
 }
 
 #[test]
@@ -124,7 +124,7 @@ fn format2_migrates_all_existing_pending_states_and_completed_history_with_exact
         version2(&dir);
         let bytes = fs::read(dir.join("workspace-profile.sqlite3")).unwrap();
         let p = WorkspaceProfile::open(&dir).unwrap();
-        assert_eq!(p.info().unwrap().format, 3);
+        assert_eq!(p.info().unwrap().format, store::PROFILE_FORMAT);
         assert_eq!(p.pending_record, pending);
         assert_eq!(p.credential_record, credential);
         assert_eq!(

@@ -1,5 +1,8 @@
 # Resolve an uncertain client entry mutation
 
+For normal library/CLI use, follow [entry mutations](workspace-content-mutations.md).
+That client saves the original request and exposes `resume` and `resolve` controls.
+
 If an entry mutation loses its response, keep its original workspace, operation
 UUID, credential UUID and exact typed request. This unreleased server endpoint
 can confirm the original commit after renewal or recovery. Resolution is terminal:

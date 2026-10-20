@@ -136,7 +136,7 @@ fn output(value: &impl serde::Serialize) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string(value)?);
     Ok(())
 }
-fn read(path: &Path, limit: u64, private: bool) -> anyhow::Result<String> {
+pub(super) fn read(path: &Path, limit: u64, private: bool) -> anyhow::Result<String> {
     if private {
         store::private_file(path)?;
     }

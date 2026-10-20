@@ -18,7 +18,7 @@ fn legacy(dir: &Path) {
     });
     db.execute("UPDATE profile SET pending=?1", [pending])
         .unwrap();
-    db.execute_batch("DROP TABLE completed_invitations")
+    db.execute_batch("DROP TABLE completed_invitations; DROP TABLE content_state")
         .unwrap();
     db.pragma_update(None, "user_version", 1).unwrap();
 }
@@ -55,7 +55,7 @@ fn format1_pending_migration_keeps_exact_nonce_key_csr_and_immutable_private_sna
     legacy(&dir);
     let bytes = fs::read(dir.join("workspace-profile.sqlite3")).unwrap();
     let p = WorkspaceProfile::open(&dir).unwrap();
-    assert_eq!(p.info().unwrap().format, 3);
+    assert_eq!(p.info().unwrap().format, store::PROFILE_FORMAT);
     assert_eq!(p.pending.as_ref().unwrap().operation, Operation::Enrollment);
     assert_eq!(p.pending.as_ref().unwrap().request_id, nonce);
     assert_eq!(p.pending.as_ref().unwrap().key_pem, key);
@@ -107,7 +107,7 @@ fn format1_empty_and_active_migrate_without_claiming_identity_or_losing_the_key(
         }
         legacy(&dir);
         let p = WorkspaceProfile::open(&dir).unwrap();
-        assert_eq!(p.info().unwrap().format, 3);
+        assert_eq!(p.info().unwrap().format, store::PROFILE_FORMAT);
         assert_eq!(
             p.info().unwrap().client_id,
             active.then(|| m.receipt.client_id.clone())
@@ -151,7 +151,7 @@ fn snapshot_publication_or_migration_failure_never_changes_the_old_profile() {
     db.execute_batch("DROP TRIGGER fail_upgrade").unwrap();
     drop(db);
     drop(WorkspaceProfile::open(&dir).unwrap());
-    assert_eq!(version(&dir), 3);
+    assert_eq!(version(&dir), i64::from(store::PROFILE_FORMAT));
     assert_eq!(snapshots(&dir).len(), 2);
     fs::remove_dir_all(dir).unwrap();
 }

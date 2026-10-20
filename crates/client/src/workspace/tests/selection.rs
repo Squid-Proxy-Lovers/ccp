@@ -138,7 +138,7 @@ async fn selection_write_failure_keeps_prior_revision_and_foreign_or_future_file
             0o600
         );
     }
-    assert_eq!(p.info().unwrap().format, 3);
+    assert_eq!(p.info().unwrap().format, store::PROFILE_FORMAT);
     drop(p);
     fs::remove_dir_all(root).unwrap();
 }

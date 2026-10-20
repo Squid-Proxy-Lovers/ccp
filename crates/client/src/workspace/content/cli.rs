@@ -30,6 +30,8 @@ struct Paging {
 
 #[derive(Subcommand)]
 enum Command {
+    #[command(flatten)]
+    Mutation(super::mutation::cli::Command),
     Shelves {
         #[command(flatten)]
         scope: Scope,
@@ -87,8 +89,16 @@ enum Command {
 }
 
 pub(crate) async fn run(args: ContentArgs) -> anyhow::Result<()> {
-    let mut profile = WorkspaceProfile::open(&args.profile)?;
     match args.command {
+        Command::Mutation(command) => super::mutation::cli::run(&args.profile, command).await,
+        command => run_read(&args.profile, command).await,
+    }
+}
+
+async fn run_read(path: &std::path::Path, command: Command) -> anyhow::Result<()> {
+    let mut profile = WorkspaceProfile::open(path)?;
+    match command {
+        Command::Mutation(_) => bail!("entry mutation command requires the mutation dispatcher"),
         Command::Shelves { scope, page } => output(
             &profile
                 .content_shelves(&ShelfPage {

@@ -7,6 +7,7 @@ use client::workspace::content as api;
 use server::foundation::{Actor, EntryChange, EntryContent, EntryMutation, NodeDraft};
 
 mod lifecycle;
+mod mutation;
 
 struct Records {
     shelf: String,

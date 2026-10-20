@@ -3,7 +3,8 @@
 Use an enrolled [workspace profile](workspace-client.md) and an explicit workspace
 UUID to read shelves, books, entries and their history. These unreleased commands
 use the authenticated [content HTTPS API](workspace-content-http.md). Entry
-mutations, container creation and workspace MCP content tools are later work.
+mutations have their own [client guide](workspace-content-mutations.md).
+Container creation and workspace MCP content tools are later work.
 The existing workspace MCP bridge still exposes metadata and caller selections.
 
 [Documentation index](README.md) · [Caller selections](workspace-selection.md) ·
@@ -29,7 +30,7 @@ ccp-client workspace content --profile ./my-profile entries \
   --book-id 33333333-3333-4333-8333-333333333333
 ```
 
-All content commands require `--workspace-id`; none falls back to a saved or
+All content read commands require `--workspace-id`; none falls back to a saved or
 shared default, edits a selection, or discovers another target after failure.
 They return the underlying typed JSON data without the HTTP envelope.
 
@@ -90,8 +91,10 @@ its state. If renewal fails, the read fails and preserves the pending request
 for resumption; it does not silently enroll another identity. See
 [client lifecycle and recovery](workspace-client.md).
 
-Profile format 3, caller-selection format 1 and native command behavior are
-unchanged. Reads do not cache content or merge authority across recovery profiles.
+Caller-selection format 1 and native command behavior are unchanged. The client
+uses [profile format 4](workspace-client.md#profile-storage-and-recovery-limits).
+Pending content mutations pause automatic renewal while authorized reads remain
+usable. Reads do not cache content or merge authority across recovery profiles.
 Use the profile that still has access to the explicit target workspace. Command
 failures return no partial content on stdout; HTTP refusals report their status.
 These are localhost TLS-tested client commands, with no throughput, deployment,

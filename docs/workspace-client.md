@@ -7,7 +7,8 @@ targeted readmission invitation into an unenrolled profile. Explicit
 [caller workspace selection](workspace-selection.md) is available separately.
 The [workspace MCP bridge](workspace-mcp.md) connects discovery and caller choices;
 the [normal client content commands](workspace-content-client.md) now support
-reads. Client mutations and MCP content tools remain subsequent work. Existing
+reads and [entry mutations](workspace-content-mutations.md). MCP content tools
+remain subsequent work. Existing
 native commands and their saved session files keep their current behavior.
 
 [Documentation index](README.md) · [Server HTTPS setup](workspace-http-api.md) ·
@@ -203,7 +204,7 @@ local descriptions and HTTP status, without echoing an untrusted server body.
 
 ## Profile storage and recovery limits
 
-Workspace profile format 3 uses `workspace-profile.sqlite3` with a separate
+Workspace profile format 4 uses `workspace-profile.sqlite3` with a separate
 application ID, DELETE journaling and FULL synchronization. Open profiles hold
 an exclusive SQLite lease across commits and network calls. Another invocation
 can fail busy after 2s; close the first profile before retrying. This serializes
@@ -219,19 +220,25 @@ Host operators remain trusted against path/file replacement races. Unix
 publication syncs the directory; Windows directory-sync and ACL behavior have
 not been independently verified locally.
 
-Format 1 and 2 profiles upgrade when opened with this client. Before migration,
+Format 1, 2 and 3 profiles upgrade when opened with this client. Before migration,
 the exclusive lease protects a complete owner-only, content-addressed snapshot
 named `workspace-profile-vVERSION-HASH.sqlite3`, with its original format number.
 Publication is durable on supported Unix local file systems and never
 overwrites another snapshot.
 The transaction then preserves the key, CSR, nonce, invitation hash and identity
-and existing completed-invitation history while adding recovery pending state.
+and existing completed-invitation history while adding a bounded pending-entry
+request and most recent terminal result. Format 1/2 also gain the recovery state
+introduced in format 3. Existing format-3 profile/history records stay byte-exact.
 A failure leaves the previous format and its snapshot intact. Snapshots are
-retained without automatic cleanup. Older format-1/2 clients refuse format 3;
+retained without automatic cleanup. Older format-1/2/3 clients refuse format 4;
 restore a deliberately chosen snapshot into a separate private directory for a
 controlled rollback. Restoring a local snapshot never restores revoked or
 superseded server authority. No backup is selected automatically if the main
 profile is missing or corrupt.
+
+Format 4 permits a profile file up to 16 MiB to hold escaped pending text; old
+formats keep their 4 MiB input limit. Per-record limits and pending-content
+renewal controls are described in [entry mutations](workspace-content-mutations.md).
 
 A client whose certificate has expired or been revoked cannot use that old
 certificate to regain access. Fresh administrative recovery authority is required.
@@ -243,4 +250,6 @@ This draft is not a production rollout or a throughput/power-loss guarantee.
 The [content commands](workspace-content-client.md) read shelves, books, active
 entries, earlier versions and archived summaries through current mTLS access.
 Each command names an explicit workspace; it does not alter caller selections.
+Use [entry mutations](workspace-content-mutations.md) to edit entries and retain
+the original request safely across uncertain results.
 Entry mutations and workspace MCP content tools remain subsequent work.

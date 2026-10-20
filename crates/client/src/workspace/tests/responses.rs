@@ -12,6 +12,14 @@ async fn response(bytes: Vec<u8>) -> anyhow::Result<api::Health> {
 }
 
 async fn decode_response(bytes: Vec<u8>, snapshot: bool) -> anyhow::Result<api::Health> {
+    decode_mode(bytes, snapshot, false).await
+}
+
+async fn decode_mode(
+    bytes: Vec<u8>,
+    snapshot: bool,
+    operation: bool,
+) -> anyhow::Result<api::Health> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -33,13 +41,67 @@ async fn decode_response(bytes: Vec<u8>, snapshot: bool) -> anyhow::Result<api::
         .build()
         .unwrap();
     let request = http.get(format!("http://{address}/"));
-    let result = if snapshot {
+    let result = if operation {
+        network::operation_json(request).await
+    } else if snapshot {
         network::snapshot_json(request).await
     } else {
         network::json(request).await
     };
     task.await.unwrap();
     result
+}
+
+#[tokio::test]
+async fn only_bounded_exact_operation_conflicts_can_finish_a_pending_intent() {
+    let body = r#"{"api_version":1,"error":{"code":"content_conflict"}}"#;
+    let error = decode_mode(fixed("409 Conflict", body, ""), false, true)
+        .await
+        .err()
+        .unwrap();
+    assert!(network::content_conflict(&error));
+    assert!(!network::content_conflict(
+        &response(fixed("409 Conflict", body, ""))
+            .await
+            .err()
+            .unwrap()
+    ));
+    for bytes in [
+        fixed("403 Forbidden", body, ""),
+        fixed("503 Unavailable", body, ""),
+        fixed("409 Conflict", body, "Content-Encoding: gzip\r\n"),
+        fixed("409 Conflict", &body.replace(":1,", ":99,"), ""),
+        fixed(
+            "409 Conflict",
+            &body.replace("content_conflict", "content_cancelled"),
+            "",
+        ),
+        fixed(
+            "409 Conflict",
+            r#"{"api_version":1,"error":{"code":"content_conflict","detail":"PRIVATE_BODY"}}"#,
+            "",
+        ),
+        fixed(
+            "409 Conflict",
+            r#"{"api_version":1,"error":{"code":"content_conflict"},"extra":true}"#,
+            "",
+        ),
+        fixed("409 Conflict", "PRIVATE_BODY", ""),
+        fixed("409 Conflict", &format!("{body}{}", " ".repeat(8193)), ""),
+        b"HTTP/1.1 409 Conflict\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{}".to_vec(),
+    ] {
+        let error = decode_mode(bytes, false, true).await.err().unwrap();
+        assert!(!network::content_conflict(&error));
+        assert!(!error.to_string().contains("PRIVATE_BODY"));
+    }
+    let mut bytes =
+        b"HTTP/1.1 409 Conflict\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2001\r\n"
+            .to_vec();
+    bytes.extend(vec![b' '; 8193]);
+    bytes.extend(b"\r\n0\r\n\r\n");
+    assert!(!network::content_conflict(
+        &decode_mode(bytes, false, true).await.err().unwrap()
+    ));
 }
 
 #[tokio::test]
