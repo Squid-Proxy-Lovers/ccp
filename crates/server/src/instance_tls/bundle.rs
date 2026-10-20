@@ -79,6 +79,71 @@ impl PrivateBundle {
         })
     }
 
+    pub fn renew_server(
+        &self,
+        instance: Uuid,
+        names: Vec<String>,
+        now: i64,
+    ) -> anyhow::Result<Self> {
+        let old = self.validate_for_renewal(instance, now)?;
+        let ca_key = KeyPair::from_pem(&self.ca_key)?;
+        let ca = CertificateParams::from_ca_cert_pem(&self.ca_certificate)?.self_signed(&ca_key)?;
+        let mut params = CertificateParams::new(names.clone())?;
+        params
+            .distinguished_name
+            .push(DnType::CommonName, format!("CCP server {instance}"));
+        let der = self.ca_der()?;
+        let (_, root) = x509_parser::parse_x509_certificate(&der)
+            .map_err(|_invalid| anyhow::anyhow!("invalid CA certificate"))?;
+        params.not_before = OffsetDateTime::from_unix_timestamp(
+            now.saturating_sub(60)
+                .max(0)
+                .max(root.validity().not_before.timestamp()),
+        )?;
+        params.not_after = OffsetDateTime::from_unix_timestamp(
+            now.checked_add(SERVER_SECONDS)
+                .context("server expiry overflow")?
+                .min(old.ca_expires_at),
+        )?;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let key = KeyPair::generate()?;
+        let leaf = params.signed_by(&key, &ca, &ca_key)?;
+        Ok(Self {
+            format: self.format,
+            instance_id: self.instance_id.clone(),
+            names,
+            ca_certificate: self.ca_certificate.clone(),
+            ca_key: self.ca_key.clone(),
+            server_certificate: leaf.pem(),
+            server_key: key.serialize_pem(),
+        })
+    }
+
+    /// Validate an expired leaf at its last valid instant, while requiring the
+    /// original CA to remain valid at the actual renewal time. No trust reset.
+    fn validate_for_renewal(&self, instance: Uuid, now: i64) -> anyhow::Result<TrustInfo> {
+        let der = self.ca_der()?;
+        let (_, root) = x509_parser::parse_x509_certificate(&der)
+            .map_err(|_invalid| anyhow::anyhow!("invalid CA certificate"))?;
+        if now < 0
+            || now < root.validity().not_before.timestamp()
+            || now >= root.validity().not_after.timestamp()
+        {
+            bail!("current CA validity is required; renewal cannot rotate the trust root");
+        }
+        let der = strict_pem_der(&self.server_certificate, "CERTIFICATE")?;
+        let (_, leaf) = x509_parser::parse_x509_certificate(&der)
+            .map_err(|_invalid| anyhow::anyhow!("invalid server certificate"))?;
+        if now < leaf.validity().not_before.timestamp() {
+            bail!("server certificate is not valid yet");
+        }
+        self.validate(
+            instance,
+            now.min(leaf.validity().not_after.timestamp().saturating_sub(1)),
+        )
+    }
+
     pub fn ca_der(&self) -> anyhow::Result<CertificateDer<'static>> {
         Ok(CertificateDer::from(strict_pem_der(
             &self.ca_certificate,

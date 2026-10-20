@@ -9,7 +9,9 @@
 mod bundle;
 mod files;
 mod peer;
+mod renewal;
 pub(crate) use peer::VerifiedPeer;
+pub use renewal::renew;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -147,12 +149,11 @@ pub fn initialize(directory: &Path, names: &[String]) -> anyhow::Result<TrustInf
     let instance = initialized_instance(&transaction)?;
     let pinned = anchor(&transaction)?;
     let timestamp = now()?;
-    let bytes = if files::exists(lease.directory())? {
+    let bytes = if let Some(pin) = &pinned {
+        files::read_pinned(lease.directory(), &pin.hash)?
+    } else if files::exists(lease.directory())? {
         files::read(lease.directory())?
     } else {
-        if pinned.is_some() {
-            bail!("pinned TLS bundle is missing; restore the matching backup");
-        }
         let bundle = PrivateBundle::generate(instance, names.clone(), timestamp)?;
         let bytes = serde_json::to_vec(&bundle)?;
         files::publish(lease.directory(), &bytes)?;
@@ -250,7 +251,7 @@ fn load_pinned(
 ) -> anyhow::Result<(PrivateBundle, TrustInfo)> {
     let instance = initialized_instance(connection)?;
     let pin = anchor(connection)?.context("TLS identity is not pinned; run workspace-tls-init")?;
-    let bytes = files::read(lease.directory())?;
+    let bytes = files::read_pinned(lease.directory(), &pin.hash)?;
     let (bundle, trust) = validate(&bytes, instance, timestamp)?;
     check_pin(
         &pin,
@@ -266,11 +267,15 @@ fn validate(
     instance: Uuid,
     timestamp: i64,
 ) -> anyhow::Result<(PrivateBundle, TrustInfo)> {
-    // Do not attach serde's error: an unknown field can contain private input.
-    let bundle: PrivateBundle = serde_json::from_slice(bytes)
-        .map_err(|_invalid_input| anyhow::anyhow!("invalid TLS bundle format"))?;
+    let bundle = decode_bundle(bytes)?;
     let trust = bundle.validate(instance, timestamp)?;
     Ok((bundle, trust))
+}
+
+fn decode_bundle(bytes: &[u8]) -> anyhow::Result<PrivateBundle> {
+    // Unknown field errors can include private input; never attach the source.
+    serde_json::from_slice(bytes)
+        .map_err(|_invalid_input| anyhow::anyhow!("invalid TLS bundle format"))
 }
 
 fn now() -> anyhow::Result<i64> {

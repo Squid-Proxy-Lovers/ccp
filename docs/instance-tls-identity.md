@@ -31,15 +31,16 @@ Supply 1–32 explicit ASCII DNS/IP names. DNS names are lowercased, IP addresse
 canonicalized, and duplicates removed. URLs, wildcards, trailing dots, brackets
 around IPv6, and empty labels are refused. No names come from environment
 variables, session names, or automatic hostname discovery. Rerunning setup with
-the same normalized names returns the same identity. Different names require a
-future explicit certificate-management operation; setup never replaces them.
+the same normalized names returns the same identity. Different names require the explicit [renewal command](server-certificate-renewal.md);
+setup never replaces them.
 
 The JSON output contains only the instance UUID, CA certificate PEM, CA and server
 certificate SHA-256 fingerprints, configured names and expiration timestamps.
 Private keys and admin keys are not output. A new CA lasts 3,650 days and the
 server certificate 365 days, with a 60-second clock allowance at issuance.
-Loading rejects certificates outside their validity interval; no automatic
-rotation, expiry extension or renewal command is included in this batch.
+Loading rejects certificates outside their validity interval. Use the explicit
+[server certificate renewal](server-certificate-renewal.md) command for expiry or
+name changes; setup never renews or rotates automatically.
 
 ## Establish trust before sending secrets
 
@@ -60,15 +61,18 @@ No endpoint exposes the private signing material.
 
 ## Storage, interruption and backup
 
-Schema 13 adds `ccp_instance_tls`, a public pin for the instance UUID, private
+Schema 13 introduced `ccp_instance_tls`, a public pin for the instance UUID, private
 bundle hash and CA certificate fingerprint. Existing schema-12 roles, keys,
 grants, enrollment and mode state remain unchanged; earlier supported schemas
 follow the [normal upgrade rules](workspace-foundation.md#database-upgrade).
-The native wire protocol remains version 1. Older schema-aware servers refuse
-schema 13; host operators must stop older unaware binaries and use a complete
+Schema 14 adds immutable renewal generations selected by that pin; the
+[renewal guide](server-certificate-renewal.md#disk-layout-and-version-compatibility)
+describes compatibility. The native wire protocol remains version 1. Older schema-aware servers refuse
+schema 14; host operators must stop older unaware binaries and use a complete
 matching backup for rollback.
 
-`ccp-instance-tls.json` is private disk format 1. It contains the instance UUID,
+The initial `ccp-instance-tls.json` and later content-addressed renewal generations
+use private disk format 1. It contains the instance UUID,
 names, CA certificate/key and server certificate/key together. The CA is
 independent of every native session's `ccp_ca_cert.pem` and `ccp_ca_key.pem`.
 The bundle is created with mode `0600` on Unix; loading refuses group/other
@@ -89,7 +93,8 @@ audit with full SQLite synchronization. If that transaction or the response is
 lost, rerun explicit setup with the same names to validate and pin the same
 bundle. Existing pin plus missing bundle, changed bytes, foreign instance UUID,
 invalid certificates or mismatched keys fail closed. Setup does not recover by
-generating another CA. Restore the complete matching backup; do not delete the
+generating another CA, and a missing selected renewal generation does not fall
+back to the original file unless its bytes match the exact current pin. Restore the complete matching backup; do not delete the
 pin or edit identity files to force startup.
 
 Back up the private bundle together with the matching data database and any WAL,

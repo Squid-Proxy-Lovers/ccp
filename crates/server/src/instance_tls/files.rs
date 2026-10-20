@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use uuid::Uuid;
@@ -13,7 +14,11 @@ pub(super) const FILE_NAME: &str = "ccp-instance-tls.json";
 const MAX_BYTES: u64 = 64 * 1024;
 
 pub(super) fn exists(directory: &Path) -> anyhow::Result<bool> {
-    match fs::symlink_metadata(directory.join(FILE_NAME)) {
+    exists_path(&directory.join(FILE_NAME))
+}
+
+fn exists_path(path: &Path) -> anyhow::Result<bool> {
+    match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error.into()),
@@ -21,9 +26,32 @@ pub(super) fn exists(directory: &Path) -> anyhow::Result<bool> {
 }
 
 pub(super) fn read(directory: &Path) -> anyhow::Result<Vec<u8>> {
-    let path = directory.join(FILE_NAME);
+    read_path(&directory.join(FILE_NAME))
+}
+
+pub(super) fn read_pinned(directory: &Path, hash: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let generation = generation_path(directory, hash)?;
+    if exists_path(&generation)? {
+        return read_path(&generation);
+    }
+    let bytes = read(directory)?;
+    if Sha256::digest(&bytes).as_slice() != hash {
+        bail!("selected TLS generation is missing; restore the matching backup");
+    }
+    Ok(bytes)
+}
+
+pub(super) fn generation_path(directory: &Path, hash: &[u8]) -> anyhow::Result<PathBuf> {
+    if hash.len() != 32 {
+        bail!("invalid TLS generation pin");
+    }
+    let hex: String = hash.iter().map(|byte| format!("{byte:02x}")).collect();
+    Ok(directory.join(format!("ccp-instance-tls-{hex}.json")))
+}
+
+fn read_path(path: &Path) -> anyhow::Result<Vec<u8>> {
     let metadata =
-        fs::symlink_metadata(&path).context("TLS bundle is missing; restore matching backup")?;
+        fs::symlink_metadata(path).context("TLS bundle is missing; restore matching backup")?;
     if !metadata.is_file() || metadata.len() > MAX_BYTES {
         bail!("TLS bundle must be a bounded regular file");
     }
@@ -45,6 +73,18 @@ pub(super) fn read(directory: &Path) -> anyhow::Result<Vec<u8>> {
 }
 
 pub(super) fn publish(directory: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    publish_at(directory, &directory.join(FILE_NAME), bytes)
+}
+
+pub(super) fn publish_generation(directory: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    publish_at(
+        directory,
+        &generation_path(directory, &Sha256::digest(bytes))?,
+        bytes,
+    )
+}
+
+fn publish_at(directory: &Path, destination: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     if u64::try_from(bytes.len())? > MAX_BYTES {
         bail!("TLS bundle is too large");
     }
@@ -62,7 +102,7 @@ pub(super) fn publish(directory: &Path, bytes: &[u8]) -> anyhow::Result<()> {
         file.sync_all()?;
         // Unlike rename, hard_link cannot replace an existing destination. The
         // linked inode already contains the complete, synchronized bundle.
-        fs::hard_link(&temporary, directory.join(FILE_NAME))
+        fs::hard_link(&temporary, destination)
             .context("cannot publish TLS bundle without replacing existing material")?;
         sync_directory(directory)?;
         Ok(())

@@ -16,6 +16,7 @@ const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server workspace-init --data-dir <DIR> --operator <NAME> --workspace <NAME>
   server workspace-tls-init --data-dir <DIR> --name <DNS_OR_IP> [--name <DNS_OR_IP>...]
   server workspace-tls-info --data-dir <DIR>
+  server workspace-tls-renew --data-dir <DIR> [--name <DNS_OR_IP>...]
   server admin-info --data-dir <DIR>
   server reset-instance-key --data-dir <DIR> --principal <UUID> [--ttl-seconds <SECONDS>]
   server reset-owner-key --data-dir <DIR> --workspace <UUID> [--ttl-seconds <SECONDS>]"#;
@@ -37,6 +38,7 @@ enum Command {
     AdminInfo(LocalDataArgs),
     WorkspaceTlsInit(WorkspaceTlsArgs),
     WorkspaceTlsInfo(LocalDataArgs),
+    WorkspaceTlsRenew(WorkspaceTlsRenewArgs),
     ResetInstanceKey(ResetInstanceArgs),
     ResetOwnerKey(ResetOwnerArgs),
 }
@@ -78,6 +80,14 @@ struct WorkspaceTlsArgs {
     #[command(flatten)]
     data: LocalDataArgs,
     #[arg(long = "name", value_name = "DNS_OR_IP", required = true)]
+    names: Vec<String>,
+}
+
+#[derive(Args)]
+struct WorkspaceTlsRenewArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long = "name", value_name = "DNS_OR_IP")]
     names: Vec<String>,
 }
 
@@ -161,6 +171,14 @@ fn execute_command(command: Command) -> anyhow::Result<()> {
             &args.data.data_dir,
             &args.names,
         )?),
+        Command::WorkspaceTlsRenew(args) => {
+            let names = if args.names.is_empty() {
+                None
+            } else {
+                Some(args.names.as_slice())
+            };
+            print_json(&server::instance_tls::renew(&args.data.data_dir, names)?)
+        }
         Command::WorkspaceTlsInfo(args) => print_json(&server::instance_tls::info(&args.data_dir)?),
         Command::AdminInfo(args) => print_json(&server::local_admin::info(&args.data_dir)?),
         Command::ResetInstanceKey(args) => print_reset(server::local_admin::reset_key(

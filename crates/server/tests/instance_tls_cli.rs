@@ -246,4 +246,99 @@ mod tests {
             .unwrap();
         assert_eq!(pin_count, 1);
     }
+    #[test]
+    fn real_cli_renewal_preserves_ca_and_can_explicitly_change_server_names() {
+        let f = Fixture::new();
+        let original = f.init();
+        let next = json(command(&f.directory, &["workspace-tls-renew"]));
+        assert_eq!(next["ca_sha256"], original["ca_sha256"]);
+        assert_eq!(next["ca_certificate_pem"], original["ca_certificate_pem"]);
+        assert_eq!(next["instance_id"], original["instance_id"]);
+        assert_ne!(next["server_sha256"], original["server_sha256"]);
+        assert_eq!(next["names"], original["names"]);
+        assert!(!next.to_string().contains("PRIVATE KEY"));
+        assert_eq!(next, json(command(&f.directory, &["workspace-tls-info"])));
+        assert_eq!(next, f.init());
+        let named = json(command(
+            &f.directory,
+            &[
+                "workspace-tls-renew",
+                "--name",
+                "NEW.example",
+                "--name",
+                "::1",
+            ],
+        ));
+        assert_eq!(named["names"], serde_json::json!(["::1", "new.example"]));
+        assert_eq!(named["ca_sha256"], original["ca_sha256"]);
+        assert_eq!(named, json(command(&f.directory, &["workspace-tls-info"])));
+        let db = rusqlite::Connection::open(f.directory.join("ccp.sqlite3")).unwrap();
+        let count: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM ccp_access_audit WHERE action = 'renew_instance_tls'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn real_cli_renewal_refuses_busy_bad_names_and_missing_selected_generation() {
+        let f = Fixture::new();
+        let original = f.init();
+        let native = DirectoryLease::native(&f.directory).unwrap();
+        assert!(
+            !command(&f.directory, &["workspace-tls-renew"])
+                .status
+                .success()
+        );
+        drop(native);
+        assert!(
+            !command(
+                &f.directory,
+                &["workspace-tls-renew", "--name", "*.example"]
+            )
+            .status
+            .success()
+        );
+        let missing = f.directory.join("missing");
+        assert!(!command(&missing, &["workspace-tls-renew"]).status.success());
+        assert!(!missing.exists());
+        assert_eq!(
+            original,
+            json(command(&f.directory, &["workspace-tls-info"]))
+        );
+        let lease = DirectoryLease::activate_workspace(&f.directory).unwrap();
+        assert!(
+            !command(&f.directory, &["workspace-tls-renew"])
+                .status
+                .success()
+        );
+        drop(lease);
+        json(command(&f.directory, &["workspace-tls-renew"]));
+        let db = rusqlite::Connection::open(f.directory.join("ccp.sqlite3")).unwrap();
+        let hash: String = db
+            .query_row(
+                "SELECT lower(hex(bundle_hash)) FROM ccp_instance_tls",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        drop(db);
+        let path = f.directory.join(format!("ccp-instance-tls-{hash}.json"));
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            !command(&f.directory, &["workspace-tls-info"])
+                .status
+                .success()
+        );
+        assert!(
+            !command(&f.directory, &["workspace-tls-renew"])
+                .status
+                .success()
+        );
+        assert!(!path.exists());
+        assert!(f.directory.join("ccp-instance-tls.json").is_file());
+    }
 }

@@ -426,7 +426,7 @@ fn schema12_upgrade_preserves_instance_roles_keys_and_mode() {
     let version: u32 = connection
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 13);
+    assert_eq!(version, crate::init::SCHEMA_VERSION);
     assert!(DirectoryLease::native(&f.directory).is_ok());
 }
 
