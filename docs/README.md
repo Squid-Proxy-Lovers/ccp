@@ -44,6 +44,7 @@ the other guides describe the supported native interface.
 | Build the server crate | [Server crate](../crates/server/README.md) |
 | Work with wire types and compatibility | [Protocol crate](../crates/protocol/README.md) |
 | Understand the unreleased workspace migration and permission foundation | [Workspace access foundation](workspace-foundation.md) |
+| Understand internal workspace shelf/book storage and its legacy boundary | [Workspace content foundation](workspace-content.md) |
 | Understand atomic first-owner appointment and initial key delivery | [Initial workspace owners](initial-workspace-owners.md) |
 | Understand unreleased scoped-key authentication | [Workspace admin keys](workspace-admin-keys.md) |
 | Understand unreleased initial enrollment policy | [Invitation state](workspace-invitation-state.md) |

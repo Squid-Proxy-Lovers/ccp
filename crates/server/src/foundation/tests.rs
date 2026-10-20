@@ -1296,4 +1296,5 @@ mod discovery;
 
 mod management;
 
+mod content;
 mod team;

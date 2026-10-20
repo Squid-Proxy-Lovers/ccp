@@ -12,6 +12,7 @@
 mod access;
 mod admin;
 mod certificate;
+mod content;
 mod invitation;
 mod model;
 mod provisioning;
@@ -28,6 +29,7 @@ pub(crate) use certificate::strict_pem_der;
 pub use certificate::{
     EnrollmentReceipt, IssuingAuthority, RedemptionRequest, RenewalReceipt, RenewalRequest,
 };
+pub use content::{HierarchyPage, NodeDraft, WorkspaceBook, WorkspaceShelf};
 pub use invitation::{
     IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,
     ReadmissionInvitationRequest,
@@ -54,6 +56,7 @@ const SCHEMA: &str = include_str!("schema.sql");
 
 pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(SCHEMA)?;
+    transaction.execute_batch(include_str!("content.sql"))?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

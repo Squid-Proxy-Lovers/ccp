@@ -3,9 +3,10 @@
 The unreleased workspace server needs a different authorization and persistence
 path from the legacy native runtime. A data directory must not be served through
 both at once. Mode leases now cover current native startup, session discovery,
-health and token issuance, and provide an exclusive boundary for future
-workspace startup and [local provisioning/reset](local-workspace-administration.md). No workspace listener or
-operator activation command is exposed by this batch. See the
+health and token issuance, and provide an exclusive boundary for
+[workspace HTTPS startup](workspace-http-api.md) and
+[local provisioning/reset](local-workspace-administration.md). The workspace
+runtime activates only with the explicit `--activate-workspace` flag. See the
 [documentation index](README.md) for supported interfaces.
 
 ## Preserve the supported native flow
@@ -27,8 +28,8 @@ same lease boundary.
 
 ## Explicit workspace activation
 
-`DirectoryLease::activate_workspace` is a trusted local server primitive for
-future workspace startup. It requires exclusive access; every shared native
+`DirectoryLease::activate_workspace` is the trusted local primitive used by
+explicit workspace startup. It requires exclusive access; every shared native
 lease must first be released. Stop all native processes cleanly and retain a
 complete matching backup before activation. A nonempty legacy journal blocks
 activation, so existing native recovery can replay it and complete a clean

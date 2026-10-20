@@ -360,7 +360,7 @@ fn schema13_original_layout_upgrades_without_changing_instance_or_owner_keys() {
         .db()
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 14);
+    assert_eq!(version, crate::init::SCHEMA_VERSION);
     let mut db = f.db();
     let mut store = crate::foundation::AccessStore::new(&mut db).unwrap();
     assert!(
