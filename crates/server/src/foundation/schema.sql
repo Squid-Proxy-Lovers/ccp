@@ -248,3 +248,11 @@ CREATE TABLE IF NOT EXISTS ccp_runtime_mode (
     mode TEXT NOT NULL CHECK (mode IN ('native', 'workspace'))
 );
 INSERT OR IGNORE INTO ccp_runtime_mode(singleton, mode) VALUES (1, 'native');
+
+-- Public pin for the independently stored private instance TLS bundle.
+CREATE TABLE IF NOT EXISTS ccp_instance_tls (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    instance_id TEXT NOT NULL UNIQUE REFERENCES ccp_instance(instance_id) ON DELETE RESTRICT,
+    bundle_hash BLOB NOT NULL CHECK (length(bundle_hash) = 32),
+    ca_fingerprint BLOB NOT NULL CHECK (length(ca_fingerprint) = 32)
+);

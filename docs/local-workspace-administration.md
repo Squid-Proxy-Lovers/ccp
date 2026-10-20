@@ -97,7 +97,7 @@ commands.
 
 ## Storage and scope limits
 
-These operations preserve the schema-12
+These operations preserve the
 [runtime mode markers](workspace-runtime-mode.md), including workspace activation.
 They do not clear data, role restrictions or activation to regain access.
 Unsupported/HTTP-draft schemas require the
@@ -110,3 +110,6 @@ be wired to first-visitor signup or remote reset endpoints. A global bearer key
 alone does not authorize these host operations. Additional-workspace first-owner
 onboarding, client TLS, the browser panel and content migration remain separate
 implementation work.
+
+After administration setup, [provision instance TLS identity](instance-tls-identity.md)
+with explicitly chosen server names. That is a separate local operation.

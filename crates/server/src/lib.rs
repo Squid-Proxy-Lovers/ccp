@@ -7,6 +7,7 @@ pub mod directory_mode;
 pub mod foundation;
 pub mod identity;
 pub mod init;
+pub mod instance_tls;
 pub mod journal;
 pub mod local_admin;
 pub mod message;

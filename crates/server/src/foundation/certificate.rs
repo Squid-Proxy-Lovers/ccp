@@ -190,7 +190,7 @@ impl VerifiedCsr {
 /// Only outer ASCII whitespace is allowed. Decode one exact-label PEM block
 /// once, then give both DER consumers the identical bytes; never let separate
 /// PEM parsers select different certificates or requests from one string.
-fn strict_pem_der(input: &str, label: &str) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn strict_pem_der(input: &str, label: &str) -> anyhow::Result<Vec<u8>> {
     let input = input.trim_matches(|character: char| character.is_ascii_whitespace());
     let header = format!("-----BEGIN {label}-----");
     let footer = format!("-----END {label}-----");

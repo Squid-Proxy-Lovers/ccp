@@ -91,6 +91,10 @@ impl DirectoryLease {
         self.0.kind == LeaseKind::Native
     }
 
+    pub(crate) fn allows_workspace(&self) -> bool {
+        self.0.kind == LeaseKind::Workspace
+    }
+
     fn acquire(directory: &Path, kind: LeaseKind) -> anyhow::Result<Self> {
         acquire(directory, kind)
             .map_err(classify_conflict)

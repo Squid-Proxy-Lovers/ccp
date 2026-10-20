@@ -14,6 +14,8 @@ const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
   server health <session>
   server workspace-init --data-dir <DIR> --operator <NAME> --workspace <NAME>
+  server workspace-tls-init --data-dir <DIR> --name <DNS_OR_IP> [--name <DNS_OR_IP>...]
+  server workspace-tls-info --data-dir <DIR>
   server admin-info --data-dir <DIR>
   server reset-instance-key --data-dir <DIR> --principal <UUID> [--ttl-seconds <SECONDS>]
   server reset-owner-key --data-dir <DIR> --workspace <UUID> [--ttl-seconds <SECONDS>]"#;
@@ -33,6 +35,8 @@ enum Command {
     Health(HealthArgs),
     WorkspaceInit(WorkspaceInitArgs),
     AdminInfo(LocalDataArgs),
+    WorkspaceTlsInit(WorkspaceTlsArgs),
+    WorkspaceTlsInfo(LocalDataArgs),
     ResetInstanceKey(ResetInstanceArgs),
     ResetOwnerKey(ResetOwnerArgs),
 }
@@ -67,6 +71,14 @@ struct WorkspaceInitArgs {
     operator: String,
     #[arg(long, value_name = "NAME")]
     workspace: String,
+}
+
+#[derive(Args)]
+struct WorkspaceTlsArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long = "name", value_name = "DNS_OR_IP", required = true)]
+    names: Vec<String>,
 }
 
 #[derive(Args)]
@@ -145,6 +157,11 @@ fn execute_command(command: Command) -> anyhow::Result<()> {
                 "workspace_owner_key": {"id": result.owner_key.id.to_string(), "secret": result.owner_key.secret()}
             }))
         }
+        Command::WorkspaceTlsInit(args) => print_json(&server::instance_tls::initialize(
+            &args.data.data_dir,
+            &args.names,
+        )?),
+        Command::WorkspaceTlsInfo(args) => print_json(&server::instance_tls::info(&args.data_dir)?),
         Command::AdminInfo(args) => print_json(&server::local_admin::info(&args.data_dir)?),
         Command::ResetInstanceKey(args) => print_reset(server::local_admin::reset_key(
             &args.data.data_dir,

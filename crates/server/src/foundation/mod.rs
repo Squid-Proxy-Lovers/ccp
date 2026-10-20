@@ -22,6 +22,7 @@ pub use admin::{
     AdminKeyRequest, AdminKeyScope, BootstrappedInstance, IssuedAdminKey, LocalKeyReset,
     LocalKeyTarget,
 };
+pub(crate) use certificate::strict_pem_der;
 pub use certificate::{
     EnrollmentReceipt, IssuingAuthority, RedemptionRequest, RenewalReceipt, RenewalRequest,
 };
