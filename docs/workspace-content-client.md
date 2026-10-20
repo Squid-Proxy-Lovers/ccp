@@ -1,14 +1,66 @@
-# Read workspace content with the client
+# Use workspace content with the client
 
 Use an enrolled [workspace profile](workspace-client.md) and an explicit workspace
 UUID to read shelves, books, entries and their history. These unreleased commands
 use the authenticated [content HTTPS API](workspace-content-http.md). Entry
 mutations have their own [client guide](workspace-content-mutations.md).
-Container creation and workspace MCP content tools are later work.
+The client also creates shelves and books. Workspace MCP content tools are later work.
 The existing workspace MCP bridge still exposes metadata and caller selections.
 
 [Documentation index](README.md) · [Caller selections](workspace-selection.md) ·
 [Content ownership and revisions](workspace-content.md)
+
+## Create shelves and books
+
+Use an installed client or `target/release/client` from a checkout. Save a private
+UTF-8 JSON request file and specify its path. UUIDs here are illustrative: replace
+them with your accessible workspace and the shelf UUID returned by creation.
+
+```bash
+umask 077
+cat > shelf.json <<'JSON'
+{
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "name": "notes",
+  "description": "Project notes"
+}
+JSON
+ccp-client workspace content --profile ./my-profile create-shelf \
+  --request-file ./shelf.json
+
+cat > book.json <<'JSON'
+{
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "shelf_id": "22222222-2222-4222-8222-222222222222",
+  "name": "findings",
+  "description": "Research findings"
+}
+JSON
+ccp-client workspace content --profile ./my-profile create-book \
+  --request-file ./book.json
+```
+
+Each command returns the created node's UUID, explicit workspace and parent,
+normalized name, exact description and creation time. Names are trimmed, nonempty,
+at most 256 UTF-8 bytes and contain no control characters. Descriptions preserve
+text up to 4096 bytes. The encoded request and file are limited to 64 KiB; unknown
+fields, nonprivate Unix files and symlinks fail. No client/admin identity claims
+are accepted. Use the book UUID with [entry mutations](workspace-content-mutations.md).
+
+Creation sends one POST and has no operation receipt, saved intent or automatic
+retry. If a reply is lost, refused or inconsistent, inspect `shelves` in the
+explicit workspace or `books` under the explicit shelf before deciding to retry.
+A duplicate name conflicts and never overwrites or claims an existing node.
+Failure emits no partial JSON and no remote body fragments. This workflow is
+separate from durable entry mutation/resume controls.
+
+The client rejects creation while an entry intent or admission/recovery operation
+is pending. A pending renewal resumes first. An authorized parent read can perform
+routine due renewal before creation; a denied read never starts it. A read-only
+or archived workspace can pass the read preflight and still refuse the creation
+POST. The server checks current write permissions, revocation and disable at
+creation. Selections and recovery-profile authority stay separate. All formats
+and dependency versions remain unchanged by these creation commands.
 
 ## Browse a workspace
 

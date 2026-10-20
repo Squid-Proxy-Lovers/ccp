@@ -4,7 +4,8 @@ Use an enrolled [workspace profile](workspace-client.md), an explicit workspace
 UUID and a book or entry UUID from the [content reads](workspace-content-client.md).
 These unreleased library and CLI operations create, append, revise, archive and
 restore entries through the [content HTTPS API](workspace-content-http.md).
-Container creation and MCP content tools remain later work.
+Use [shelf/book creation](workspace-content-client.md#create-shelves-and-books)
+to prepare the hierarchy. MCP content tools remain later work.
 
 [Documentation index](README.md) · [Ownership and revisions](workspace-content.md) ·
 [Server operation resolution](workspace-operation-resolution.md)

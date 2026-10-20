@@ -4,15 +4,17 @@
 
 //! Explicit workspace content reads and durable entry intents over pinned mTLS.
 pub use protocol::workspace::content::{
-    Book, BookPage, ContentActor, EntryChange, EntryContent, EntryMutation, EntryOperationOutcome,
-    EntryOperationResolution, EntryPage, EntryReceipt, EntryRevision, EntrySnapshot, EntrySummary,
-    EntryTarget, History, HistoryPage, NodeTarget, Page, Shelf, ShelfPage,
+    Book, BookPage, ContentActor, CreateBook, CreateShelf, EntryChange, EntryContent,
+    EntryMutation, EntryOperationOutcome, EntryOperationResolution, EntryPage, EntryReceipt,
+    EntryRevision, EntrySnapshot, EntrySummary, EntryTarget, History, HistoryPage, NodeTarget,
+    Page, Shelf, ShelfPage,
 };
 
 use super::*;
 use serde::de::DeserializeOwned;
 
 pub(crate) mod cli;
+pub(crate) mod create;
 pub(crate) mod mutation;
 pub use mutation::ContentOperationInfo;
 mod validate;
@@ -130,7 +132,7 @@ impl WorkspaceProfile {
         {
             self.renew().await?;
         }
-        let value = self.fetch_content(path, request).await?;
+        let value = self.content_request(path, request).await?;
         check(&value)?;
         // An authorized, validated target response proves a usable grant even
         // when its page is empty. No renewal is attempted after a denied read.
@@ -139,14 +141,14 @@ impl WorkspaceProfile {
             && self.renewal_due(crypto::now()?)?
         {
             self.renew().await?;
-            let value = self.fetch_content(path, request).await?;
+            let value = self.content_request(path, request).await?;
             check(&value)?;
             return Ok(value);
         }
         Ok(value)
     }
 
-    async fn fetch_content<Q: Serialize, T: DeserializeOwned>(
+    async fn content_request<Q: Serialize, T: DeserializeOwned>(
         &self,
         path: &str,
         request: &Q,
@@ -154,7 +156,7 @@ impl WorkspaceProfile {
         let material = self
             .credential
             .as_ref()
-            .context("content reads require an enrolled profile")?;
+            .context("content access requires an enrolled profile")?;
         crypto::credential(&self.trust, material, crypto::now()?)?;
         let http = network::client(&self.trust, Some(material))?;
         network::health(&http, &self.trust.mtls_origin, &self.trust.instance_id).await?;

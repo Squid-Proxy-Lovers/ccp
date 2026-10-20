@@ -4,7 +4,8 @@ This unreleased internal server API stores workspace shelves, books and
 client-owned entries in shared SQLite, with immutable revisions and recoverable
 entry archives. The [authenticated HTTP adapter](workspace-content-http.md) now
 exposes this store. The [normal client](workspace-content-client.md) now supports
-content reads; mutation commands and workspace MCP content tools follow later. The workspace MCP bridge
+content reads, shelf/book creation and [entry mutations](workspace-content-mutations.md).
+Workspace MCP content tools follow later. The workspace MCP bridge
 currently returns metadata and selections, not content.
 
 [Documentation index](README.md) · [Workspace access](workspace-foundation.md) ·

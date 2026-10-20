@@ -6,6 +6,7 @@ use super::*;
 use client::workspace::content as api;
 use server::foundation::{Actor, EntryChange, EntryContent, EntryMutation, NodeDraft};
 
+mod create;
 mod lifecycle;
 mod mutation;
 
