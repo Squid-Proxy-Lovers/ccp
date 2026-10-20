@@ -1,11 +1,12 @@
 # Recover an existing workspace client
 
-This unreleased internal API lets an authorized administrator issue a fresh
+This unreleased API lets an authorized administrator issue a fresh
 individual recovery invitation for an existing registered client. It preserves
-the client UUID and current grants. It exposes no web endpoint, CLI command or
-browser workflow yet. The future adapters must authenticate administrative
-actors, establish server trust before transmitting secrets, and use these same
-transactions. See the [documentation index](README.md) for supported interfaces.
+the client UUID and current grants. The [workspace HTTPS API](workspace-http-api.md)
+exposes scoped issuance, status, revocation and public certificate redemption.
+Verify the server CA and name before transmitting secrets. Normal client/MCP
+commands and browser workflows remain subsequent work.
+See the [documentation index](README.md) for supported interfaces.
 
 ## Choose the authorized scope
 
@@ -96,8 +97,10 @@ apply; schema-9 renewal and earlier supported native identities are preserved.
 
 Tests cover scoped/global recovery, expired clients, current role/key loss,
 archived reads, partial grant revocation, immutable capture, exact retries,
-competing requests, rollback, schema-9 upgrade and restart. Full network identity
-verification, server-trust setup and local operator reset remain subsequent
-work. Explicit [targeted readmission](workspace-readmission.md) is a separate
+competing requests, rollback, schema-9 upgrade and restart. Actual localhost TLS
+tests cover scope, current issuer/disable, fresh keys, retry, concurrency, audit
+rollback and unrelated bindings. Network receipts omit captured grant IDs; those
+remain internal records. Production deployment, normal client/MCP and browser
+flows remain incomplete. Explicit [targeted readmission](workspace-readmission.md) is a separate
 administrative action that creates a new grant; recovery never restores a
 revoked grant.

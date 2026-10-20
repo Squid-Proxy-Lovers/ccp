@@ -97,3 +97,75 @@ pub struct CertificateReceipt {
     pub certificate_pem: String,
     pub expires_at: i64,
 }
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceTarget {
+    pub workspace_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvitationTarget {
+    pub workspace_id: String,
+    pub invitation_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReadmissionInvitation {
+    pub workspace_id: String,
+    pub client_id: String,
+    pub role: Role,
+    pub expires_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum RecoveryScope {
+    Instance {},
+    Workspace { workspace_id: String },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryInvitation {
+    pub client_id: String,
+    pub scope: RecoveryScope,
+    pub expires_at: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryTarget {
+    pub invitation_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct OperationComplete {
+    pub completed: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InvitationStatus {
+    pub invitation_id: String,
+    pub uses: u64,
+    pub max_uses: Option<u64>,
+    pub expires_at: Option<i64>,
+    pub revoked: bool,
+    pub expired: bool,
+    pub initial_closed: bool,
+    pub issuer_authorized: bool,
+    pub target_client_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RecoveryStatus {
+    pub client_id: String,
+    pub scope: RecoveryScope,
+    pub expires_at: i64,
+    pub revoked: bool,
+    pub expired: bool,
+    pub redeemed: bool,
+    pub issuer_authorized: bool,
+}

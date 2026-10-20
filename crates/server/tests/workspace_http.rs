@@ -1139,4 +1139,987 @@ mod tests {
         }
         std::fs::remove_dir_all(directory).unwrap();
     }
+    async fn admin_action(f: &Fixture, key: &str, path: &str, body: &Value, status: u16) -> Value {
+        json_reply(
+            f.public_client()
+                .post(f.url(path))
+                .bearer_auth(key)
+                .json(body)
+                .send()
+                .await
+                .unwrap(),
+            status,
+        )
+        .await["data"]
+            .clone()
+    }
+    async fn public_action(f: &Fixture, path: &str, body: &Value, status: u16) -> Value {
+        json_reply(
+            f.public_client()
+                .post(f.url(path))
+                .json(body)
+                .send()
+                .await
+                .unwrap(),
+            status,
+        )
+        .await
+    }
+    async fn joined_pair(f: &Fixture) -> (Value, KeyPair, ProvisionedWorkspace) {
+        let (old, key) = f.enroll().await;
+        let second = f.second();
+        let invite = f
+            .initial(second.owner_key.secret(), second.workspace_id)
+            .await;
+        let private = f.private_client(old["certificate_pem"].as_str().unwrap(), &key);
+        json_reply(private.post(f.mtls("/api/v1/admissions"))
+            .json(&json!({"invitation":invite["secret"],"request_id":Uuid::new_v4().to_string(),"csr_pem":csr(&key)}))
+            .send().await.unwrap(),200).await;
+        (old, key, second)
+    }
+    async fn workspace_ids(f: &Fixture, receipt: &Value, key: &KeyPair) -> Vec<String> {
+        let reply = json_reply(
+            f.private_client(receipt["certificate_pem"].as_str().unwrap(), key)
+                .get(f.mtls("/api/v1/workspaces"))
+                .send()
+                .await
+                .unwrap(),
+            200,
+        )
+        .await;
+        reply["data"]["workspaces"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+    async fn recovery_ticket(f: &Fixture, admin_key: &str, old: &Value, scope: Value) -> Value {
+        admin_action(
+            f,
+            admin_key,
+            "/api/v1/admin/recovery/issue",
+            &json!({"client_id":old["client_id"],"scope":scope,"expires_at":now()+3600}),
+            200,
+        )
+        .await
+    }
+    fn redemption(ticket: &Value, key: &KeyPair) -> Value {
+        json!({"invitation":ticket["secret"],"request_id":Uuid::new_v4().to_string(),"csr_pem":csr(key)})
+    }
+    fn revoke_first_grant(f: &Fixture) {
+        let mut db = f.db();
+        let grant: String = db
+            .query_row(
+                "SELECT id FROM ccp_grants WHERE workspace_id=?1 AND revoked_at IS NULL",
+                [f.setup.workspace_id.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut store = AccessStore::new(&mut db).unwrap();
+        let actor = store
+            .authenticate_admin_key(f.setup.owner_key.secret(), now())
+            .unwrap();
+        store
+            .revoke_grant(actor, Uuid::parse_str(&grant).unwrap(), now())
+            .unwrap();
+    }
+    async fn readmission_ticket(f: &Fixture, old: &Value) -> Value {
+        admin_action(f, f.setup.owner_key.secret(), "/api/v1/admin/invitations/readmission",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"client_id":old["client_id"],"role":"read","expires_at":now()+3600}),200).await
+    }
+
+    async fn reject_cross_scope_invitation_actions(
+        f: &Fixture,
+        second: &ProvisionedWorkspace,
+        target: &Value,
+    ) {
+        for wrong in [f.setup.instance_key.secret(), second.owner_key.secret()] {
+            for action in ["status", "revoke"] {
+                admin_action(
+                    f,
+                    wrong,
+                    &format!("/api/v1/admin/invitations/{action}"),
+                    target,
+                    403,
+                )
+                .await;
+            }
+            admin_action(
+                f,
+                wrong,
+                "/api/v1/admin/enrollment/close",
+                &json!({"workspace_id":f.setup.workspace_id.to_string()}),
+                403,
+            )
+            .await;
+        }
+    }
+
+    async fn reject_invalid_recovery_scopes(f: &Fixture, old: &Value) {
+        for scope in [
+            Value::Null,
+            json!({"kind":"global"}),
+            json!({"kind":"instance","workspace_id":f.setup.workspace_id.to_string()}),
+            json!({"kind":"workspace"}),
+            json!({"kind":"workspace","workspace_id":"bad"}),
+            json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string(),"actor":"admin"}),
+        ] {
+            admin_action(
+                f,
+                f.setup.instance_key.secret(),
+                "/api/v1/admin/recovery/issue",
+                &json!({"client_id":old["client_id"],"scope":scope,"expires_at":now()+3600}),
+                400,
+            )
+            .await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn invitation_lifecycle_closure_is_terminal_and_status_is_scoped_secret_free() {
+        let f = Fixture::new().await;
+        let second = f.second();
+        let ticket = f
+            .initial(f.setup.owner_key.secret(), f.setup.workspace_id)
+            .await;
+        let target = json!({"workspace_id":f.setup.workspace_id.to_string(),"invitation_id":ticket["invitation_id"]});
+        reject_cross_scope_invitation_actions(&f, &second, &target).await;
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["uses"], 0);
+        assert_eq!(status["initial_closed"], false);
+        assert_eq!(status["issuer_authorized"], true);
+        assert_eq!(status["target_client_id"], Value::Null);
+        assert!(
+            !status
+                .to_string()
+                .contains(ticket["secret"].as_str().unwrap())
+        );
+        assert!(status.get("token_hash").is_none());
+        for _ in 0..2 {
+            let done = admin_action(
+                &f,
+                f.setup.owner_key.secret(),
+                "/api/v1/admin/enrollment/close",
+                &json!({"workspace_id":f.setup.workspace_id.to_string()}),
+                200,
+            )
+            .await;
+            assert_eq!(done, json!({"completed":true}));
+        }
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["initial_closed"], true);
+        public_action(
+            &f,
+            "/api/v1/enroll",
+            &redemption(&ticket, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/invitations/initial",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"role":"read","max_clients":2,"expires_at":null}),403).await;
+        let individual = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/individual",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"role":"read","expires_at":now()+3600}),
+            200,
+        )
+        .await;
+        let individual_target = json!({"workspace_id":f.setup.workspace_id.to_string(),"invitation_id":individual["invitation_id"]});
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/revoke",
+            &individual_target,
+            200,
+        )
+        .await;
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &individual_target,
+            200,
+        )
+        .await;
+        assert_eq!(status["revoked"], true);
+        public_action(
+            &f,
+            "/api/v1/enroll",
+            &redemption(&individual, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_clients", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn scoped_recovery_uses_fresh_key_exact_retry_and_preserves_other_workspace_binding() {
+        let f = Fixture::new().await;
+        let (old, key, second) = joined_pair(&f).await;
+        let ticket = recovery_ticket(
+            &f,
+            f.setup.owner_key.secret(),
+            &old,
+            json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()}),
+        )
+        .await;
+        public_action(
+            &f,
+            "/api/v1/enroll",
+            &redemption(&ticket, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        public_action(&f, "/api/v1/recover", &redemption(&ticket, &key), 403).await;
+        let newkey = KeyPair::generate().unwrap();
+        let body = redemption(&ticket, &newkey);
+        let recovered = public_action(&f, "/api/v1/recover", &body, 200).await;
+        assert_eq!(recovered["data"]["client_id"], old["client_id"]);
+        assert_ne!(recovered["data"]["credential_id"], old["credential_id"]);
+        assert_eq!(recovered["data"]["instance_id"], f.trust.instance_id);
+        assert!(!recovered.to_string().contains("PRIVATE KEY"));
+        assert!(recovered["data"].get("grant_ids").is_none());
+        assert_eq!(
+            public_action(&f, "/api/v1/recover", &body, 200).await,
+            recovered
+        );
+        let mut wrong = body.clone();
+        wrong["request_id"] = json!(Uuid::new_v4().to_string());
+        public_action(&f, "/api/v1/recover", &wrong, 403).await;
+        let wrong_key = redemption(&ticket, &KeyPair::generate().unwrap());
+        public_action(&f, "/api/v1/recover", &wrong_key, 403).await;
+        assert_eq!(
+            workspace_ids(&f, &old, &key).await,
+            vec![second.workspace_id.to_string()]
+        );
+        assert_eq!(
+            workspace_ids(&f, &recovered["data"], &newkey).await,
+            vec![f.setup.workspace_id.to_string()]
+        );
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/recovery/status",
+            &json!({"invitation_id":ticket["invitation_id"]}),
+            200,
+        )
+        .await;
+        assert_eq!(status["redeemed"], true);
+        assert_eq!(status["client_id"], old["client_id"]);
+        assert_eq!(
+            status["scope"],
+            json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()})
+        );
+        assert!(status.get("secret").is_none());
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_clients", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_grants", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn global_recovery_captures_live_grants_and_never_restores_revoked_access() {
+        let f = Fixture::new().await;
+        let (old, key, second) = joined_pair(&f).await;
+        let scope = json!({"kind":"instance"});
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/recovery/issue",
+            &json!({"client_id":old["client_id"],"scope":scope,"expires_at":now()+3600}),
+            403,
+        )
+        .await;
+        admin_action(&f,f.setup.instance_key.secret(),"/api/v1/admin/recovery/issue",
+            &json!({"client_id":old["client_id"],"scope":{"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()},"expires_at":now()+3600}),403).await;
+        let ticket = recovery_ticket(&f, f.setup.instance_key.secret(), &old, scope).await;
+        let target = json!({"invitation_id":ticket["invitation_id"]});
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/recovery/status",
+            &target,
+            403,
+        )
+        .await;
+        let status = admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/recovery/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["scope"], json!({"kind":"instance"}));
+        revoke_first_grant(&f);
+        let newkey = KeyPair::generate().unwrap();
+        let body = redemption(&ticket, &newkey);
+        let recovered = public_action(&f, "/api/v1/recover", &body, 200).await;
+        assert_eq!(recovered["data"]["client_id"], old["client_id"]);
+        assert_eq!(
+            public_action(&f, "/api/v1/recover", &body, 200).await,
+            recovered
+        );
+        assert_eq!(
+            workspace_ids(&f, &recovered["data"], &newkey).await,
+            vec![second.workspace_id.to_string()]
+        );
+        assert!(workspace_ids(&f, &old, &key).await.is_empty());
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM ccp_grants WHERE revoked_at IS NOT NULL",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_revocation_and_current_issuer_apply_to_public_redemption() {
+        let f = Fixture::new().await;
+        let (old, _key, second) = joined_pair(&f).await;
+        let scope = json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()});
+        let ticket = recovery_ticket(&f, f.setup.owner_key.secret(), &old, scope.clone()).await;
+        let target = json!({"invitation_id":ticket["invitation_id"]});
+        for key in [second.owner_key.secret(), f.setup.instance_key.secret()] {
+            for action in ["status", "revoke"] {
+                admin_action(
+                    &f,
+                    key,
+                    &format!("/api/v1/admin/recovery/{action}"),
+                    &target,
+                    403,
+                )
+                .await;
+            }
+        }
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/recovery/revoke",
+            &target,
+            200,
+        )
+        .await;
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/recovery/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["revoked"], true);
+        assert_eq!(status["redeemed"], false);
+        public_action(
+            &f,
+            "/api/v1/recover",
+            &redemption(&ticket, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        let fresh = recovery_ticket(&f, f.setup.owner_key.secret(), &old, scope).await;
+        f.db()
+            .execute(
+                "UPDATE ccp_admin_keys SET revoked_at=?1 WHERE id=?2",
+                rusqlite::params![now(), f.setup.owner_key.id.to_string()],
+            )
+            .unwrap();
+        public_action(
+            &f,
+            "/api/v1/recover",
+            &redemption(&fresh, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        let status=admin_action(&f,second.owner_key.secret(),"/api/v1/admin/recovery/issue",
+            &json!({"client_id":old["client_id"],"scope":{"kind":"workspace","workspace_id":second.workspace_id.to_string()},"expires_at":now()+3600}),200).await;
+        assert!(
+            status["secret"]
+                .as_str()
+                .unwrap()
+                .starts_with("ccp_recover_")
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn globally_disabled_client_cannot_issue_redeem_or_retry_recovery() {
+        let f = Fixture::new().await;
+        let (old, _key) = f.enroll().await;
+        let scope = json!({"kind":"instance"});
+        let ticket = recovery_ticket(&f, f.setup.instance_key.secret(), &old, scope.clone()).await;
+        let body = redemption(&ticket, &KeyPair::generate().unwrap());
+        let recovered = public_action(&f, "/api/v1/recover", &body, 200).await;
+        assert_eq!(recovered["data"]["client_id"], old["client_id"]);
+        let pending = recovery_ticket(&f, f.setup.instance_key.secret(), &old, scope.clone()).await;
+        {
+            let mut db = f.db();
+            let mut store = AccessStore::new(&mut db).unwrap();
+            let actor = store
+                .authenticate_admin_key(f.setup.instance_key.secret(), now())
+                .unwrap();
+            store
+                .disable_client(
+                    actor,
+                    Uuid::parse_str(old["client_id"].as_str().unwrap()).unwrap(),
+                    now(),
+                )
+                .unwrap();
+        }
+        public_action(&f, "/api/v1/recover", &body, 403).await;
+        public_action(
+            &f,
+            "/api/v1/recover",
+            &redemption(&pending, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        admin_action(
+            &f,
+            f.setup.instance_key.secret(),
+            "/api/v1/admin/recovery/issue",
+            &json!({"client_id":old["client_id"],"scope":scope,"expires_at":now()+3600}),
+            403,
+        )
+        .await;
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn targeted_readmission_returns_same_client_new_grant_and_preserves_other_access() {
+        let f = Fixture::new().await;
+        let (old, key, second) = joined_pair(&f).await;
+        revoke_first_grant(&f);
+        let body = json!({"workspace_id":f.setup.workspace_id.to_string(),"client_id":old["client_id"],"role":"read","expires_at":now()+3600});
+        for wrong in [f.setup.instance_key.secret(), second.owner_key.secret()] {
+            admin_action(
+                &f,
+                wrong,
+                "/api/v1/admin/invitations/readmission",
+                &body,
+                403,
+            )
+            .await;
+        }
+        let ticket = readmission_ticket(&f, &old).await;
+        let target = json!({"workspace_id":f.setup.workspace_id.to_string(),"invitation_id":ticket["invitation_id"]});
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["target_client_id"], old["client_id"]);
+        public_action(
+            &f,
+            "/api/v1/recover",
+            &redemption(&ticket, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        public_action(&f, "/api/v1/enroll", &redemption(&ticket, &key), 403).await;
+        let newkey = KeyPair::generate().unwrap();
+        let body = redemption(&ticket, &newkey);
+        let mut spoof = body.clone();
+        spoof["client_id"] = old["client_id"].clone();
+        public_action(&f, "/api/v1/enroll", &spoof, 400).await;
+        let readmitted = public_action(&f, "/api/v1/enroll", &body, 200).await;
+        assert_eq!(readmitted["data"]["client_id"], old["client_id"]);
+        assert_ne!(readmitted["data"]["credential_id"], old["credential_id"]);
+        assert_eq!(
+            public_action(&f, "/api/v1/enroll", &body, 200).await,
+            readmitted
+        );
+        assert_eq!(
+            workspace_ids(&f, &old, &key).await,
+            vec![second.workspace_id.to_string()]
+        );
+        assert_eq!(
+            workspace_ids(&f, &readmitted["data"], &newkey).await,
+            vec![f.setup.workspace_id.to_string()]
+        );
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["uses"], 1);
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_clients", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_grants", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            3
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn readmission_ticket_stays_stale_after_intervening_admission_is_revoked() {
+        let f = Fixture::new().await;
+        let (old, _key, _second) = joined_pair(&f).await;
+        revoke_first_grant(&f);
+        let stale = readmission_ticket(&f, &old).await;
+        let current = readmission_ticket(&f, &old).await;
+        public_action(
+            &f,
+            "/api/v1/enroll",
+            &redemption(&current, &KeyPair::generate().unwrap()),
+            200,
+        )
+        .await;
+        revoke_first_grant(&f);
+        public_action(
+            &f,
+            "/api/v1/enroll",
+            &redemption(&stale, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"invitation_id":stale["invitation_id"]}),
+            200,
+        )
+        .await;
+        assert_eq!(status["uses"], 0);
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM ccp_grants WHERE revoked_at IS NULL",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_atomic_rollback_and_concurrent_exact_retry_are_visible_over_https() {
+        let f = Fixture::new().await;
+        let (old, key) = f.enroll().await;
+        let ticket = recovery_ticket(
+            &f,
+            f.setup.owner_key.secret(),
+            &old,
+            json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()}),
+        )
+        .await;
+        let newkey = KeyPair::generate().unwrap();
+        let body = redemption(&ticket, &newkey);
+        f.db().execute_batch("CREATE TRIGGER fail_http_recovery BEFORE INSERT ON ccp_access_audit WHEN NEW.action='redeem_client_recovery' BEGIN SELECT RAISE(ABORT,'injected audit failure'); END;").unwrap();
+        public_action(&f, "/api/v1/recover", &body, 503).await;
+        assert_eq!(
+            workspace_ids(&f, &old, &key).await,
+            vec![f.setup.workspace_id.to_string()]
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_credentials", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        f.db()
+            .execute_batch("DROP TRIGGER fail_http_recovery")
+            .unwrap();
+        let (a, b) = tokio::join!(
+            public_action(&f, "/api/v1/recover", &body, 200),
+            public_action(&f, "/api/v1/recover", &body, 200)
+        );
+        assert_eq!(a, b);
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_credentials", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            workspace_ids(&f, &a["data"], &newkey).await,
+            vec![f.setup.workspace_id.to_string()]
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn archived_workspace_keeps_security_recovery_but_blocks_new_admission() {
+        let f = Fixture::new().await;
+        let (old, _key) = f.enroll().await;
+        {
+            let mut db = f.db();
+            let mut store = AccessStore::new(&mut db).unwrap();
+            let actor = store
+                .authenticate_admin_key(f.setup.owner_key.secret(), now())
+                .unwrap();
+            store
+                .set_archived(actor, f.setup.workspace_id, true, now())
+                .unwrap();
+        }
+        let ticket = recovery_ticket(
+            &f,
+            f.setup.owner_key.secret(),
+            &old,
+            json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()}),
+        )
+        .await;
+        let newkey = KeyPair::generate().unwrap();
+        let recovered =
+            public_action(&f, "/api/v1/recover", &redemption(&ticket, &newkey), 200).await;
+        assert_eq!(
+            workspace_ids(&f, &recovered["data"], &newkey).await,
+            vec![f.setup.workspace_id.to_string()]
+        );
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/individual",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"role":"read","expires_at":now()+3600}),
+            403,
+        )
+        .await;
+        revoke_first_grant(&f);
+        admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/invitations/readmission",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"client_id":old["client_id"],"role":"read","expires_at":now()+3600}),403).await;
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/enrollment/close",
+            &json!({"workspace_id":f.setup.workspace_id.to_string()}),
+            200,
+        )
+        .await;
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn recovery_dtos_listener_method_query_and_headers_cannot_select_authority() {
+        let f = Fixture::new().await;
+        let (old, key) = f.enroll().await;
+        let scope = json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()});
+        let ticket = recovery_ticket(&f, f.setup.owner_key.secret(), &old, scope).await;
+        let body = redemption(&ticket, &KeyPair::generate().unwrap());
+        for field in ["client_id", "credential_id", "actor", "grant_ids"] {
+            let mut spoof = body.clone();
+            spoof[field] = json!(old["client_id"]);
+            public_action(&f, "/api/v1/recover", &spoof, 400).await;
+        }
+        let public = f.public_client();
+        json_reply(
+            public
+                .post(f.url("/api/v1/recover"))
+                .bearer_auth(f.setup.owner_key.secret())
+                .json(&body)
+                .send()
+                .await
+                .unwrap(),
+            400,
+        )
+        .await;
+        json_reply(
+            public.get(f.url("/api/v1/recover")).send().await.unwrap(),
+            405,
+        )
+        .await;
+        public_action(&f, "/api/v1/recover?client_id=claimed", &body, 400).await;
+        reject_invalid_recovery_scopes(&f, &old).await;
+        json_reply(
+            public
+                .post(f.url("/api/v1/admin/recovery/status"))
+                .header("content-type", "application/json")
+                .bearer_auth(f.setup.owner_key.secret())
+                .body(format!(
+                    "{{\"invitation_id\":{},\"invitation_id\":{}}}",
+                    ticket["invitation_id"], ticket["invitation_id"]
+                ))
+                .send()
+                .await
+                .unwrap(),
+            400,
+        )
+        .await;
+        json_reply(
+            public
+                .get(f.url("/api/v1/admin/recovery/status"))
+                .bearer_auth(f.setup.owner_key.secret())
+                .send()
+                .await
+                .unwrap(),
+            405,
+        )
+        .await;
+        let private = f.private_client(old["certificate_pem"].as_str().unwrap(), &key);
+        json_reply(
+            private
+                .post(f.mtls("/api/v1/recover"))
+                .json(&body)
+                .send()
+                .await
+                .unwrap(),
+            404,
+        )
+        .await;
+        json_reply(
+            private
+                .post(f.mtls("/api/v1/admin/recovery/issue"))
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap(),
+            404,
+        )
+        .await;
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_invitations", [], |r| r
+                    .get::<_, i64>(
+                    0
+                ))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        public_action(&f, "/api/v1/recover", &body, 200).await;
+        drop(private);
+        drop(public);
+        f.finish().await;
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn global_recovery_concurrent_different_requests_issue_one_credential_for_both_workspaces()
+     {
+        let f = Fixture::new().await;
+        let (old, key, second) = joined_pair(&f).await;
+        let ticket = recovery_ticket(
+            &f,
+            f.setup.instance_key.secret(),
+            &old,
+            json!({"kind":"instance"}),
+        )
+        .await;
+        let key_a = KeyPair::generate().unwrap();
+        let key_b = KeyPair::generate().unwrap();
+        let body_a = redemption(&ticket, &key_a);
+        let body_b = redemption(&ticket, &key_b);
+        let a = f
+            .public_client()
+            .post(f.url("/api/v1/recover"))
+            .json(&body_a);
+        let b = f
+            .public_client()
+            .post(f.url("/api/v1/recover"))
+            .json(&body_b);
+        let (a, b) = tokio::join!(a.send(), b.send());
+        let a = a.unwrap();
+        let b = b.unwrap();
+        let codes = [a.status().as_u16(), b.status().as_u16()];
+        assert!(codes == [200, 403] || codes == [403, 200]);
+        let (success, newkey) = if codes[0] == 200 {
+            json_reply(b, 403).await;
+            (json_reply(a, 200).await, key_a)
+        } else {
+            json_reply(a, 403).await;
+            (json_reply(b, 200).await, key_b)
+        };
+        assert_eq!(success["data"]["client_id"], old["client_id"]);
+        assert_eq!(
+            workspace_ids(&f, &success["data"], &newkey).await,
+            vec![
+                f.setup.workspace_id.to_string(),
+                second.workspace_id.to_string()
+            ]
+        );
+        assert!(workspace_ids(&f, &old, &key).await.is_empty());
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_credentials", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            2
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn status_observation_persists_invitation_and_recovery_expiry_without_returning_secrets()
+    {
+        let f = Fixture::new().await;
+        let (old, _key) = f.enroll().await;
+        let invitation=admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/invitations/individual",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"role":"read","expires_at":now()+3600}),200).await;
+        f.db()
+            .execute(
+                "UPDATE ccp_invitations SET expires_at=?1 WHERE id=?2",
+                rusqlite::params![now() - 1, invitation["invitation_id"].as_str().unwrap()],
+            )
+            .unwrap();
+        let target = json!({"workspace_id":f.setup.workspace_id.to_string(),"invitation_id":invitation["invitation_id"]});
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/invitations/status",
+            &target,
+            200,
+        )
+        .await;
+        assert_eq!(status["expired"], true);
+        assert!(status.get("secret").is_none());
+        f.db()
+            .execute(
+                "UPDATE ccp_invitations SET expires_at=?1 WHERE id=?2",
+                rusqlite::params![now() + 3600, invitation["invitation_id"].as_str().unwrap()],
+            )
+            .unwrap();
+        public_action(
+            &f,
+            "/api/v1/enroll",
+            &redemption(&invitation, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        let recovery = recovery_ticket(
+            &f,
+            f.setup.owner_key.secret(),
+            &old,
+            json!({"kind":"workspace","workspace_id":f.setup.workspace_id.to_string()}),
+        )
+        .await;
+        f.db()
+            .execute(
+                "UPDATE ccp_recovery_invitations SET expires_at=?1 WHERE id=?2",
+                rusqlite::params![now() - 1, recovery["invitation_id"].as_str().unwrap()],
+            )
+            .unwrap();
+        let status = admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/recovery/status",
+            &json!({"invitation_id":recovery["invitation_id"]}),
+            200,
+        )
+        .await;
+        assert_eq!(status["expired"], true);
+        assert_eq!(status["redeemed"], false);
+        assert!(
+            !status
+                .to_string()
+                .contains(recovery["secret"].as_str().unwrap())
+        );
+        f.db()
+            .execute(
+                "UPDATE ccp_recovery_invitations SET expires_at=?1 WHERE id=?2",
+                rusqlite::params![now() + 3600, recovery["invitation_id"].as_str().unwrap()],
+            )
+            .unwrap();
+        public_action(
+            &f,
+            "/api/v1/recover",
+            &redemption(&recovery, &KeyPair::generate().unwrap()),
+            403,
+        )
+        .await;
+        assert_eq!(
+            f.db()
+                .query_row("SELECT COUNT(*) FROM ccp_recovery_receipts", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        f.finish().await;
+    }
 }

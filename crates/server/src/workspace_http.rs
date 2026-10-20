@@ -5,6 +5,7 @@
 //! Direct TLS-only workspace HTTP runtime. There is no proxy/header identity,
 //! browser cookie authentication, content endpoint or native transport fallback.
 mod dispatch;
+mod invitations;
 mod request;
 mod response;
 mod session;

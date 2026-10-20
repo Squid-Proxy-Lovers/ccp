@@ -2,8 +2,8 @@
 
 This unreleased API connects the reviewed workspace identity, key and certificate
 foundations to direct TLS listeners. It supports invitations, enrollment,
-discovery, existing-client admission and credential renewal. Content endpoints,
-complete admin/recovery management, browser login, workspace client profiles,
+discovery, existing-client admission, credential renewal and targeted recovery.
+Content endpoints, complete workspace/team/key management, browser login, client profiles,
 MCP integration and the human panel remain subsequent work. Keep this draft
 implementation separate from a production rollout.
 
@@ -61,7 +61,13 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
 | HTTPS | `POST /api/v1/admin/invitations/initial` | Current workspace owner/admin key; bounded initial group link |
 | HTTPS | `POST /api/v1/admin/invitations/individual` | Current workspace owner/admin key; individual link under existing window/expiry policy |
-| HTTPS | `POST /api/v1/enroll` | Invitation secret plus signed CSR; new registration only |
+| HTTPS | `POST /api/v1/admin/enrollment/close` | Scoped security authority; terminal initial-window closure |
+| HTTPS | `POST /api/v1/admin/invitations/status` or `/revoke` | Scoped security authority; invitation metadata or revocation |
+| HTTPS | `POST /api/v1/admin/invitations/readmission` | Current workspace owner/admin key; fresh targeted admission after revoked membership |
+| HTTPS | `POST /api/v1/admin/recovery/issue` | Current global or scoped recovery authority; captures still-authorized grants |
+| HTTPS | `POST /api/v1/admin/recovery/status` or `/revoke` | Matching current global or scoped recovery authority |
+| HTTPS | `POST /api/v1/enroll` | Invitation secret plus signed CSR; new registration or explicit targeted readmission |
+| HTTPS | `POST /api/v1/recover` | Fresh targeted recovery secret plus signed CSR; no old certificate required |
 | Client mTLS | `GET /api/v1/workspaces` | Actual registered current peer; accessible workspace metadata only |
 | Client mTLS | `POST /api/v1/admissions` | Actual current peer plus invitation/CSR; reuse its registration for a new workspace grant |
 | Client mTLS | `POST /api/v1/credentials/renew` | Actual peer proof and signed new CSR; atomic renewal or exact superseded-peer retry |
@@ -103,7 +109,8 @@ The initial invitation body contains `workspace_id`, `role` (`read` or
 `read_write`), `max_clients` and `expires_at` (Unix seconds). At least a positive
 capacity or future deadline is required. Individual invitations require the
 workspace UUID, role and a finite future expiry under the existing policy.
-Closing/managing the window beyond these operations is not exposed yet.
+Closing the window is terminal. Individual and readmission deadlines must be
+within seven days; an active group must first be explicitly closed.
 
 Enrollment/admission bodies contain only `invitation`, `request_id` (UUID) and
 `csr_pem`. Renewal contains only `request_id` and `csr_pem`. Admission derives
@@ -111,6 +118,71 @@ the existing credential from the actual peer; renewal never converts a
 superseded peer into an ordinary actor. Preserve the request UUID and CSR key
 to retry a lost enrollment/renewal response. Newly granted workspaces are
 available for discovery; no routine context selection is made by these APIs.
+
+## Manage invitations and recover a client
+
+All management actions below use authenticated HTTPS POST with a JSON body and
+an admin Bearer key. Status is POST because observing expiry can persist a
+terminal closure. Successful close/revoke returns `data.completed: true`.
+Revocation requires a currently unrevoked record; repeated close is idempotent.
+Only listing endpoints accept query parameters.
+
+| Action suffix under `/api/v1/admin/` | JSON fields |
+| --- | --- |
+| `enrollment/close` | `workspace_id` |
+| `invitations/status`, `invitations/revoke` | `workspace_id`, `invitation_id` |
+| `invitations/readmission` | `workspace_id`, `client_id`, `role`, `expires_at` |
+| `recovery/issue` | `client_id`, `scope`, `expires_at` |
+| `recovery/status`, `recovery/revoke` | `invitation_id` |
+
+UUIDs are strings. Recovery `scope` must be exactly one of the following objects;
+replace the illustrative workspace UUID with the intended target:
+
+```json
+{"kind":"instance"}
+```
+
+```json
+{"kind":"workspace","workspace_id":"00000000-0000-4000-8000-000000000001"}
+```
+
+An instance key can issue, inspect or revoke instance recovery. An owner/admin
+key can perform these operations only for its workspace. Neither key borrows its
+principal's other roles. Invitation metadata, closure and revocation require
+that workspace's current owner/admin security authority. Status returns no
+secret or verifier. Invitation status includes uses, capacity, expiry, revoked,
+expired, initial-window closure, current issuer authority and optional captured
+target client UUID. Recovery status includes client UUID, exact scope, expiry,
+revoked, expired, redeemed and current issuer authority. These observations do
+not reserve authority for a later request.
+
+[Recovery](workspace-recovery.md) replaces credentials for the captured client's
+still-authorized grants. It never creates membership or restores revoked grants.
+It requires a future deadline within seven days. Its fresh bearer secret is
+returned once at issuance; retain it privately until delivered to the intended
+client. Issue a new key and signed CSR locally, then POST exactly `invitation`,
+`request_id` and `csr_pem` to `/api/v1/recover` on HTTPS. Do not send an
+Authorization header, client UUID, grant list or old credential claim. A key
+previously registered to that client is rejected. Recovery works with readable
+archived workspaces and preserves unrelated bindings. Instance recovery excludes
+grants revoked or workspaces purged since issuance and never adds later grants.
+
+[Readmission](workspace-readmission.md) creates a new grant for an existing
+client whose entire grant history in an active workspace is revoked. Its target
+and complete prior history are server records. Redeem its fresh individual
+invitation through `/api/v1/enroll` with a new client key, using the same three
+fields. `/api/v1/recover` does not accept a readmission token. An intervening
+admission permanently invalidates a pending readmission ticket, even if that
+new grant is later revoked.
+
+Preserve the exact request UUID and CSR key after a lost response. An exact
+retry returns the committed public certificate receipt and no captured grant
+list. Retry still checks current issuer/key, client disable, invitation
+revocation, credential state and original access. Revoking a consumed invitation
+blocks receipt retrieval but does not revoke an already issued certificate or
+grant. Closing initial enrollment likewise preserves existing memberships.
+Physical-host admin-key reset remains a local command, without an HTTP route.
+The normal client/MCP and browser recovery workflows remain subsequent work.
 
 ## Try a protected request
 

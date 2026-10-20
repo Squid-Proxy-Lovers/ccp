@@ -3,14 +3,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    State, Surface,
+    State, Surface, invitations,
     request::Input,
     response::{self, Error, Reply},
     session::Context,
 };
 use crate::foundation::{
-    AccessStore, Actor, DataRole, IndividualInvitationRequest, InitialInvitationRequest,
-    RedemptionRequest, RenewalRequest,
+    AccessStore, Actor, DataRole, RecoveryRedemptionRequest, RedemptionRequest, RenewalRequest,
 };
 use hyper::Method;
 use protocol::workspace as api;
@@ -59,25 +58,47 @@ fn https(
     input: Input,
     now: i64,
 ) -> Result<Reply, Error> {
-    if input.path == "/api/v1/enroll" {
-        if input.method != Method::POST {
-            return Err(Error::Method);
-        }
-        if input.authorization.is_some() {
-            return Err(Error::BadRequest);
-        }
-        let body: api::Enrollment = decode(&input.body)?;
-        let request = RedemptionRequest {
-            request_id: id(&body.request_id)?,
+    if matches!(input.path.as_str(), "/api/v1/enroll" | "/api/v1/recover") {
+        return public_certificate(state, store, &input, now);
+    }
+    if input.path != "/api/v1/admin/workspaces" && !invitations::handles(&input.path) {
+        return Err(Error::NotFound);
+    }
+    let actor = admin(store, input.authorization.as_deref(), now)?;
+    if invitations::handles(&input.path) {
+        return invitations::dispatch(store, actor, &input, now);
+    }
+    if input.method != Method::GET {
+        return Err(Error::Method);
+    }
+    workspaces(store, actor, input.query.as_deref(), now)
+}
+
+fn public_certificate(
+    state: &State,
+    store: &mut AccessStore<'_>,
+    input: &Input,
+    now: i64,
+) -> Result<Reply, Error> {
+    if input.method != Method::POST {
+        return Err(Error::Method);
+    }
+    if input.authorization.is_some() {
+        return Err(Error::BadRequest);
+    }
+    let body: api::Enrollment = decode(&input.body)?;
+    let request_id = id(&body.request_id)?;
+    let issuer = state
+        .identity
+        .issuing_authority()
+        .map_err(|_issuer_error| Error::Unavailable)?;
+    if input.path == "/api/v1/recover" {
+        let request = RecoveryRedemptionRequest {
+            request_id,
             csr_pem: body.csr_pem,
-            existing_credential: None,
         };
-        let issuer = state
-            .identity
-            .issuing_authority()
-            .map_err(|_issuer_error| Error::Unavailable)?;
         let receipt = store
-            .redeem_invitation(&body.invitation, &request, &issuer, now)
+            .redeem_recovery_invitation(&body.invitation, &request, &issuer, now)
             .map_err(|error| response::operation(error, Error::Forbidden))?;
         return certificate(
             state,
@@ -87,58 +108,21 @@ fn https(
             receipt.expires_at,
         );
     }
-    if !matches!(
-        input.path.as_str(),
-        "/api/v1/admin/workspaces"
-            | "/api/v1/admin/invitations/initial"
-            | "/api/v1/admin/invitations/individual"
-    ) {
-        return Err(Error::NotFound);
-    }
-    let actor = admin(store, input.authorization.as_deref(), now)?;
-    match (input.method, input.path.as_str()) {
-        (Method::GET, "/api/v1/admin/workspaces") => {
-            workspaces(store, actor, input.query.as_deref(), now)
-        }
-        (Method::POST, "/api/v1/admin/invitations/initial") => {
-            let body: api::InitialInvitation = decode(&input.body)?;
-            let issued = store
-                .issue_initial_invitation(
-                    actor,
-                    InitialInvitationRequest {
-                        workspace_id: id(&body.workspace_id)?,
-                        role: role(body.role),
-                        max_clients: body.max_clients,
-                        expires_at: body.expires_at,
-                    },
-                    now,
-                )
-                .map_err(|error| response::operation(error, Error::Forbidden))?;
-            response::success(api::InvitationSecret {
-                invitation_id: issued.id.to_string(),
-                secret: issued.secret().to_string(),
-            })
-        }
-        (Method::POST, "/api/v1/admin/invitations/individual") => {
-            let body: api::IndividualInvitation = decode(&input.body)?;
-            let issued = store
-                .issue_individual_invitation(
-                    actor,
-                    IndividualInvitationRequest {
-                        workspace_id: id(&body.workspace_id)?,
-                        role: role(body.role),
-                        expires_at: body.expires_at,
-                    },
-                    now,
-                )
-                .map_err(|error| response::operation(error, Error::Forbidden))?;
-            response::success(api::InvitationSecret {
-                invitation_id: issued.id.to_string(),
-                secret: issued.secret().to_string(),
-            })
-        }
-        _ => Err(Error::Method),
-    }
+    let request = RedemptionRequest {
+        request_id,
+        csr_pem: body.csr_pem,
+        existing_credential: None,
+    };
+    let receipt = store
+        .redeem_invitation(&body.invitation, &request, &issuer, now)
+        .map_err(|error| response::operation(error, Error::Forbidden))?;
+    certificate(
+        state,
+        receipt.client_id,
+        receipt.credential_id,
+        receipt.certificate_pem,
+        receipt.expires_at,
+    )
 }
 
 fn client(
@@ -301,13 +285,13 @@ fn certificate(
         expires_at,
     })
 }
-fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> {
+pub(super) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, Error> {
     serde_json::from_slice(bytes).map_err(|_invalid_body| Error::BadRequest)
 }
-fn id(value: &str) -> Result<Uuid, Error> {
+pub(super) fn id(value: &str) -> Result<Uuid, Error> {
     Uuid::parse_str(value).map_err(|_invalid_id| Error::BadRequest)
 }
-fn role(role: api::Role) -> DataRole {
+pub(super) fn role(role: api::Role) -> DataRole {
     match role {
         api::Role::Read => DataRole::Read,
         api::Role::ReadWrite => DataRole::ReadWrite,

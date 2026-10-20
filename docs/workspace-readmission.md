@@ -2,9 +2,11 @@
 
 An authorized workspace owner or administrator can explicitly readmit an
 existing registered client after its workspace grants have all been revoked.
-This unreleased internal API creates a new scoped grant and credential for the
-same client UUID. Old grant revocations remain terminal. Network endpoints,
-CLI commands and browser workflows are not exposed yet. See the
+This unreleased API creates a new scoped grant and credential for the same
+client UUID. Old grant revocations remain terminal. The
+[workspace HTTPS API](workspace-http-api.md) exposes scoped issuance/status/revoke
+and redemption through `/api/v1/enroll`. Normal client/MCP commands and browser
+workflows remain subsequent work. See the
 [documentation index](README.md) for supported interfaces.
 
 ## Issue a fresh targeted invitation
@@ -96,5 +98,6 @@ Tests cover current scoped authority and key ceilings, immutable target and
 historical snapshots, intervening admission/revocation, known-key rejection,
 initial-group transitions, stale generic tokens, lifecycle, global disable,
 exact/concurrent retries, rollback and schema-10 upgrade with recovery retained.
-The full network, CLI and browser flows remain unverified until their adapters
-are implemented.
+Actual localhost TLS tests also cover scoped keys, fresh CSR keys, exact retry,
+server-captured target/history and unrelated access. Production deployment and
+normal client/MCP and browser flows remain incomplete.

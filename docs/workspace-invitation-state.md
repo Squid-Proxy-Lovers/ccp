@@ -3,7 +3,8 @@
 This unreleased internal batch persists invitation policies and initial-window
 lifecycle. The [certificate enrollment batch](workspace-enrollment.md) now adds signed-CSR
 redemption, capacity consumption and identity/grant/certificate creation in one
-transaction. No HTTP enrollment route is exposed yet.
+transaction. The [workspace HTTPS API](workspace-http-api.md) exposes issuance,
+status, revocation, terminal closure and certificate redemption.
 The existing native enrollment path is unchanged.
 
 ## One initial group window
@@ -52,9 +53,9 @@ The [foundation backup/upgrade rules](workspace-foundation.md) apply.
 Tests exercise bounds, scope, issuer freshness, audit rollback, archived security,
 expiry and stored-capacity closure, migration and reopening persistence. The policy
 capacity-transition test seeds an exhausted counter directly; separate redemption
-race tests now verify actual quota consumption and retry receipts. Renewal,
-scoped recovery and network adapters remain subsequent work. No browser session
-or network listener is established by these internal tests.
+race tests now verify actual quota consumption and retry receipts. The HTTPS
+adapter tests additionally cover actual TLS requests and current scoped keys.
+Normal client/MCP and browser workflows remain subsequent work.
 
 ## Explicit targeted readmission
 
