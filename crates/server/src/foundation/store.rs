@@ -20,6 +20,7 @@ mod readmission;
 mod recovery;
 mod redemption;
 mod renewal;
+mod retention;
 mod shelves;
 mod team;
 
@@ -358,10 +359,11 @@ impl<'a> AccessStore<'a> {
                 (Action::ReactivateWorkspace, "active")
             };
             authorize(transaction, actor, action, Some(workspace), now)?;
-            transaction.execute(
+            retention::workspace_state(transaction, workspace, archived, now)?;
+            require_changed(transaction.execute(
                 "UPDATE ccp_workspaces SET state = ?1 WHERE id = ?2",
                 params![state, workspace.to_string()],
-            )?;
+            )?)?;
             audit(transaction, actor, state, Some(workspace), workspace, now)
         })
     }

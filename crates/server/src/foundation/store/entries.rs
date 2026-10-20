@@ -40,6 +40,7 @@ impl AccessStore<'_> {
                 return Ok(receipt);
             }
             let receipt = write::apply(tx, actor, workspace, request, now)?;
+            retention::entry_changed(tx, workspace, &request.change, now)?;
             let (kind, id) = actor_parts(actor);
             tx.execute("INSERT INTO ccp_content_operations(workspace_id,operation_id,actor_kind,actor_id,request_hash,entry_id,revision) VALUES (?1,?2,?3,?4,?5,?6,?7)",params![workspace.to_string(),request.operation_id.to_string(),kind,id.to_string(),hash.as_slice(),receipt.entry_id.to_string(),i64::try_from(receipt.revision)?])?;
             audit(tx, actor, &format!("{}_entry", change_name(&request.change)), Some(workspace), receipt.entry_id, now)?;

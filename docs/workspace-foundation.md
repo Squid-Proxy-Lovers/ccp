@@ -202,3 +202,20 @@ a verified client actor; administrative keys cannot claim this client context.
 It changes no authorization or persistent records. The
 [delivery-context API](workspace-http-api.md#retrieve-an-authenticated-guidance-context)
 and opt-in client output support the MCP adapter's caller-specific emission stamps.
+
+
+## Timed entry-retention core
+
+Schema 22 adds explicit scoped retention-policy history, live heads, durable
+per-entry clocks and body-free timed-purge audit/proofs. Manual retention remains
+the default. Enabling a chosen timed policy gives existing individual archives a
+fresh full window; workspace archive pauses remaining duration across restart.
+Restore removes the clock; rearchive starts a new full window. Current scoped
+owners/admins configure policies; a trusted bounded cleanup method rechecks exact
+due archive/policy state in its deletion transaction. Original write receipts and
+cancellation fences survive; purge proofs prevent entry UUID reuse.
+
+No policy is seeded or cleanup activated by migration. No public configuration
+adapter or production worker is exposed by this internal slice. See the
+[retention contract](workspace-retention.md) for confirmation, policy changes,
+clock limits, audit and backup/rollback requirements.

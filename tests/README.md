@@ -217,3 +217,15 @@ a fixture-seeded replacement grant for the same credential, scoped recovery, arc
 disable. A malformed guidance publisher after a successful shelf creation yields
 a warning and exactly one committed shelf. Four supported SDK environments run
 the same bridge units and all five workspace smoke groups.
+
+
+Nineteen timed-retention core cases verify the manual default, current scoped
+administrators/keys, explicit confirmation, policy revision conflicts and exact
+historical retries, fresh full windows for existing archives, restore/rearchive,
+workspace pause/resume/restart, backward clock and signed maximum bounds. They
+also check shelf overlays, bounded due cleanup, issuer-key revocation without
+undoing workspace policy, stale clocks, protected disable at the final revision,
+retained receipts/siblings/guidance, immutable proofs and UUID tombstones. Abort
+and ignored-write faults in policy, head, clocks, audit, workspace state and purge
+steps roll back all captured changes. A schema-record fault rolls back every new
+table before retry. No public setting or running cleanup worker is claimed.

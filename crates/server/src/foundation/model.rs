@@ -30,6 +30,7 @@ pub enum Action {
     PurgeWorkspace,
     PurgeEntry,
     ManageArchives,
+    ManageRetention,
     CreateWorkspace,
     SaveGlobalBoard,
     DisableClient,

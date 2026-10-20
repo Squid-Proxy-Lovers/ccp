@@ -9,6 +9,7 @@ mod lifecycle;
 mod ownership;
 mod persistence;
 mod purge;
+mod retention;
 mod validation;
 
 fn content(text: &str) -> EntryContent {

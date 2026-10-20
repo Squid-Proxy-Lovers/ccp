@@ -20,6 +20,7 @@ mod model;
 mod operation_ledger;
 mod provisioning;
 mod recovery;
+mod retention;
 mod store;
 mod team;
 
@@ -58,6 +59,7 @@ pub use recovery::{
     IssuedRecoveryInvitation, RecoveryInvitationRequest, RecoveryInvitationStatus, RecoveryReceipt,
     RecoveryRedemptionRequest, RecoveryScope,
 };
+pub use retention::{EntryRetentionChange, EntryRetentionPolicy, TimedEntryPurge};
 pub use store::AccessStore;
 pub use team::{
     AdminAppointment, AdminKeyPage, AdminKeySummary, AdminPage, AdminSummary, PrincipalSelection,
@@ -78,6 +80,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(include_str!("shelf_lifecycle.sql"))?;
     transaction.execute_batch(include_str!("guidance.sql"))?;
     transaction.execute_batch(include_str!("entry_purge.sql"))?;
+    transaction.execute_batch(include_str!("retention.sql"))?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

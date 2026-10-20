@@ -109,6 +109,7 @@ fn admin_capability(action: Action, state: &str, global: bool, owner: bool, scop
         Action::WriteContext
         | Action::SaveWorkspaceBoard
         | Action::AdmitClient
+        | Action::ManageRetention
         | Action::ManageArchives => state == "active" && (owner || scoped),
         _ => false,
     }
