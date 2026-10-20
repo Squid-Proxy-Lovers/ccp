@@ -283,11 +283,16 @@ dependencies = [
  "protocol",
  "rcgen",
  "reqwest",
+ "rusqlite",
  "rustls",
  "serde",
  "serde_json",
+ "server",
+ "sha2",
  "tokio",
  "tokio-rustls",
+ "uuid",
+ "x509-parser",
 ]
 
 [[package]]

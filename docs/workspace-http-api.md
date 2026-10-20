@@ -3,8 +3,9 @@
 This unreleased API connects the reviewed workspace identity, key and certificate
 foundations to direct TLS listeners. It supports invitations, enrollment,
 discovery, existing-client admission, credential renewal and targeted recovery.
-Content endpoints, browser login, client profiles,
-MCP integration and the human panel remain subsequent work. Keep this draft
+Initial [client trust/profiles, enrollment and discovery](workspace-client.md)
+are connected. Content endpoints, browser login, remaining client lifecycle and
+selection, MCP integration and the human panel remain subsequent work. Keep this draft
 implementation separate from a production rollout.
 
 [Documentation index](README.md) · [Instance TLS](instance-tls-identity.md) ·
@@ -277,8 +278,10 @@ curl --cacert ./ccp-ca.pem --cert ./client-cert.pem --key ./client-key.pem \
   https://127.0.0.1:8444/api/v1/workspaces
 ```
 
-The normal client CLI/MCP enrollment/profile flow remains separate integration
-work; existing native commands keep their supported native-mode behavior.
+The [workspace client](workspace-client.md) connects trust, private profiles,
+initial enrollment/readmission and discovery. Joining, renewal/recovery, context
+selection and MCP remain later integration work. Native commands keep their
+supported native-mode behavior.
 
 ## Limits and errors
 

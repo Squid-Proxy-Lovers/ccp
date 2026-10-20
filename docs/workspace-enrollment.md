@@ -5,8 +5,8 @@ certificate requests. It creates a registered client identity, credential,
 workspace grant, certificate binding, quota update, retry receipt and audit in
 one SQLite write transaction. The limited [workspace HTTPS API](workspace-http-api.md)
 now exposes new enrollment, existing-client admission and renewal using these
-checks. Normal client profiles, automated enrollment and browser flows remain
-later integration work.
+checks. [Initial client profiles and enrollment](workspace-client.md) are connected;
+Remaining client lifecycle/MCP and browser flows remain later integration work.
 
 ## New admission and retries
 
@@ -131,9 +131,11 @@ names/usages, reject invalid signatures and identity claims, preserve registrati
 on second-workspace admission, roll back failed audits, enforce quota under
 concurrent admission, return one result under concurrent retry, retain receipts
 across database reopening, and enforce current lifecycle/revocation/expiry.
-Native CLI/MCP compatibility remains separately tested. Actual localhost HTTPS/mTLS enrollment, admission, discovery and renewal flows
-are tested by the limited API batch. Normal client-profile bootstrap, automated
-renewal, complete recovery management and browser UI remain later work.
+Native CLI/MCP compatibility remains separately tested. Actual localhost
+HTTPS/mTLS enrollment, admission, discovery and renewal flows are tested by the
+limited API batch. [Initial client-profile bootstrap](workspace-client.md) is
+tested separately. Client joining, automatic renewal/recovery, context selection,
+MCP integration and the browser UI remain later work.
 
 Renewal tests cover current bound-scope capture, changed roles, archived reads,
 revocation/disable/expiry, exact retry, competing and identical concurrent

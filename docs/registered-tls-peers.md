@@ -3,8 +3,8 @@
 The unreleased workspace server has internal adapters that bind an established
 client TLS connection to its current registered identity. The separate
 [workspace HTTPS API](workspace-http-api.md) now uses them for every protected
-client request. Normal client profiles, complete management and browser
-flows remain later work.
+client request. [Initial client profiles/enrollment](workspace-client.md) are
+connected; remaining client lifecycle/MCP and browser flows remain later work.
 
 [Documentation index](README.md) · [Instance TLS setup](instance-tls-identity.md)
 

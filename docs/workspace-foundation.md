@@ -66,7 +66,8 @@ principal UUID would not authenticate it. Scoped admin-key primitives are docume
 Internal certificate enrollment and renewal are documented in
 [Workspace enrollment](workspace-enrollment.md). Their limited
 [workspace HTTPS adapters](workspace-http-api.md) now support actual TLS requests;
-normal client/MCP profiles and selection remain subsequent work.
+the [workspace client](workspace-client.md) adds initial trust/profiles/enrollment
+and discovery. Remaining client lifecycle, selection and MCP remain later work.
 
 A client data action requires a live, unexpired, nonrevoked, unsuperseded credential, an
 enabled client, a live workspace grant bound to that credential, a suitable
