@@ -69,3 +69,19 @@ pub struct Bundle {
     pub global: Board,
     pub workspace: Option<Board>,
 }
+
+/// Current response context; IDs are not access tokens or permission leases.
+#[derive(Serialize, Deserialize)]
+pub struct Context {
+    pub instance_id: String,
+    pub client_id: String,
+    pub credential_id: String,
+    pub workspace_grant_id: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Delivery {
+    pub format: u32,
+    pub context: Context,
+    pub guidance: Bundle,
+}

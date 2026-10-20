@@ -42,8 +42,8 @@ pub use entry::{
     EntryRevision, EntrySnapshot, EntrySummary, RevisionPage, RevisionPageRequest,
 };
 pub use guidance::{
-    GUIDANCE_TEXT_BYTES, GuidanceBoard, GuidanceBundle, GuidancePrecedence, GuidancePublisher,
-    GuidanceReceipt, GuidanceSave, GuidanceScope,
+    GUIDANCE_TEXT_BYTES, GuidanceBoard, GuidanceBundle, GuidanceContext, GuidancePrecedence,
+    GuidancePublisher, GuidanceRead, GuidanceReceipt, GuidanceSave, GuidanceScope,
 };
 pub use invitation::{
     IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,

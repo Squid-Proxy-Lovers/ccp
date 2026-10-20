@@ -197,3 +197,11 @@ selection defaults and strict pre-SDK request guards. Real stdio/CLI/TLS exercis
 current publication/updates/clear/archive, profile/selection preservation, scoped
 recovery, grant revocation and global disable. Tool discovery now expects 24
 tools, preserving every existing capability and adding explicit guidance refresh.
+
+Guidance-context tests check credential-only snapshots, exact current instance/
+client/credential/grant IDs, unchanged guidance on re-admission with a new grant,
+revocation/disable/expiry/foreign scope, strict mTLS-only routing and no caller
+identity claims. Client units reject mismatched IDs, grant presence and unknown
+context formats. Actual TLS/library/CLI cases exercise opt-in output without
+changing the default shape, renewal and pending-renewal binding updates, and
+malformed guidance failing before new renewal or private-text output.

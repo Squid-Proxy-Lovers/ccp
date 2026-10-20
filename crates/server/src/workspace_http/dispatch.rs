@@ -157,7 +157,7 @@ fn client(
         input.path.as_str(),
         "/api/v1/workspaces" | "/api/v1/admissions" | "/api/v1/credentials/renew"
     ) && !content::client_handles(&input.path)
-        && input.path != guidance::GET
+        && !guidance::client_handles(&input.path)
     {
         return Err(Error::NotFound);
     }
@@ -195,7 +195,7 @@ fn client(
     let actor = store
         .authenticate_peer(&peer, now)
         .map_err(|error| response::operation(error, Error::Forbidden))?;
-    if input.path == guidance::GET {
+    if guidance::client_handles(&input.path) {
         return guidance::dispatch(store, actor, &input, now);
     }
     if content::client_handles(&input.path) {

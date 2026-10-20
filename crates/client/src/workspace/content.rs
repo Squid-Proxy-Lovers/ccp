@@ -126,8 +126,13 @@ impl WorkspaceProfile {
         request: &Q,
         check: impl Fn(&T) -> anyhow::Result<()>,
     ) -> anyhow::Result<T> {
-        self.authenticated_read(&format!("api/v1/content/{path}"), request, true, check)
-            .await
+        self.authenticated_read(
+            &format!("api/v1/content/{path}"),
+            request,
+            true,
+            |_, value| check(value),
+        )
+        .await
     }
 
     async fn content_request<Q: Serialize, T: DeserializeOwned>(

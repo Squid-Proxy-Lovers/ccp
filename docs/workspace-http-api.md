@@ -72,6 +72,7 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
 | HTTPS | `POST /api/v1/admin/workspaces/create` or `/first-owner` | Current instance key; atomic workspace/first-owner key provisioning |
 | HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |
+| Client mTLS | `POST /api/v1/guidance/context` | Current client identity and optional workspace read grant; guidance and delivery-context IDs in one snapshot |
 | HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
 | HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |
 | HTTPS | `POST /api/v1/admin/content/entries/purge` | Current scoped owner/admin key; explicitly confirmed, revision-bound purge of an individually archived entry, including in archived workspaces |
@@ -381,6 +382,53 @@ gate to other operations. The normal client now supports
 [explicit guidance reads](workspace-client.md#read-current-guidance). MCP guidance,
 automatic initial/changed guidance with tool responses, stale warnings and desktop
 editors remain later work. See the [storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
+
+## Retrieve an authenticated guidance context
+
+Clients preparing guidance delivery can POST the same optional `workspace_id`
+request to `/api/v1/guidance/context` on the client mTLS listener. Admin HTTPS
+returns 404 for this endpoint; Bearer headers on mTLS remain rejected. Caller
+claims such as client, credential or grant IDs are not accepted in the request.
+The ordinary `guidance/get` and scoped admin Save routes are unchanged.
+
+The response includes the current instance, client, credential and optional
+workspace grant IDs alongside guidance, all from one authorized database snapshot.
+The format is versioned separately from API 1:
+
+```json
+{
+  "api_version":1,
+  "data":{
+    "format":1,
+    "context":{
+      "instance_id":"11111111-1111-4111-8111-111111111111",
+      "client_id":"22222222-2222-4222-8222-222222222222",
+      "credential_id":"33333333-3333-4333-8333-333333333333",
+      "workspace_grant_id":null
+    },
+    "guidance":{
+      "precedence":"global_first",
+      "global":{"scope":{"kind":"global"},"revision":0,"text":"","publisher":null},
+      "workspace":null
+    }
+  }
+}
+```
+
+This example is global-only, so its grant ID and workspace board are null. An
+explicit workspace requires current context-read authority and returns its exact
+bound grant ID. Revocation, binding revocation, expiry, supersession and disable
+remain enforced. Archived workspace guidance remains readable. Re-admission may
+retain the credential UUID while replacing a revoked grant UUID; that changes the
+context even when board text and revisions stay unchanged.
+
+These identifiers support future delivery bookkeeping. They are not access
+tokens or permission leases, and do not identify a human or MCP conversation.
+They do not prove that a model received or obeyed guidance. Future emission
+tracking must also isolate each caller and recheck current server access. This endpoint records no delivery cursor and adds
+no requirement to acknowledge guidance before an operation. Existing 64 KiB
+request and 1 MiB response limits apply. See the
+[opt-in client output](workspace-client.md#retrieve-a-guidance-delivery-context).
 
 ## Limits and errors
 

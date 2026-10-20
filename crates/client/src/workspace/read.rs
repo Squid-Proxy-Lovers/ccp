@@ -11,7 +11,7 @@ impl WorkspaceProfile {
         path: &str,
         request: &Q,
         allow_renewal: bool,
-        check: impl Fn(&T) -> anyhow::Result<()>,
+        check: impl Fn(&WorkspaceProfile, &T) -> anyhow::Result<()>,
     ) -> anyhow::Result<T> {
         if self
             .pending
@@ -21,7 +21,7 @@ impl WorkspaceProfile {
             self.renew().await?;
         }
         let value = self.authenticated_request(path, request).await?;
-        check(&value)?;
+        check(self, &value)?;
         // A validated workspace target proves a usable grant even when empty.
         // Global-only guidance proves identity and cannot initiate renewal.
         if allow_renewal
@@ -31,7 +31,7 @@ impl WorkspaceProfile {
         {
             self.renew().await?;
             let value = self.authenticated_request(path, request).await?;
-            check(&value)?;
+            check(self, &value)?;
             return Ok(value);
         }
         Ok(value)

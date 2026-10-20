@@ -70,3 +70,18 @@ pub struct GuidanceBundle {
     pub global: GuidanceBoard,
     pub workspace: Option<GuidanceBoard>,
 }
+
+/// Current authenticated delivery partition, not a token or permission lease.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuidanceContext {
+    pub instance_id: Uuid,
+    pub client_id: Uuid,
+    pub credential_id: Uuid,
+    pub workspace_grant_id: Option<Uuid>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuidanceRead {
+    pub context: GuidanceContext,
+    pub guidance: GuidanceBundle,
+}

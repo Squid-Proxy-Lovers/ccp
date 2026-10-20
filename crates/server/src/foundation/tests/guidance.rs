@@ -4,6 +4,7 @@
 
 use super::*;
 
+mod context;
 mod persistence;
 
 fn request(expected_revision: u64, text: &str) -> GuidanceSave {

@@ -5,6 +5,7 @@
 use super::*;
 
 mod boundaries;
+mod context;
 
 const GET: &str = "/api/v1/guidance/get";
 const SAVE: &str = "/api/v1/admin/guidance/save";

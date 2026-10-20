@@ -10,6 +10,7 @@ use crate::foundation::{
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
+mod context;
 mod read;
 
 impl AccessStore<'_> {

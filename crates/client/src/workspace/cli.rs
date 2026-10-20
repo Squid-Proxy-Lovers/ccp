@@ -23,6 +23,9 @@ enum Command {
         profile: PathBuf,
         #[arg(long)]
         workspace_id: Option<String>,
+        /// Include authenticated context for guidance delivery bookkeeping.
+        #[arg(long)]
+        delivery_context: bool,
     },
     Content {
         #[command(flatten)]
@@ -86,11 +89,15 @@ pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
         Command::Guidance {
             profile,
             workspace_id,
-        } => output(
-            &WorkspaceProfile::open(&profile)?
-                .guidance(workspace_id.as_deref())
-                .await?,
-        ),
+            delivery_context,
+        } => {
+            let mut profile = WorkspaceProfile::open(&profile)?;
+            if delivery_context {
+                output(&profile.guidance_delivery(workspace_id.as_deref()).await?)
+            } else {
+                output(&profile.guidance(workspace_id.as_deref()).await?)
+            }
+        }
         Command::Content { args } => super::content::cli::run(args).await,
         Command::Selection { args } => selection::cli::run(args).await,
         Command::Trust {

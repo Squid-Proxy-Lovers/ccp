@@ -15,23 +15,33 @@ impl AccessStore<'_> {
         now: i64,
     ) -> anyhow::Result<GuidanceBundle> {
         let tx = self.connection.transaction()?;
-        validate_actor(&tx, actor, now)?;
-        if let Some(workspace) = workspace
-            && !permitted(&tx, actor, Action::ReadContext, Some(workspace), now)?
-        {
-            return Err(ContentError::Forbidden.into());
-        }
-        let global = read(&tx, GuidanceScope::Global)?;
-        let workspace = workspace
-            .map(|id| read(&tx, GuidanceScope::Workspace(id)))
-            .transpose()?;
+        let value = bundle(&tx, actor, workspace, now)?;
         tx.commit()?;
-        Ok(GuidanceBundle {
-            precedence: GuidancePrecedence::GlobalFirst,
-            global,
-            workspace,
-        })
+        Ok(value)
     }
+}
+
+pub(super) fn bundle(
+    db: &Connection,
+    actor: Actor,
+    workspace: Option<Uuid>,
+    now: i64,
+) -> anyhow::Result<GuidanceBundle> {
+    validate_actor(db, actor, now)?;
+    if let Some(workspace) = workspace
+        && !permitted(db, actor, Action::ReadContext, Some(workspace), now)?
+    {
+        return Err(ContentError::Forbidden.into());
+    }
+    let global = read(db, GuidanceScope::Global)?;
+    let workspace = workspace
+        .map(|id| read(db, GuidanceScope::Workspace(id)))
+        .transpose()?;
+    Ok(GuidanceBundle {
+        precedence: GuidancePrecedence::GlobalFirst,
+        global,
+        workspace,
+    })
 }
 
 fn read(db: &Connection, scope: GuidanceScope) -> anyhow::Result<GuidanceBoard> {

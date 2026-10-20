@@ -12,10 +12,15 @@ use hyper::Method;
 use protocol::workspace::guidance as api;
 
 pub(super) const GET: &str = "/api/v1/guidance/get";
+pub(super) const CONTEXT: &str = "/api/v1/guidance/context";
 pub(super) const SAVE: &str = "/api/v1/admin/guidance/save";
 
 pub(super) fn handles(path: &str) -> bool {
     matches!(path, GET | SAVE)
+}
+
+pub(super) fn client_handles(path: &str) -> bool {
+    matches!(path, GET | CONTEXT)
 }
 
 pub(super) fn dispatch(
@@ -28,6 +33,7 @@ pub(super) fn dispatch(
         return Err(Error::Method);
     }
     match input.path.as_str() {
+        CONTEXT => context(store, actor, input, now),
         GET => get(store, actor, input, now),
         SAVE => save(store, actor, input, now),
         _ => Err(Error::NotFound),
@@ -38,10 +44,37 @@ fn get(store: &mut AccessStore<'_>, actor: Actor, input: &Input, now: i64) -> Re
     let body: api::Get = decode(&input.body)?;
     let workspace = body.workspace_id.as_deref().map(id).transpose()?;
     let bundle = store.guidance(actor, workspace, now).map_err(operation)?;
+    response::success(project_bundle(bundle)?)
+}
+
+fn context(
+    store: &mut AccessStore<'_>,
+    actor: Actor,
+    input: &Input,
+    now: i64,
+) -> Result<Reply, Error> {
+    let body: api::Get = decode(&input.body)?;
+    let workspace = body.workspace_id.as_deref().map(id).transpose()?;
+    let value = store
+        .client_guidance(actor, workspace, now)
+        .map_err(operation)?;
+    response::success(api::Delivery {
+        format: 1,
+        context: api::Context {
+            instance_id: value.context.instance_id.to_string(),
+            client_id: value.context.client_id.to_string(),
+            credential_id: value.context.credential_id.to_string(),
+            workspace_grant_id: value.context.workspace_grant_id.map(|id| id.to_string()),
+        },
+        guidance: project_bundle(value.guidance)?,
+    })
+}
+
+fn project_bundle(bundle: domain::GuidanceBundle) -> Result<api::Bundle, Error> {
     let precedence = match bundle.precedence {
         domain::GuidancePrecedence::GlobalFirst => api::Precedence::GlobalFirst,
     };
-    response::success(api::Bundle {
+    Ok(api::Bundle {
         precedence,
         global: board(bundle.global)?,
         workspace: bundle.workspace.map(board).transpose()?,

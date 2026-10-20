@@ -296,3 +296,35 @@ This explicit reader does not publish guidance or implement automatic initial/
 changed guidance delivery with other tool results. The MCP bridge now supports
 [explicit guidance refresh](workspace-mcp.md#refresh-guidance-explicitly). Automatic
 delivery, stale/unavailable sideband warnings and desktop editors remain later.
+
+## Retrieve a guidance delivery context
+
+Use `--delivery-context` when building an adapter that needs to distinguish
+registered identity and grant changes alongside current guidance:
+
+```bash
+ccp-client workspace guidance --profile ./my-profile --delivery-context \
+  --workspace-id 11111111-1111-4111-8111-111111111111
+```
+
+The library equivalent is `WorkspaceProfile::guidance_delivery(Option<&str>)`.
+It returns a format-1 wrapper with `context` and `guidance`; the latter has the
+normal bundle shape. The context contains instance, client, credential and
+optional workspace grant UUIDs from the server's authorized snapshot. Omitting
+the workspace requests global-only context with no grant UUID. The default CLI
+command and `WorkspaceProfile::guidance` output remain unchanged.
+
+The client validates the context format, canonical non-nil IDs, exact pinned
+instance/client/current credential and grant presence before output or a new
+renewal. Guidance source, revision, text and publisher checks still apply.
+After an authorized due renewal, the reread must match the new credential,
+including when an earlier committed renewal is being resumed. Global-only reads
+still never initiate renewal. Pending admission and entry guards are preserved.
+Malformed or refused responses never become delivery evidence or partial output.
+
+Re-admission can replace the grant ID while leaving the credential and board
+revisions unchanged. Combine these facts with a separate caller-specific
+emission context before deciding that guidance has already been returned. The
+IDs are not permission tokens or leases and cannot replace current server checks.
+This opt-in format adds no cache, cursor, automatic tool response or obedience
+tracking. See the [server context contract](workspace-http-api.md#retrieve-an-authenticated-guidance-context).

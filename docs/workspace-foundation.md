@@ -195,3 +195,10 @@ now expose these APIs over TLS, with
 [explicit MCP refresh](workspace-mcp.md#refresh-guidance-explicitly). Desktop
 editors, automatic initial/changed delivery and explicit stale/unavailable
 warnings remain subsequent work.
+
+The internal `client_guidance` read additionally returns authenticated instance,
+client, credential and current bound-grant IDs in the same snapshot. It requires
+a verified client actor; administrative keys cannot claim this client context.
+It changes no authorization or persistent records. The
+[delivery-context API](workspace-http-api.md#retrieve-an-authenticated-guidance-context)
+and opt-in client output prepare future caller-isolated emission tracking.

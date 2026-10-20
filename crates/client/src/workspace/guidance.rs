@@ -5,8 +5,11 @@
 //! Explicit current guidance reads. Automatic tool delivery is separate.
 use super::*;
 pub use protocol::workspace::guidance::{
-    Board, Bundle, Precedence, Publisher, PublisherKind, Scope,
+    Board, Bundle, Context as DeliveryContext, Delivery, Precedence, Publisher, PublisherKind,
+    Scope,
 };
+
+mod delivery;
 
 const TEXT_BYTES: usize = 8192;
 
@@ -24,7 +27,24 @@ impl WorkspaceProfile {
             "api/v1/guidance/get",
             &request,
             workspace.is_some(),
-            |value| validate(value, workspace),
+            |_, value| validate(value, workspace),
+        )
+        .await
+    }
+    /// Return current authenticated binding for future caller emission cursors.
+    /// It is metadata, not a permission lease or proof of delivery or obedience.
+    pub async fn guidance_delivery(&mut self, workspace: Option<&str>) -> anyhow::Result<Delivery> {
+        if let Some(workspace) = workspace {
+            identity(workspace)?;
+        }
+        let request = api::guidance::Get {
+            workspace_id: workspace.map(str::to_string),
+        };
+        self.authenticated_read(
+            "api/v1/guidance/context",
+            &request,
+            workspace.is_some(),
+            |profile, value| delivery::validate(profile, value, workspace),
         )
         .await
     }

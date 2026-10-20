@@ -5,6 +5,8 @@
 use super::*;
 use client::workspace::guidance as boards;
 
+mod context;
+
 fn publish(f: &Fixture, workspace: Option<Uuid>, expected_revision: u64, text: &str) {
     use server::foundation::{GuidanceSave, GuidanceScope};
     let mut db = f.db();
