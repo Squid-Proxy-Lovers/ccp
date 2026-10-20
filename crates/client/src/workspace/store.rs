@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x4343_5043;
 const PROFILE: &str = "workspace-profile.sqlite3";
-const HISTORY_SCHEMA: &str = "CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY, operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission')))";
+const HISTORY_SCHEMA: &str = "CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY, operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission','recovery')))";
 
 pub(super) fn create(directory: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
     private_directory(directory, true)?;
@@ -45,7 +45,7 @@ fn initialize(path: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
     connection.pragma_update(None, "synchronous", "FULL")?;
     let tx = connection.transaction()?;
     tx.pragma_update(None, "application_id", APPLICATION_ID)?;
-    tx.pragma_update(None, "user_version", 2)?;
+    tx.pragma_update(None, "user_version", 3)?;
     tx.execute_batch("CREATE TABLE profile(singleton INTEGER PRIMARY KEY CHECK(singleton=1),trust TEXT NOT NULL,pending TEXT,credential TEXT)")?;
     tx.execute_batch(HISTORY_SCHEMA)?;
     tx.execute(
@@ -93,6 +93,13 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
     if version == 1 && pending.is_some() && credential.is_some() {
         bail!("unsupported simultaneous pending and active profile state");
     }
+    if version < 3
+        && pending
+            .as_ref()
+            .is_some_and(|p| p.operation == Operation::Recovery)
+    {
+        bail!("recovery state requires profile format 3");
+    }
     crypto::validate_state(pending.as_ref(), credential.as_ref())?;
     let mut profile = WorkspaceProfile {
         connection,
@@ -103,8 +110,8 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
         credential_record: saved_credential,
     };
     profile.info()?;
-    if version == 1 {
-        migration::upgrade(&mut profile, directory)?;
+    if version < 3 {
+        migration::upgrade(&mut profile, directory, version)?;
     }
     Ok(profile)
 }
@@ -112,7 +119,7 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
 fn format(connection: &Connection) -> anyhow::Result<u32> {
     let app: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if app != APPLICATION_ID || !(1..=2).contains(&version) {
+    if app != APPLICATION_ID || !(1..=3).contains(&version) {
         bail!("unrecognized or unsupported workspace profile format");
     }
     Ok(u32::try_from(version)?)
@@ -131,6 +138,9 @@ impl WorkspaceProfile {
         operation: Operation,
         invitation: Option<&str>,
     ) -> anyhow::Result<()> {
+        if operation == Operation::Recovery {
+            bail!("recovery requires an explicit expected client identity");
+        }
         if let Some(pending) = &self.pending {
             if pending.operation != operation
                 || pending.invitation_hash != invitation.map(|s| crypto::hash(s.as_bytes()))
@@ -142,22 +152,57 @@ impl WorkspaceProfile {
             return crypto::validate_state(self.pending.as_ref(), self.credential.as_ref());
         }
         if let Some(invitation) = invitation {
-            let completed: bool = self.connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM completed_invitations WHERE invitation_hash=?1)",
-                [crypto::hash(invitation.as_bytes())],
-                |r| r.get(0),
-            )?;
-            if completed {
-                bail!(
-                    "this invitation already completed locally; inspect current workspaces instead of joining again"
-                );
-            }
+            self.unused_invitation(invitation)?;
         }
         let pending = if operation == Operation::Enrollment {
             crypto::pending(invitation.context("enrollment needs an invitation")?)?
         } else {
             crypto::pending_operation(operation, invitation, self.credential.as_ref())?
         };
+        self.persist_pending(pending)
+    }
+
+    pub(super) fn prepare_recovery(
+        &mut self,
+        client: &str,
+        invitation: &str,
+    ) -> anyhow::Result<()> {
+        crypto::canonical_id(client)?;
+        if self.credential.is_some() {
+            bail!(
+                "recovery requires a separate trusted empty profile; preserve the original profile"
+            );
+        }
+        if let Some(pending) = &self.pending {
+            if pending.operation != Operation::Recovery
+                || pending.expected_client_id.as_deref() != Some(client)
+                || pending.invitation_hash.as_deref() != Some(&crypto::hash(invitation.as_bytes()))
+            {
+                bail!(
+                    "finish the original pending operation with its original target and invitation"
+                );
+            }
+            return crypto::validate_state(self.pending.as_ref(), None);
+        }
+        self.unused_invitation(invitation)?;
+        let mut pending = crypto::pending_operation(Operation::Recovery, Some(invitation), None)?;
+        pending.expected_client_id = Some(client.to_owned());
+        self.persist_pending(pending)
+    }
+
+    fn unused_invitation(&self, invitation: &str) -> anyhow::Result<()> {
+        let completed: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM completed_invitations WHERE invitation_hash=?1)",
+            [crypto::hash(invitation.as_bytes())],
+            |r| r.get(0),
+        )?;
+        if completed {
+            bail!("this invitation already completed locally; inspect current workspaces");
+        }
+        Ok(())
+    }
+
+    fn persist_pending(&mut self, pending: Pending) -> anyhow::Result<()> {
         crypto::validate_state(Some(&pending), self.credential.as_ref())?;
         let record = serde_json::to_string(&pending)?;
         let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS ?2",
@@ -186,7 +231,7 @@ impl WorkspaceProfile {
             params![record,self.pending_record,self.credential_record])
             .map_err(|_write|anyhow::anyhow!("cannot activate credential; pending operation retained for retry"))?;
         if changed != 1 {
-            bail!("workspace profile state changed; preserve pending enrollment");
+            bail!("workspace profile state changed; preserve pending operation");
         }
         if let Some(hash) = &pending.invitation_hash {
             tx.execute(

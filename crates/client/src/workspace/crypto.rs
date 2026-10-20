@@ -37,12 +37,18 @@ pub(super) fn canonical_id(value: &str) -> anyhow::Result<Uuid> {
     Ok(id)
 }
 pub(super) fn invitation(value: &str) -> anyhow::Result<&str> {
+    token(value, "ccp_join_")
+}
+pub(super) fn recovery_invitation(value: &str) -> anyhow::Result<&str> {
+    token(value, "ccp_recover_")
+}
+fn token<'a>(value: &'a str, prefix: &str) -> anyhow::Result<&'a str> {
     let value = value.trim_matches(|c: char| c.is_ascii_whitespace());
     let hex = value
-        .strip_prefix("ccp_join_")
-        .context("invalid enrollment invitation")?;
+        .strip_prefix(prefix)
+        .context("invalid workspace invitation")?;
     if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        bail!("invalid enrollment invitation");
+        bail!("invalid workspace invitation");
     }
     Ok(value)
 }
@@ -132,7 +138,7 @@ pub(super) fn validate_pending(pending: &Pending) -> anyhow::Result<()> {
     canonical_id(&pending.request_id)?;
     match (&pending.invitation_hash, pending.operation) {
         (None, Operation::Renewal) => {}
-        (Some(hash), Operation::Enrollment | Operation::Admission)
+        (Some(hash), Operation::Enrollment | Operation::Admission | Operation::Recovery)
             if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) => {}
         _ => bail!("invalid pending invitation reference"),
     }
@@ -159,6 +165,17 @@ pub(super) fn validate_state(
         return Ok(());
     };
     validate_pending(p)?;
+    if p.operation == Operation::Recovery {
+        if active.is_some() || p.expected_credential_id.is_some() {
+            bail!("recovery requires a separate empty profile");
+        }
+        canonical_id(
+            p.expected_client_id
+                .as_deref()
+                .context("missing recovery target")?,
+        )?;
+        return Ok(());
+    }
     if p.operation == Operation::Enrollment {
         if active.is_some() || p.expected_client_id.is_some() || p.expected_credential_id.is_some()
         {

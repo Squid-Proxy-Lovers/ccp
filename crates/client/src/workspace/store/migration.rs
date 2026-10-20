@@ -5,8 +5,12 @@
 use super::*;
 use std::io::Write;
 
-pub(super) fn upgrade(profile: &mut WorkspaceProfile, directory: &Path) -> anyhow::Result<()> {
-    snapshot(directory)?;
+pub(super) fn upgrade(
+    profile: &mut WorkspaceProfile,
+    directory: &Path,
+    version: u32,
+) -> anyhow::Result<()> {
+    snapshot(directory, version)?;
     let pending = profile
         .pending
         .as_ref()
@@ -18,25 +22,33 @@ pub(super) fn upgrade(profile: &mut WorkspaceProfile, directory: &Path) -> anyho
         .map(serde_json::to_string)
         .transpose()?;
     let tx = profile.connection.transaction()?;
+    if version == 2 {
+        tx.execute_batch(
+            "ALTER TABLE completed_invitations RENAME TO previous_completed_invitations",
+        )?;
+    }
     tx.execute_batch(HISTORY_SCHEMA)?;
+    if version == 2 {
+        tx.execute_batch("INSERT INTO completed_invitations SELECT invitation_hash,operation FROM previous_completed_invitations; DROP TABLE previous_completed_invitations")?;
+    }
     let changed=tx.execute("UPDATE profile SET pending=?1,credential=?2 WHERE singleton=1 AND pending IS ?3 AND credential IS ?4",
         params![pending,credential,profile.pending_record,profile.credential_record])?;
     if changed != 1 {
         bail!("profile changed before format upgrade");
     }
-    tx.pragma_update(None, "user_version", 2)?;
+    tx.pragma_update(None, "user_version", 3)?;
     tx.commit()?;
     profile.pending_record = pending;
     profile.credential_record = credential;
     Ok(())
 }
 
-fn snapshot(directory: &Path) -> anyhow::Result<()> {
+fn snapshot(directory: &Path, version: u32) -> anyhow::Result<()> {
     let path = directory.join(PROFILE);
     private_file(&path)?;
     let bytes = fs::read(path)?;
     let target = directory.join(format!(
-        "workspace-profile-v1-{}.sqlite3",
+        "workspace-profile-v{version}-{}.sqlite3",
         crypto::hash(&bytes)
     ));
     if target.try_exists()? {

@@ -90,6 +90,13 @@ pub(super) fn validate_result(
     if pending.operation == Operation::Enrollment {
         return Ok(());
     }
+    if pending.operation == Operation::Recovery {
+        if old.is_some() || pending.expected_client_id.as_deref() != Some(&result.receipt.client_id)
+        {
+            bail!("recovery receipt differs from the expected client identity");
+        }
+        return Ok(());
+    }
     let old = old.context("operation lost its original credential")?;
     if result.receipt.client_id != old.receipt.client_id {
         bail!("operation changed the registered client identity");
@@ -109,7 +116,7 @@ pub(super) fn validate_result(
                 bail!("renewal did not rotate its credential");
             }
         }
-        Operation::Enrollment => {}
+        Operation::Enrollment | Operation::Recovery => {}
     }
     Ok(())
 }

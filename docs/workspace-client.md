@@ -1,9 +1,9 @@
 # Enroll a workspace client
 
 This unreleased client supports trusted workspace profiles, initial enrollment
-and paged workspace discovery over HTTPS/mTLS, same-registration joining and
-credential renewal. It also accepts a fresh targeted readmission invitation into
-an unenrolled profile. Client recovery, context selection and workspace MCP
+and paged workspace discovery over HTTPS/mTLS, same-registration joining,
+credential renewal and recovery into a separate profile. It also accepts a fresh
+targeted readmission invitation into an unenrolled profile. Context selection and workspace MCP
 integration remain subsequent work. Existing native commands and their saved
 session files keep their current behavior.
 
@@ -131,7 +131,49 @@ there is no fallback to a possibly superseded credential. Expired certificates
 cannot authenticate a renewal or admission. Ask an authorized admin for fresh
 recovery instead. Preserve every existing profile until recovery is complete:
 a scoped recovery may replace A while the old credential still authorizes B.
-Client recovery routing for that case remains separate implementation work.
+Use the separate-profile recovery flow below to retain both credentials.
+
+A persistently refused renewal keeps its saved operation and blocks later
+discovery and joining, including a newly issued join invitation. Preserve that
+profile. Ask an authorized admin for recovery of still-authorized grants into a
+separate profile. If membership was revoked, an admin must instead issue fresh
+[targeted readmission](workspace-readmission.md). Neither a new ordinary
+invitation nor restoring a backup bypasses the saved operation or server state.
+
+## Recover into a separate profile
+
+Obtain a fresh recovery invitation and the existing client UUID from an authorized
+admin. Verify the intended instance UUID, CA and origins as in initial trust.
+Create a separate empty profile, for example with the same verified trust values:
+
+```bash
+ccp-client workspace trust --profile "$HOME/.ccp-client/workspaces/recovered" \
+  --instance-id "$INSTANCE_ID" --https-origin "$HTTPS_ORIGIN" \
+  --mtls-origin "$MTLS_ORIGIN" --ca-file ./ccp-ca.pem
+ccp-client workspace recover --profile "$HOME/.ccp-client/workspaces/recovered" \
+  --expected-client-id "$CLIENT_ID" --invitation-file ./recovery-invitation.txt
+ccp-client workspace workspaces --profile "$HOME/.ccp-client/workspaces/recovered"
+```
+
+Protect the invitation file with owner-only permissions. Recovery uses the fresh
+bearer invitation on the verified HTTPS listener; an old or expired certificate
+does not authorize it. The expected UUID checks identity continuity and does not
+grant permission. The server captures the allowed grants and rechecks their
+current state, issuer authority and global client disable.
+
+Recovery saves its exact target, nonce, new key, CSR and invitation hash before
+sending. Retry with the same profile, expected UUID and invitation after a lost
+response or local activation failure. A different target, invitation or operation
+cannot replace the pending state. The client validates the complete certificate
+receipt and expected UUID before atomic activation. A wrong target refuses
+activation; preserve the profile and consult the issuing admin.
+
+An active profile is never overwritten by recovery. Scoped recovery of A gives
+the new profile A only; keep using the original profile for any still-authorized
+B. Choose the profile explicitly on each command. The client does not merge
+profiles or automatically select newly recovered workspaces. Original private
+material stays intact even when recovery supersedes its server bindings. The
+[recovery contract](workspace-recovery.md) describes scope and retry limits.
 
 ## Inspect and discover
 
@@ -141,7 +183,7 @@ ccp-client workspace workspaces --profile "$HOME/.ccp-client/workspaces/office"
 ```
 
 Info is local metadata: format, pinned origins/instance/CA fingerprint, pending
-request UUID/operation and optional client/credential UUIDs, expiry and renewal-due
+request UUID/operation/expected target and optional client/credential UUIDs, expiry and renewal-due
 status. It can show expired credentials as expired, but is not proof of current
 server authorization.
 Online discovery revalidates the certificate and uses actual mTLS; the server
@@ -158,7 +200,7 @@ local descriptions and HTTP status, without echoing an untrusted server body.
 
 ## Profile storage and recovery limits
 
-Workspace profile format 2 uses `workspace-profile.sqlite3` with a separate
+Workspace profile format 3 uses `workspace-profile.sqlite3` with a separate
 application ID, DELETE journaling and FULL synchronization. Open profiles hold
 an exclusive SQLite lease across commits and network calls. Another invocation
 can fail busy after 2s; close the first profile before retrying. This serializes
@@ -174,20 +216,20 @@ Host operators remain trusted against path/file replacement races. Unix
 publication syncs the directory; Windows directory-sync and ACL behavior have
 not been independently verified locally.
 
-Format 1 profiles upgrade when opened with this client. Before any migration,
-the exclusive lease protects a complete owner-only, content-addressed format-1
-SQLite snapshot named `workspace-profile-v1-HASH.sqlite3`. Publication is durable
-on supported Unix local file systems and never overwrites another snapshot.
+Format 1 and 2 profiles upgrade when opened with this client. Before migration,
+the exclusive lease protects a complete owner-only, content-addressed snapshot
+named `workspace-profile-vVERSION-HASH.sqlite3`, with its original format number.
+Publication is durable on supported Unix local file systems and never
+overwrites another snapshot.
 The transaction then preserves the key, CSR, nonce, invitation hash and identity
-while adding typed pending operations and compact completed-invitation history.
+and existing completed-invitation history while adding recovery pending state.
 A failure leaves the previous format and its snapshot intact. Snapshots are
-retained without automatic cleanup. Older format-1 clients refuse format 2;
+retained without automatic cleanup. Older format-1/2 clients refuse format 3;
 restore a deliberately chosen snapshot into a separate private directory for a
 controlled rollback. Restoring a local snapshot never restores revoked or
 superseded server authority. No backup is selected automatically if the main
 profile is missing or corrupt.
 
-Fresh targeted recovery remains separate client integration work. A client whose
-certificate has expired or been revoked cannot use that old certificate to
-regain access. The selected [recovery contract](workspace-recovery.md) applies.
+A client whose certificate has expired or been revoked cannot use that old
+certificate to regain access. Fresh administrative recovery authority is required.
 This draft is not a production rollout or a throughput/power-loss guarantee.

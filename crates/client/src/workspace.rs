@@ -7,6 +7,7 @@ pub(crate) mod cli;
 mod crypto;
 mod lifecycle;
 mod network;
+mod recovery;
 mod store;
 
 use anyhow::{Context, bail};
@@ -63,6 +64,7 @@ pub struct ProfileInfo {
     pub ca_sha256: String,
     pub pending_request_id: Option<String>,
     pub pending_operation: Option<String>,
+    pub pending_client_id: Option<String>,
     pub client_id: Option<String>,
     pub credential_id: Option<String>,
     pub expires_at: Option<i64>,
@@ -77,6 +79,7 @@ enum Operation {
     Enrollment,
     Admission,
     Renewal,
+    Recovery,
 }
 
 impl Operation {
@@ -85,6 +88,7 @@ impl Operation {
             Self::Enrollment => "enrollment",
             Self::Admission => "admission",
             Self::Renewal => "renewal",
+            Self::Recovery => "recovery",
         }
     }
 }
@@ -141,7 +145,7 @@ impl WorkspaceProfile {
         }
         let receipt = self.credential.as_ref().map(|c| &c.receipt);
         Ok(ProfileInfo {
-            format: 2,
+            format: 3,
             instance_id: self.trust.instance_id.clone(),
             https_origin: self.trust.https_origin.clone(),
             mtls_origin: self.trust.mtls_origin.clone(),
@@ -151,6 +155,10 @@ impl WorkspaceProfile {
                 .pending
                 .as_ref()
                 .map(|p| p.operation.name().to_string()),
+            pending_client_id: self
+                .pending
+                .as_ref()
+                .and_then(|p| p.expected_client_id.clone()),
             client_id: receipt.map(|r| r.client_id.clone()),
             credential_id: receipt.map(|r| r.credential_id.clone()),
             expires_at: receipt.map(|r| r.expires_at),

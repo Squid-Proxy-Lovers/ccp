@@ -255,7 +255,9 @@ revocation, credential state and original access. Revoking a consumed invitation
 blocks receipt retrieval but does not revoke an already issued certificate or
 grant. Closing initial enrollment likewise preserves existing memberships.
 Physical-host admin-key reset remains a local command, without an HTTP route.
-The normal client/MCP and browser recovery workflows remain subsequent work.
+The [workspace client](workspace-client.md#recover-into-a-separate-profile)
+supports recovery into a separate profile. Workspace MCP and browser recovery
+workflows remain subsequent work.
 
 ## Try a protected request
 
@@ -279,8 +281,9 @@ curl --cacert ./ccp-ca.pem --cert ./client-cert.pem --key ./client-key.pem \
 ```
 
 The [workspace client](workspace-client.md) connects trust, private profiles,
-initial enrollment/readmission and discovery. Same-registration joining and renewal are also connected; recovery, context
-selection and MCP remain later integration work. Native commands keep their
+initial enrollment/readmission, discovery, same-registration joining, renewal and
+separate-profile recovery. Context selection and workspace MCP remain later
+integration work. Native commands keep their
 supported native-mode behavior.
 
 ## Limits and errors

@@ -49,6 +49,14 @@ enum Command {
         #[arg(long)]
         profile: PathBuf,
     },
+    Recover {
+        #[arg(long)]
+        profile: PathBuf,
+        #[arg(long)]
+        expected_client_id: String,
+        #[arg(long)]
+        invitation_file: PathBuf,
+    },
     Workspaces {
         #[arg(long)]
         profile: PathBuf,
@@ -91,6 +99,18 @@ pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
             output(&WorkspaceProfile::open(&profile)?.join(&invitation).await?)
         }
         Command::Renew { profile } => output(&WorkspaceProfile::open(&profile)?.renew().await?),
+        Command::Recover {
+            profile,
+            expected_client_id,
+            invitation_file,
+        } => {
+            let invitation = read(&invitation_file, 256, true)?;
+            output(
+                &WorkspaceProfile::open(&profile)?
+                    .recover(&expected_client_id, &invitation)
+                    .await?,
+            )
+        }
         Command::Workspaces {
             profile,
             after,
