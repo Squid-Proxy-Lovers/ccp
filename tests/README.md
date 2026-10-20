@@ -125,3 +125,10 @@ in [recorded benchmarks](../docs/benchmarks.md).
 Report machine, revision, build settings, concurrency, and workload when sharing
 results. Interpret throughput using those run settings. Benchmarks and the opt-in
 load tests are outside the quick quality gate.
+
+Shelf lifecycle foundation tests cover scoped archive/restore, hidden descendant
+reads/history/writes, preserved ownership and individual archives, revision CAS,
+exact historical replay, name collisions and injected audit/receipt failures.
+They also check archive-summary paging, current key revocation, legacy refusal,
+schema-17 backfill, file reopen and independent stale database writers. Shelf
+HTTP/CLI/MCP adapters and payload purge remain subsequent work.

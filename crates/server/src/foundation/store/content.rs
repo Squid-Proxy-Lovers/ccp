@@ -21,6 +21,7 @@ impl AccessStore<'_> {
             content_scope(tx, actor, workspace, Action::WriteContext, now)?;
             let id = Uuid::new_v4();
             tx.execute("INSERT INTO ccp_content_shelves(id,workspace_id,name,description,created_at) VALUES (?1,?2,?3,?4,?5)", params![id.to_string(),workspace.to_string(),name,draft.description,now]).map_err(content_conflict)?;
+            tx.execute("INSERT INTO ccp_shelf_lifecycle(shelf_id,workspace_id,revision) VALUES (?1,?2,1)", params![id.to_string(), workspace.to_string()])?;
             audit(tx, actor, "create_shelf", Some(workspace), id, now)?;
             shelf(tx, workspace, id)
         })

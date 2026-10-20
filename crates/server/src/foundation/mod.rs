@@ -30,7 +30,10 @@ pub(crate) use certificate::strict_pem_der;
 pub use certificate::{
     EnrollmentReceipt, IssuingAuthority, RedemptionRequest, RenewalReceipt, RenewalRequest,
 };
-pub use content::{HierarchyPage, NodeDraft, WorkspaceBook, WorkspaceShelf};
+pub use content::{
+    ArchivedShelf, HierarchyPage, NodeDraft, ShelfState, ShelfTransition, WorkspaceBook,
+    WorkspaceShelf,
+};
 pub use entry::{
     ContentError, EntryChange, EntryContent, EntryMutation, EntryOperationOutcome,
     EntryOperationTarget, EntryPageRequest, EntryReceipt, EntryRevision, EntrySnapshot,
@@ -65,6 +68,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(include_str!("content.sql"))?;
     transaction.execute_batch(include_str!("entry.sql"))?;
     transaction.execute_batch(include_str!("operation_resolution.sql"))?;
+    transaction.execute_batch(include_str!("shelf_lifecycle.sql"))?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

@@ -125,4 +125,7 @@ pre-upgrade backup; a schema-16 server refuses schema 17, and rollback uses the
 matching whole backup and software. Backup restoration can also roll back the
 operation ledger. Future payload purge must preserve body-free terminal records
 before removing version-backed receipts; this slice implements no purge or
-cleanup worker. No power-loss, deployment or throughput guarantee is claimed.
+cleanup worker. Current schema 18 also adds separate
+[shelf lifecycle records](workspace-content.md#recover-a-whole-shelf); a schema-17
+server refuses that schema. No power-loss, deployment or throughput guarantee
+is claimed.

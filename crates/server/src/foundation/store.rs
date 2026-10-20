@@ -19,6 +19,7 @@ mod readmission;
 mod recovery;
 mod redemption;
 mod renewal;
+mod shelves;
 mod team;
 
 use super::access::{authenticated_client, permitted};

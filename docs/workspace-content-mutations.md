@@ -166,4 +166,5 @@ Rust callers use `WorkspaceProfile::mutate_entry(EntryMutation)`,
 `resolve_entry_operation_via(&mut other_profile)`. Types are exported from
 `client::workspace::content`; `pending_entry_operation` and `info` expose safe
 metadata. Keep the profile open until the operation completes. Caller selections,
-server schema 17, API version 1 and the native protocol stay unchanged.
+API version 1 and the native protocol stay unchanged. Server schema 18 retains
+the schema-17 entry cancellation fences and adds separate shelf lifecycle records.

@@ -20,8 +20,9 @@ the trusted transport, never an identity claimed in a request body.
 Ordinary current read/write clients and scoped workspace owners/admins can create
 non-destructive shelves and books. Read-only clients can read them. Global admin
 keys retain cross-workspace reads but cannot borrow their principal's workspace
-write role. Whole-shelf archival and permanent purge remain separately privileged
-future operations; creating a shelf does not grant those powers.
+write role. Whole-shelf archive/restore uses the separate scoped archive-management
+capability; creating a shelf does not grant that power. Permanent purge remains
+subsequent work.
 
 Names are trimmed and contain 1–256 UTF-8 bytes without control characters.
 Descriptions preserve their exact text and are limited to 4096 UTF-8 bytes.
@@ -75,8 +76,8 @@ returns the original entry/revision receipt without appending again. Changing th
 request or credential under that UUID conflicts. New credentials, including
 recovery credentials, need fresh operation IDs for new mutations. Lost write
 access blocks retries too. Receipts contain no body and do not expose archived
-content. Retain the original operation ID until the result is known; the HTTP adapter accepts this receipt contract, while normal client automatic
-retry integration remains later work.
+content. Retain the original operation ID until the result is known. The normal
+client and MCP adapters implement [durable exact retries](workspace-content-mutations.md).
 
 Text is limited to 256 KiB of UTF-8; description to 4096 bytes. Labels retain their
 order and exact case, with at most 32 distinct nonempty values of 1–128 bytes
@@ -99,16 +100,52 @@ and all versions. Restore requires current owner write access or a scoped admin.
 A same-name active entry in the original book causes a conflict: restoration
 never replaces it. The caller can resolve the collision separately and retry the
 uncommitted restore operation. Workspace archival still allows reads but blocks
-content writes, including archive/restore and replay. Whole-shelf lifecycle,
-permanent purge and optional timed retention remain subsequent work; manual
-retention is the default and this slice starts no cleanup worker.
+content writes, including archive/restore and replay. Permanent purge and optional
+timed retention remain subsequent work; manual retention is the default and this
+slice starts no cleanup worker.
+
+## Recover a whole shelf
+
+The internal `transition_shelf` API archives or restores an explicit shelf UUID.
+It requires a currently authorized workspace owner/admin under `ManageArchives`
+in an active workspace. Ordinary writers and global admin keys cannot do this.
+HTTP, CLI, MCP and panel commands for this operation are subsequent work.
+
+Archive changes the parent shelf's visibility in one transaction. Its books,
+entries, ownership, metadata, versions and entry-operation receipts stay intact.
+Existing reads and new mutations require an active parent, so archived shelf
+bodies and history cannot be fetched through descendant IDs. Restore preserves
+those same IDs and does not restore entries that were individually archived
+before the shelf. A same-name active shelf makes restoration conflict without
+renaming, overwriting or partially restoring anything.
+
+Supply a non-nil operation UUID, the shelf's expected positive lifecycle revision
+and desired archive state. `shelf_state` gives the current revision/state for an
+explicit ID; `archived_shelves` pages current-reader-authorized summaries with
+ID, name, revision and creation time, without descriptions or descendant bodies.
+Limits are 1–500 with UUID cursors. Shelf lifecycle revisions are independent of
+entry revisions. The transition must change state and match the current revision;
+a stale command cannot act after an intervening archive/restore cycle.
+
+A body-free receipt binds the exact admin principal/key, operation, shelf,
+expected revision and requested state. An exact retry rechecks current scoped
+permission before returning its historical receipt without reapplying. The
+receipt does not prove current shelf state. A different request or key with the
+same operation conflicts. Lifecycle state, receipt and audit commit together;
+name collisions, storage and audit failures leave the previous state intact.
+
+The store retains all shelf and descendant data. This operation starts no timed
+cleanup, permanent purge or book-deletion workflow. Associated boards and status
+are not yet implemented; their later associations need an explicit contract.
 
 ## Schema and legacy data
 
 Schema 15 adds `ccp_content_shelves` and `ccp_content_books`; schema 16 adds
 entries, immutable versions and operation receipts. Schema 17 adds permanent
 body-free [client operation resolution fences](workspace-operation-resolution.md).
-These additions leave native
+Schema 18 adds shelf lifecycle revisions and immutable body-free transition
+receipts, backfilling existing shelves at revision 1 with their archive bits
+preserved. These additions leave native
 session payload, history, archives and journal storage intact. Instance identities,
 CA material, admin keys, grants and client profiles retain their existing formats.
 Native wire protocol 1 and workspace JSON API 1 are unchanged.
@@ -123,8 +160,8 @@ Do not activate workspace mode for legacy content yet: activation blocks native
 access and has no in-place deactivation. See the
 [activation and backup boundary](workspace-runtime-mode.md#explicit-workspace-activation).
 
-Keep a complete protected backup before upgrading. A schema-16 binary refuses
-schema 17; rollback uses the matching whole pre-upgrade backup and its
+Keep a complete protected backup before upgrading. A schema-17 binary refuses
+schema 18; rollback uses the matching whole pre-upgrade backup and its
 producing software. Do not lower the version or discard new tables to force an
 older server to open it. No power-loss, throughput or full-content migration claim
 is made by this storage foundation.

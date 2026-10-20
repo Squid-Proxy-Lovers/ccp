@@ -33,3 +33,30 @@ pub struct HierarchyPage<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<Uuid>,
 }
+
+/// Shelf visibility is independent of each descendant entry's archive state.
+/// A transition receipt is historical; use `shelf_state` for current state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShelfState {
+    pub shelf_id: Uuid,
+    pub workspace_id: Uuid,
+    pub revision: u64,
+    pub archived: bool,
+}
+
+pub struct ShelfTransition {
+    pub operation_id: Uuid,
+    pub shelf_id: Uuid,
+    pub expected_revision: u64,
+    pub archived: bool,
+}
+
+/// Archived shelf discovery never includes descendant bodies or descriptions.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArchivedShelf {
+    pub id: Uuid,
+    pub workspace_id: Uuid,
+    pub name: String,
+    pub revision: u64,
+    pub created_at: i64,
+}
