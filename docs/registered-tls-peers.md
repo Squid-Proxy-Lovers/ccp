@@ -1,9 +1,10 @@
 # Verify registered TLS peers
 
 The unreleased workspace server has internal adapters that bind an established
-client TLS connection to its current registered identity. These adapters do not
-start listeners or expose HTTP routes. Server handlers must use them for every
-request before calling the scoped access operations.
+client TLS connection to its current registered identity. The separate
+[workspace HTTPS API](workspace-http-api.md) now uses them for every protected
+client request. Normal client profiles, complete management and browser
+flows remain later work.
 
 [Documentation index](README.md) · [Instance TLS setup](instance-tls-identity.md)
 
@@ -14,6 +15,13 @@ request before calling the scoped access operations.
 `peer_certificates()` and refuses incomplete handshakes or absent client
 certificates. Request JSON, display names, certificates supplied in a body, and
 forwarded identity headers cannot create its private proof type.
+
+The Hyper runtime captures an opaque certificate source from that completed
+connection before handing the stream to its HTTP driver. It stays in that
+connection's private service context; it cannot be constructed from raw JSON or
+headers. Each request revalidates it and the current registry instead of caching
+an authenticated actor. Pending database jobs retain the connection admission
+slot and runtime lease even if the TCP connection closes.
 
 The certificate is revalidated against this instance's CA and current server
 clock, including root expiry. The direct leaf may be followed by the exact
@@ -75,7 +83,7 @@ credential without issuing an orphan.
 
 The older `AccessStore` methods that accept an `Actor` are trusted building
 blocks for server code and embedded callers. They do not authenticate a remote
-claim. Future HTTP routes must derive actors from these TLS adapters and from
+claim. HTTP routes must derive actors from these TLS adapters and from
 the separate scoped admin-key authentication. They must normalize internal
 errors, enforce parser/body/concurrency limits and preserve the documented
 transaction boundaries. No plaintext or proxy-header identity fallback is

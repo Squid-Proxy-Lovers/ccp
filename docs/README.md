@@ -24,6 +24,7 @@ the other guides describe the supported native interface.
 | Set up unreleased workspace administration or replace lost admin keys locally | [Local administration](local-workspace-administration.md) |
 | Provision unreleased instance certificates and export public trust | [Instance TLS identity](instance-tls-identity.md) |
 | Renew the unreleased instance server certificate or change its names | [Server certificate renewal](server-certificate-renewal.md) |
+| Run the unreleased TLS workspace API and inspect its request contract | [Workspace HTTPS API](workspace-http-api.md) |
 | Report a vulnerability or read bounty terms | [Security policy](../SECURITY.md) |
 | Find disclosure credits | [Hall of Fame](../HALL-OF-FAME.md) |
 

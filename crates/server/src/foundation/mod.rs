@@ -32,7 +32,8 @@ pub use invitation::{
     ReadmissionInvitationRequest,
 };
 pub use model::{
-    Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,
+    Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspacePage,
+    WorkspaceSummary,
 };
 pub use provisioning::{InitialOwner, OwnerProvisioning, ProvisionedWorkspace};
 pub use recovery::{

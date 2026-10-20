@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use std::io::{self, Write};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -13,6 +14,7 @@ const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server <session-name>
   server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
   server health <session>
+  server workspace-serve --data-dir <DIR> [--activate-workspace] [--https-listen <ADDR>] [--mtls-listen <ADDR>]
   server workspace-init --data-dir <DIR> --operator <NAME> --workspace <NAME>
   server workspace-tls-init --data-dir <DIR> --name <DNS_OR_IP> [--name <DNS_OR_IP>...]
   server workspace-tls-info --data-dir <DIR>
@@ -35,6 +37,7 @@ enum Command {
     IssueToken(IssueTokenArgs),
     Health(HealthArgs),
     WorkspaceInit(WorkspaceInitArgs),
+    WorkspaceServe(WorkspaceServeArgs),
     AdminInfo(LocalDataArgs),
     WorkspaceTlsInit(WorkspaceTlsArgs),
     WorkspaceTlsInfo(LocalDataArgs),
@@ -63,6 +66,21 @@ struct IssueTokenArgs {
 struct LocalDataArgs {
     #[arg(long, value_name = "DIR")]
     data_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct WorkspaceServeArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(
+        long,
+        help = "Persist workspace mode; native access will then be refused"
+    )]
+    activate_workspace: bool,
+    #[arg(long, default_value = "127.0.0.1:8443")]
+    https_listen: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:8444")]
+    mtls_listen: SocketAddr,
 }
 
 #[derive(Args)]
@@ -134,7 +152,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = parse_cli();
 
     if let Some(command) = cli.command {
-        return execute_command(command);
+        return execute_command(command).await;
     }
 
     server::run_server(
@@ -145,8 +163,9 @@ async fn main() -> anyhow::Result<()> {
     .await
 }
 
-fn execute_command(command: Command) -> anyhow::Result<()> {
+async fn execute_command(command: Command) -> anyhow::Result<()> {
     match command {
+        Command::WorkspaceServe(args) => serve_workspace(args).await,
         Command::IssueToken(args) => print_json(&server::init::issue_enrollment_token(
             &args.session,
             args.access_level.as_str(),
@@ -192,6 +211,25 @@ fn execute_command(command: Command) -> anyhow::Result<()> {
             args.ttl_seconds,
         )?),
     }
+}
+
+async fn serve_workspace(args: WorkspaceServeArgs) -> anyhow::Result<()> {
+    let server = server::workspace_http::WorkspaceServer::bind(server::workspace_http::Config {
+        data_dir: args.data.data_dir,
+        https_listen: args.https_listen,
+        mtls_listen: args.mtls_listen,
+        activate_workspace: args.activate_workspace,
+    })
+    .await?;
+    print_json(&server.startup()?)?;
+    let report = server
+        .run_until(async {
+            tokio::signal::ctrl_c()
+                .await
+                .context("cannot listen for shutdown")
+        })
+        .await?;
+    print_json(&report)
 }
 
 fn print_reset(result: server::foundation::LocalKeyReset) -> anyhow::Result<()> {

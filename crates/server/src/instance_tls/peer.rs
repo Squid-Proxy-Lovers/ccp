@@ -61,6 +61,32 @@ impl InstanceTls {
         let chain = tls
             .peer_certificates()
             .context("client TLS certificate required")?;
+        self.verify_chain(chain, timestamp)
+    }
+
+    pub(crate) fn capture_peer(&self, tls: &ServerConnection) -> anyhow::Result<CapturedPeer> {
+        if tls.is_handshaking() {
+            bail!("client TLS handshake is not complete");
+        }
+        let chain = tls
+            .peer_certificates()
+            .context("client TLS certificate required")?;
+        if chain.is_empty()
+            || chain.len() > 2
+            || chain.first().is_some_and(|leaf| leaf.len() > 16 * 1024)
+        {
+            bail!("unexpected client certificate chain");
+        }
+        Ok(CapturedPeer {
+            chain: chain.to_vec(),
+        })
+    }
+
+    fn verify_chain(
+        &self,
+        chain: &[rustls::pki_types::CertificateDer<'static>],
+        timestamp: i64,
+    ) -> anyhow::Result<VerifiedPeer> {
         let leaf = chain.first().context("empty client certificate chain")?;
         if leaf.len() > 16 * 1024 {
             bail!("client certificate is too large");
@@ -227,3 +253,15 @@ fn unsigned(bytes: &[u8]) -> &[u8] {
 
 #[cfg(test)]
 mod tests;
+
+// Opaque proof source captured only from the completed mandatory-mTLS stream.
+// The HTTP service owns it for that exact connection; each request revalidates
+// time/profile/chain and the current registry, never caches an Actor.
+pub(crate) struct CapturedPeer {
+    chain: Vec<rustls::pki_types::CertificateDer<'static>>,
+}
+impl CapturedPeer {
+    pub(crate) fn verify(&self, identity: &InstanceTls, now: i64) -> anyhow::Result<VerifiedPeer> {
+        identity.verify_chain(&self.chain, now)
+    }
+}

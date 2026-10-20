@@ -1291,3 +1291,5 @@ mod readmission;
 mod local_admin;
 
 mod provisioning;
+
+mod discovery;

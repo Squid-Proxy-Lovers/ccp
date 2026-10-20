@@ -73,6 +73,17 @@ impl DirectoryLease {
         Self::acquire(directory, LeaseKind::Workspace)
     }
 
+    /// Resume only an already activated workspace directory. The initial
+    /// maintenance check never activates Native mode; activation is explicit.
+    pub fn resume_workspace(directory: &Path) -> anyhow::Result<Self> {
+        let existing = Self::maintenance(directory)?;
+        if existing.mode() != DirectoryMode::Workspace {
+            bail!("workspace activation is required; use the explicit activation option");
+        }
+        drop(existing);
+        Self::activate_workspace(directory)
+    }
+
     /// Exclusive local operator boundary for future provisioning/reset tools.
     /// It preserves the persisted mode and grants no remote administrative role.
     pub fn maintenance(directory: &Path) -> anyhow::Result<Self> {

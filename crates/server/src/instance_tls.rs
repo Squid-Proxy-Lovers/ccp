@@ -10,7 +10,7 @@ mod bundle;
 mod files;
 mod peer;
 mod renewal;
-pub(crate) use peer::VerifiedPeer;
+pub(crate) use peer::{CapturedPeer, VerifiedPeer};
 pub use renewal::renew;
 
 use std::path::Path;
@@ -130,6 +130,7 @@ impl rustls::server::ResolvesServerCert for LeasedResolver {
 
 fn http_config(mut config: ServerConfig) -> Arc<ServerConfig> {
     config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    config.max_early_data_size = 0;
     Arc::new(config)
 }
 
@@ -278,7 +279,7 @@ fn decode_bundle(bytes: &[u8]) -> anyhow::Result<PrivateBundle> {
         .map_err(|_invalid_input| anyhow::anyhow!("invalid TLS bundle format"))
 }
 
-fn now() -> anyhow::Result<i64> {
+pub(crate) fn now() -> anyhow::Result<i64> {
     Ok(i64::try_from(
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?

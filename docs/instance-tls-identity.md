@@ -2,8 +2,8 @@
 
 This unreleased local setup step creates persistent certificates for the workspace
 redesign. It does not start a listener, activate workspace mode, install trust in
-your OS/browser, or change native session certificates. The HTTPS routes and
-client trust configuration are subsequent work; internal
+your OS/browser, or change native session certificates. The limited [workspace HTTPS API](workspace-http-api.md) can use this material;
+normal client trust/profile tooling remains subsequent work. Internal
 [registered-peer adapters](registered-tls-peers.md) bind actual TLS peers to
 current credential records.
 

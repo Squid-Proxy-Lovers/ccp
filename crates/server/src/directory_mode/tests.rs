@@ -544,15 +544,37 @@ fn legacy_discovery_skips_protected_sqlite_without_reading_its_sessions() {
 fn race(kind: LeaseKind) {
     let dir = directory();
     drop(DirectoryLease::native(&dir).unwrap());
+    let mut acquired = 0;
+    for round in 0..20 {
+        acquired = race_round(&dir, kind, round > 0);
+        if kind == LeaseKind::Native {
+            break;
+        }
+        // Zero is valid for the prompt-refusal API when all initial exclusive
+        // attempts meet transient SQLite header readers. Every round must still
+        // exclude overlapping writers; only an all-Busy round may retry.
+        assert!(acquired <= 1, "exclusive leases overlapped");
+        if acquired == 1 {
+            break;
+        }
+    }
+    assert_eq!(acquired, if kind == LeaseKind::Native { 8 } else { 1 });
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn race_round(dir: &Path, kind: LeaseKind, stagger: bool) -> usize {
     let barrier = Arc::new(std::sync::Barrier::new(8));
     let finished = Arc::new(std::sync::Barrier::new(8));
     let mut workers = Vec::new();
-    for _ in 0..8 {
-        let path = dir.clone();
+    for index in 0..8 {
+        let path = dir.to_path_buf();
         let start = barrier.clone();
         let finished = finished.clone();
         workers.push(std::thread::spawn(move || {
             start.wait();
+            if stagger {
+                std::thread::sleep(Duration::from_millis(index * 2));
+            }
             let result = match kind {
                 LeaseKind::Native => DirectoryLease::native(&path),
                 LeaseKind::Workspace => DirectoryLease::activate_workspace(&path),
@@ -575,12 +597,10 @@ fn race(kind: LeaseKind) {
             }
         }));
     }
-    let acquired = workers
+    workers
         .into_iter()
         .map(|worker| usize::from(worker.join().unwrap()))
-        .sum::<usize>();
-    assert_eq!(acquired, if kind == LeaseKind::Native { 8 } else { 1 });
-    std::fs::remove_dir_all(dir).unwrap();
+        .sum::<usize>()
 }
 
 #[test]

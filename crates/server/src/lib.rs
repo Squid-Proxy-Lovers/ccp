@@ -12,6 +12,7 @@ pub mod journal;
 pub mod local_admin;
 pub mod message;
 pub mod state;
+pub mod workspace_http;
 
 use std::panic;
 use std::sync::Arc;

@@ -95,3 +95,9 @@ pub struct WorkspaceSummary {
     pub name: String,
     pub archived: bool,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspacePage {
+    pub workspaces: Vec<WorkspaceSummary>,
+    pub next_cursor: Option<String>,
+}

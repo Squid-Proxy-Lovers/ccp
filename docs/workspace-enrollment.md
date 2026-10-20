@@ -3,9 +3,10 @@
 This unreleased internal batch redeems workspace invitations using signed
 certificate requests. It creates a registered client identity, credential,
 workspace grant, certificate binding, quota update, retry receipt and audit in
-one SQLite write transaction. It still exposes no network listener, CLI command
-or browser enrollment flow; those adapters need verified server trust and must
-use the same transaction and identity checks.
+one SQLite write transaction. The limited [workspace HTTPS API](workspace-http-api.md)
+now exposes new enrollment, existing-client admission and renewal using these
+checks. Normal client profiles, automated enrollment and browser flows remain
+later integration work.
 
 ## New admission and retries
 
@@ -118,8 +119,9 @@ Authorization continues to use current server-side grants and bindings.
 
 Schema 8 stores the CSR public-key hash, certificate DER fingerprint and public
 certificate against the credential, plus an immutable invitation retry receipt.
-These records are required inputs to the future mTLS adapter; trusting a JSON
-identity field or a certificate signature alone is insufficient. The
+The [registered-peer adapter](registered-tls-peers.md) checks these records
+against the actual completed TLS peer on every request; a JSON identity field
+or certificate signature alone is insufficient. The
 [foundation migration and backup rules](workspace-foundation.md) apply.
 
 ## Verification scope
@@ -129,9 +131,9 @@ names/usages, reject invalid signatures and identity claims, preserve registrati
 on second-workspace admission, roll back failed audits, enforce quota under
 concurrent admission, return one result under concurrent retry, retain receipts
 across database reopening, and enforce current lifecycle/revocation/expiry.
-Native CLI/MCP compatibility remains separately tested. The new HTTPS and mTLS
-network flows, server-trust bootstrap, automated renewal, recovery network
-adapters and browser UI remain unverified until their adapters are implemented.
+Native CLI/MCP compatibility remains separately tested. Actual localhost HTTPS/mTLS enrollment, admission, discovery and renewal flows
+are tested by the limited API batch. Normal client-profile bootstrap, automated
+renewal, complete recovery management and browser UI remain later work.
 
 Renewal tests cover current bound-scope capture, changed roles, archived reads,
 revocation/disable/expiry, exact retry, competing and identical concurrent
