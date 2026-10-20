@@ -6,7 +6,7 @@ These unreleased library and CLI operations create, append, revise, archive and
 restore entries through the [content HTTPS API](workspace-content-http.md).
 Use [shelf/book creation](workspace-content-client.md#create-shelves-and-books)
 to prepare the hierarchy. The [workspace MCP bridge](workspace-mcp.md) exposes
-content reads; MCP mutations remain later work.
+content reads and shelf/book creation; MCP entry mutations remain later work.
 
 [Documentation index](README.md) · [Ownership and revisions](workspace-content.md) ·
 [Server operation resolution](workspace-operation-resolution.md)

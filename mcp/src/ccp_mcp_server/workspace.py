@@ -17,6 +17,7 @@ from .workspace_config import environment_config
 from .workspace_content import WorkspaceContentTools
 from .workspace_runtime import WorkspaceRuntime
 from .workspace_values import canonical_uuid, object_result
+from .workspace_write import WorkspaceValidationMiddleware, WorkspaceWriteTools
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class WorkspaceTools:
 def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp = FastMCP(
         "ccp-workspace",
+        middleware=[WorkspaceValidationMiddleware()],
         instructions=(
             "Use configured profile aliases to discover accessible workspaces. "
             "Open a selection handle and retain its selection_id for later choices and resolution. "
@@ -113,7 +115,9 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
             "An explicit target does not change choices. Selection is a preference; "
             "the CCP server enforces current access. Content reads accept scope.workspace_id "
             "or scope.selection_id for its default and return the resolved workspace_id with data. "
-            "Each read targets one workspace and does not change selections."
+            "Each read targets one workspace and does not change selections. "
+            "Creation requests require an explicit workspace_id; resolve a default once and "
+            "retain that UUID. Creation has no receipt or automatic retry; inspect the original parent after uncertainty."
         ),
     )
     tools = WorkspaceTools(runtime)
@@ -133,6 +137,9 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp.tool(content.workspace_entries)
     mcp.tool(content.workspace_entry)
     mcp.tool(content.workspace_history)
+    writes = WorkspaceWriteTools(runtime)
+    mcp.tool(writes.workspace_create_shelf)
+    mcp.tool(writes.workspace_create_book)
     return mcp
 
 

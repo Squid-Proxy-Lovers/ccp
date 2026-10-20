@@ -288,7 +288,7 @@ async def check():
         )
         async with Client(transport) as client:
             tools = await client.list_tools()
-            assert len(tools) == 15
+            assert len(tools) == 17
             names = {tool.name for tool in tools}
             assert {
                 "workspace_shelves",

@@ -60,7 +60,10 @@ current revocation/disable, process restart and private-state cleanup. It also
 runs seven content read tools through actual stdio/CLI/TLS, including historical
 and archived entry rules, large escaped snapshots and scoped recovery without
 authority union. CI runs both across supported Python/FastMCP combinations.
-Workspace content writes are not implemented by these MCP read tools.
+It also runs private-file shelf/book creation through MCP, including pending
+entry guards, exact explicit targets across default changes, current denials,
+recovery isolation and temporary-file cleanup. MCP entry mutation tools remain
+later work.
 
 The compatibility smoke enrolls clients, verifies the existing wire codec,
 reads/appends context, and reopens persisted data. For a dependency update, test

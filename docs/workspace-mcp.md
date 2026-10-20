@@ -2,8 +2,8 @@
 
 This unreleased stdio bridge connects an agent host to configured workspace
 client profiles. It exposes current workspace metadata and explicit caller
-selections, plus shelves, books, entries and revision history. Content writes,
-boards, status and the browser panel remain later work. The supported native
+selections, shelves, books, entries and revision history, plus shelf/book creation.
+Entry mutations, boards, status and the browser panel remain later work. The supported native
 `ccp-mcp-server` entry point stays available.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md) ·
@@ -158,7 +158,51 @@ historical-body and history reads fail while that entry is archived. An archived
 workspace remains readable to authorized clients. Current revocation and global
 disable still apply. The [client content guide](workspace-content-client.md)
 explains response validation, bounded snapshots and renewal; creation and durable
-entry writes remain available through that CLI rather than these MCP read tools.
+entry writes remain available through that CLI; the MCP creation tools below
+prepare shelves and books.
+
+## Create shelves and books
+
+The two creation tools take `profile` and a typed `request`. Every write names its
+workspace UUID explicitly. To use a selected default, first call `workspace_target`
+and retain the returned UUID in the request. A later default change cannot retarget
+that request. Writes do not fan out, modify preferences or borrow another alias's
+authority.
+
+| Tool | Fields inside `request` |
+| --- | --- |
+| `workspace_create_shelf` | `workspace_id`, `name`, optional `description` |
+| `workspace_create_book` | `workspace_id`, `shelf_id`, `name`, optional `description` |
+
+For example, call `workspace_create_shelf` after replacing the illustrative UUID:
+
+```json
+{
+  "profile": "office",
+  "request": {
+    "workspace_id": "00000000-0000-4000-8000-000000000002",
+    "name": "notes",
+    "description": "Research notes"
+  }
+}
+```
+
+Creation returns `workspace_id` and `data` containing the new node's metadata.
+Names are trimmed, nonempty and at most 256 UTF-8 bytes without control characters;
+descriptions are at most 4096 bytes and preserve text. Encoded requests are limited
+to 64 KiB. Unknown fields, identity claims and implicit workspace targets are
+rejected. Creation arguments are checked before SDK parsing, and invalid requests
+use static errors rather than echoing rejected values. The Rust client enforces its current authority and pending-operation
+guards, including a pending entry intent or credential admission. A pending
+renewal can resume before creation. See [client creation](workspace-content-client.md#create-shelves-and-books).
+
+Each call sends one creation POST. There is no operation receipt, saved creation
+intent, automatic retry or automatic claim of an existing name. A duplicate
+conflicts. If the result is uncertain, inspect `workspace_shelves` or
+`workspace_books` under the original explicit workspace and parent before deciding
+to retry. Use `workspace_profile` to inspect pending-entry metadata when a shared
+profile blocks a new operation. Successful node metadata includes descriptions;
+errors and partial stdout do not expose payloads, child stderr or private paths.
 
 ## Scope, lifetime and failures
 
@@ -182,6 +226,16 @@ or resumed automatically. Existing credential profiles are retained. Unix
 permissions and the [profile storage limits](workspace-client.md#profile-storage-and-recovery-limits)
 apply; Windows ACL and directory durability are not independently verified here.
 
+Creation payloads travel through bridge-generated private files, never argv or
+tool-selected paths. A process slot is acquired before staging, limiting active
+request files to eight. On Unix the runtime directory is private and request files
+use mode `0600`. Files are closed before the Rust child opens them and removed
+after it exits or is killed and reaped, including cancellation during launch.
+An abrupt host stop or cleanup failure can leave private request files; they are
+never automatically resumed. Clearing a file does not promise secure erasure of
+disk pages or backups. The Rust profile and its durable entry intent are separate
+and are never removed with these temporary files.
+
 The bridge runs at most eight Rust children, waits at most two seconds for a
 process slot, and gives each child 60 seconds. Only the fixed entry-snapshot
 command gets 4 MiB of stdout, preserving escaped text and append contributions;
@@ -194,5 +248,6 @@ use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-The bridge exposes 15 tools: eight metadata/selection tools and seven content
-reads. It does not write entries, publish guidance, manage tasks or start a server.
+The bridge exposes 17 tools: eight metadata/selection tools, seven content reads
+and two container creations. It does not mutate entries, publish guidance,
+manage tasks or start a server.

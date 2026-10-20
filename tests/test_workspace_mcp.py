@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -24,8 +25,14 @@ from ccp_mcp_server.workspace_content import (
 )
 from ccp_mcp_server.workspace_process import WorkspaceProcess
 from ccp_mcp_server.workspace_runtime import WorkspaceRuntime
+from ccp_mcp_server.workspace_write import (
+    BookDraft,
+    ShelfDraft,
+    WorkspaceValidationMiddleware,
+    WorkspaceWriteTools,
+)
 from fastmcp import Client
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ToolError, ValidationError
 
 
 class WorkspaceConfigurationTests(unittest.TestCase):
@@ -258,7 +265,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 15)
+                self.assertEqual(len(tools), 17)
                 self.assertTrue(
                     {
                         "workspace_profiles",
@@ -451,3 +458,317 @@ class WorkspaceContentTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ToolError) as error:
                 await tools.workspace_shelves("office", ContentScope(str(uuid4())))
             self.assertNotIn("PRIVATE_VALUE", str(error.exception))
+
+
+class WorkspaceWriteTests(unittest.IsolatedAsyncioTestCase):
+    def config(self):
+        return WorkspaceConfig(Path(sys.executable), {"office": Path("/configured/profile")})
+
+    async def test_validation_hook_redacts_sdk_errors_but_keeps_cancellation_and_tool_errors(self):
+        middleware = WorkspaceValidationMiddleware()
+        context = SimpleNamespace(message=SimpleNamespace(name="workspace_profiles", arguments={}))
+        for request in [
+            {"workspace_id": str(uuid4()), "name": "valid", "owner_client_id": "PRIVATE_BODY"},
+            {"workspace_id": str(uuid4()), "name": 1, "description": "PRIVATE_BODY"},
+            {"workspace_id": str(uuid4()), "name": "valid", "description": None},
+        ]:
+            invalid = SimpleNamespace(
+                message=SimpleNamespace(
+                    name="workspace_create_shelf",
+                    arguments={"profile": "office", "request": request},
+                )
+            )
+            next_call = AsyncMock()
+            with self.assertRaises(ToolError) as caught:
+                await middleware.on_call_tool(invalid, next_call)
+            self.assertNotIn("PRIVATE_BODY", str(caught.exception))
+            next_call.assert_not_awaited()
+        for error in [ValueError("PRIVATE_BODY"), ValidationError("PRIVATE_BODY")]:
+            next_call = AsyncMock(side_effect=error)
+            with self.assertRaises(ToolError) as caught:
+                await middleware.on_call_tool(context, next_call)
+            self.assertNotIn("PRIVATE_BODY", str(caught.exception))
+            next_call.assert_awaited_once_with(context)
+        intentional = ToolError("safe static message")
+        with self.assertRaises(ToolError) as caught:
+            await middleware.on_call_tool(context, AsyncMock(side_effect=intentional))
+        self.assertIs(caught.exception, intentional)
+        with self.assertRaises(asyncio.CancelledError):
+            await middleware.on_call_tool(context, AsyncMock(side_effect=asyncio.CancelledError))
+        self.assertEqual(
+            await middleware.on_call_tool(context, AsyncMock(return_value={"ok": True})),
+            {"ok": True},
+        )
+
+    async def test_explicit_payload_uses_private_generated_path_without_data_in_argv(self):
+        workspace, parent = str(uuid4()), str(uuid4())
+        with WorkspaceRuntime(self.config()) as runtime:
+            captured = []
+
+            async def spawn(arguments):
+                path = Path(arguments[-1])
+                self.assertEqual(
+                    arguments[:-2], ("content", "--profile", "/configured/profile", "create-book")
+                )
+                self.assertEqual(arguments[-2], "--request-file")
+                self.assertTrue(path.is_relative_to(runtime.root))
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertNotIn("PRIVATE_BODY", " ".join(arguments))
+                captured.append(path)
+                return json.loads(path.read_text())
+
+            runtime.process._spawn = AsyncMock(side_effect=spawn)
+            result = await WorkspaceWriteTools(runtime).workspace_create_book(
+                "office", BookDraft(workspace, parent, " notes ", "PRIVATE_BODY\0é")
+            )
+            self.assertEqual(result["workspace_id"], workspace)
+            self.assertEqual(result["data"]["shelf_id"], parent)
+            self.assertEqual(result["data"]["description"], "PRIVATE_BODY\0é")
+            self.assertTrue(captured)
+            self.assertFalse(captured[0].exists())
+            self.assertEqual(list(runtime.root.glob("request-*.json")), [])
+            self.assertEqual(runtime._selections, {})
+
+    async def test_invalid_or_unknown_alias_refuses_before_staging_and_preserves_scope(self):
+        workspace = str(uuid4())
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run_input = AsyncMock()
+            tools = WorkspaceWriteTools(runtime)
+            for profile, request in [
+                ("/outside", ShelfDraft(workspace, "valid")),
+                ("office", ShelfDraft("--profile=/outside", "valid")),
+                ("office", ShelfDraft(workspace, " \n ")),
+                ("office", ShelfDraft(workspace, "bad\nname")),
+                ("office", ShelfDraft(workspace, "é" * 129)),
+                ("office", ShelfDraft(workspace, "valid", "x" * 4097)),
+                ("office", ShelfDraft(workspace, "valid", "\ud800")),
+                ("office", ShelfDraft(workspace, " " * (64 * 1024) + "n")),
+                ("office", ShelfDraft(workspace, "\t" * 40000 + "n")),
+            ]:
+                with self.assertRaises(ToolError):
+                    await tools.workspace_create_shelf(profile, request)
+            with self.assertRaises(ToolError):
+                await tools.workspace_create_book(
+                    "office", BookDraft(workspace, "invalid", "valid")
+                )
+            runtime.process.run_input.assert_not_awaited()
+            self.assertEqual(list(runtime.root.iterdir()), [])
+
+    async def test_unknown_rpc_fields_fail_without_spawning_or_echoing_input_values(self):
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run_input = AsyncMock()
+            async with Client(build_server(runtime)) as client:
+                for claim in ["profile_path", "owner_client_id", "admin_key", "operation_id"]:
+                    result = await client.call_tool(
+                        "workspace_create_shelf",
+                        {
+                            "profile": "office",
+                            "request": {
+                                "workspace_id": str(uuid4()),
+                                "name": "valid",
+                                claim: "PRIVATE_BODY",
+                            },
+                        },
+                        raise_on_error=False,
+                    )
+                    self.assertTrue(result.is_error)
+                    text = "".join(item.text for item in result.content if hasattr(item, "text"))
+                    self.assertNotIn("PRIVATE_BODY", text)
+            runtime.process.run_input.assert_not_awaited()
+
+    async def test_child_errors_are_uncertain_without_retry_path_or_body_echo(self):
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run_input = AsyncMock(
+                side_effect=ToolError("PRIVATE_BODY /private/path")
+            )
+            with self.assertRaises(ToolError) as error:
+                await WorkspaceWriteTools(runtime).workspace_create_shelf(
+                    "office", ShelfDraft(str(uuid4()), "valid")
+                )
+            self.assertIn("inspect shelves/books", str(error.exception))
+            self.assertNotIn("PRIVATE_BODY", str(error.exception))
+            runtime.process.run_input.assert_awaited_once()
+
+
+class WorkspacePrivateInputTests(unittest.IsolatedAsyncioTestCase):
+    async def exercise(self, code, *, timeout=2, limit=1024):
+        original = asyncio.create_subprocess_exec
+        processes, files = [], []
+        with tempfile.TemporaryDirectory() as directory:
+            runner = WorkspaceProcess(Path(sys.executable), timeout=timeout, output_limit=limit)
+
+            async def spawn(*arguments, **options):
+                path = Path(arguments[-1])
+                files.append(path)
+                self.assertEqual(json.loads(path.read_text()), {"name": "PRIVATE_BODY"})
+                process = await original(sys.executable, "-c", code, str(path), **options)
+                processes.append(process)
+                return process
+
+            with patch(
+                "ccp_mcp_server.workspace_process.asyncio.create_subprocess_exec", side_effect=spawn
+            ):
+                try:
+                    return await runner.run_input(
+                        Path(directory),
+                        b'{"name":"PRIVATE_BODY"}',
+                        ("content", "--profile", "/profile", "create-shelf"),
+                    )
+                finally:
+                    self.assertEqual(len(processes), 1)
+                    self.assertIsNotNone(processes[0].returncode)
+                    self.assertTrue(files)
+                    self.assertFalse(files[0].exists())
+                    self.assertEqual(runner.slots._value, 8)
+
+    async def test_file_is_closed_readable_by_child_and_removed_on_every_exit(self):
+        value = await self.exercise(
+            "import json,sys; assert json.load(open(sys.argv[1]))['name']=='PRIVATE_BODY'; print('{\"ok\":true}')"
+        )
+        self.assertEqual(value, {"ok": True})
+        for code, timeout, limit in [
+            ("import sys; print('PRIVATE_BODY'); sys.exit(7)", 2, 1024),
+            ("print('PRIVATE_BODY')", 2, 1024),
+            ("import time; time.sleep(30)", 0.05, 1024),
+            ("import time; print('x'*512,flush=True); time.sleep(30)", 2, 128),
+        ]:
+            with self.assertRaises(ToolError) as error:
+                await self.exercise(code, timeout=timeout, limit=limit)
+            self.assertNotIn("PRIVATE_BODY", str(error.exception))
+
+    async def test_no_file_before_slot_and_spawn_or_staging_failure_cleans_up(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkspaceProcess(Path("/private-missing-client"))
+            runner.slots = asyncio.Semaphore(0)
+            with patch("ccp_mcp_server.workspace_process.private_request") as stage:
+                with self.assertRaises(ToolError):
+                    await runner.run_input(root, b"{}", ("content",))
+                stage.assert_not_called()
+            runner.slots = asyncio.Semaphore(8)
+            with self.assertRaises(ToolError) as error:
+                await runner.run_input(root, b"{}", ("content",))
+            self.assertNotIn("private-missing-client", str(error.exception))
+            self.assertEqual(list(root.iterdir()), [])
+            with patch(
+                "ccp_mcp_server.workspace_request.tempfile.mkstemp",
+                side_effect=OSError("/PRIVATE_BODY"),
+            ):
+                with self.assertRaises(ToolError) as error:
+                    await runner.run_input(root, b"{}", ("content",))
+                self.assertNotIn("PRIVATE_BODY", str(error.exception))
+            self.assertEqual(runner.slots._value, 8)
+            for payload in [b"", b"x" * (2 * 1024 * 1024 + 1)]:
+                with self.assertRaises(ToolError):
+                    await runner.run_input(root, payload, ("content",))
+            self.assertEqual(list(root.iterdir()), [])
+
+    async def test_delayed_launch_cancellation_reaps_child_before_deleting_request(self):
+        original = asyncio.create_subprocess_exec
+        created, release = asyncio.Event(), asyncio.Event()
+        processes, files = [], []
+        with tempfile.TemporaryDirectory() as directory:
+            runner = WorkspaceProcess(Path(sys.executable))
+
+            async def spawn(*arguments, **options):
+                files.append(Path(arguments[-1]))
+                processes.append(
+                    await original(sys.executable, "-c", "import time; time.sleep(30)", **options)
+                )
+                created.set()
+                await release.wait()
+                return processes[-1]
+
+            with patch(
+                "ccp_mcp_server.workspace_process.asyncio.create_subprocess_exec", side_effect=spawn
+            ):
+                task = asyncio.create_task(runner.run_input(Path(directory), b"{}", ("content",)))
+                await asyncio.wait_for(created.wait(), 2)
+                task.cancel()
+                self.assertTrue(files[0].exists())
+                release.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertIsNotNone(processes[0].returncode)
+            self.assertFalse(files[0].exists())
+            self.assertEqual(runner.slots._value, 8)
+
+    async def test_eight_slots_bound_staged_files_and_cancelled_waiter_creates_none(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkspaceProcess(Path(sys.executable))
+            all_started, release = asyncio.Event(), asyncio.Event()
+            files = []
+
+            async def spawn(arguments):
+                files.append(Path(arguments[-1]))
+                if len(files) == 8:
+                    all_started.set()
+                await release.wait()
+                return {"ok": True}
+
+            runner._spawn = AsyncMock(side_effect=spawn)
+            tasks = [
+                asyncio.create_task(runner.run_input(root, b"{}", ("content",)))
+                for _number in range(8)
+            ]
+            await asyncio.wait_for(all_started.wait(), 2)
+            extra = asyncio.create_task(runner.run_input(root, b"{}", ("content",)))
+            await asyncio.sleep(0)
+            self.assertEqual(len(list(root.glob("request-*.json"))), 8)
+            extra.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await extra
+            release.set()
+            self.assertEqual(await asyncio.gather(*tasks), [{"ok": True}] * 8)
+            self.assertEqual(list(root.iterdir()), [])
+            self.assertEqual(runner.slots._value, 8)
+
+    async def test_read_cancellation_cleans_only_after_child_reap_and_cleanup_failure_is_static(
+        self,
+    ):
+        original = asyncio.create_subprocess_exec
+        reading = asyncio.Event()
+        processes, files = [], []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runner = WorkspaceProcess(Path(sys.executable))
+            original_read = runner._read
+
+            async def spawn(*arguments, **options):
+                files.append(Path(arguments[-1]))
+                processes.append(
+                    await original(sys.executable, "-c", "import time; time.sleep(30)", **options)
+                )
+                return processes[-1]
+
+            async def read(process, limit):
+                reading.set()
+                return await original_read(process, limit)
+
+            with (
+                patch(
+                    "ccp_mcp_server.workspace_process.asyncio.create_subprocess_exec",
+                    side_effect=spawn,
+                ),
+                patch.object(runner, "_read", side_effect=read),
+            ):
+                task = asyncio.create_task(runner.run_input(root, b"{}", ("content",)))
+                await asyncio.wait_for(reading.wait(), 2)
+                self.assertTrue(files[0].exists())
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertIsNotNone(processes[0].returncode)
+            self.assertFalse(files[0].exists())
+            runner._spawn = AsyncMock(return_value={"ok": True})
+            with patch(
+                "ccp_mcp_server.workspace_request.Path.unlink", side_effect=OSError("PRIVATE_BODY")
+            ):
+                with self.assertRaises(ToolError) as error:
+                    await runner.run_input(root, b"{}", ("content",))
+                self.assertNotIn("PRIVATE_BODY", str(error.exception))
+            leftovers = list(root.glob("request-*.json"))
+            self.assertEqual(len(leftovers), 1)
+            self.assertEqual(leftovers[0].stat().st_mode & 0o777, 0o600)
+            self.assertEqual(runner.slots._value, 8)

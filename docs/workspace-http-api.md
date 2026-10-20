@@ -9,7 +9,8 @@ metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarch
 entries and revisions on both authenticated listeners. The normal client now
 supports [content reads](workspace-content-client.md) and
 [entry mutations](workspace-content-mutations.md). The [workspace MCP bridge](workspace-mcp.md)
-exposes content reads; MCP writes, browser login and the human panel remain subsequent work. A
+exposes content reads and shelf/book creation; MCP entry mutations, browser login
+and the human panel remain subsequent work. A
 [client operation resolution fence](workspace-operation-resolution.md) supports
 body-free outcome recovery without replaying a write under new credentials. Keep this
 draft implementation separate from a production rollout.
@@ -292,7 +293,7 @@ separate-profile recovery. Explicit [caller selection](workspace-selection.md)
 resolves current target metadata, including through the [workspace MCP bridge](workspace-mcp.md).
 Content HTTP and normal-client [content reads](workspace-content-client.md) are
 available, along with [entry mutations](workspace-content-mutations.md).
-MCP content reads are available; MCP writes remain later work. Native
+MCP content reads and shelf/book creation are available; MCP entry mutations remain later work. Native
 commands keep their supported native-mode behavior.
 
 ## Limits and errors

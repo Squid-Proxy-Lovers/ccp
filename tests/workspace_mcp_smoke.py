@@ -15,6 +15,7 @@ from fastmcp.client.transports import StdioTransport
 from mcp_smoke import data
 from workspace_mcp_content_smoke import check as check_content
 from workspace_mcp_fixture import WorkspaceFixture
+from workspace_mcp_write_smoke import check as check_writes
 
 
 class SelectedClient:
@@ -170,6 +171,7 @@ async def permission_changes(fixture, one, two, provisioned):
 
 
 async def check():
+    await check_writes()
     await check_content()
     with WorkspaceFixture() as fixture:
         await stdio_protocol(fixture)

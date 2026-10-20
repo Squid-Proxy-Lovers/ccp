@@ -72,6 +72,10 @@ class WorkspaceRuntime:
             *arguments,
         )
 
+    async def submit(self, alias: str, action: str, payload: bytes) -> Any:
+        arguments = ("content", "--profile", str(self.profile(alias)), action)
+        return await self.process.run_input(self.root, payload, arguments)
+
     async def explicit_target(self, alias: str, workspace: str) -> Any:
         return await self.process.run(
             "selection",

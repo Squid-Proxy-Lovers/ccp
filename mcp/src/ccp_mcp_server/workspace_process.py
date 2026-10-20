@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
 from fastmcp.exceptions import ToolError
+
+from .workspace_request import private_request
 
 
 class OutputLimitError(RuntimeError):
@@ -34,12 +37,27 @@ class WorkspaceProcess:
         self.slots = asyncio.Semaphore(8)
 
     async def run(self, *arguments: str) -> Any:
+        async with self._slot():
+            return await self._spawn(arguments)
+
+    async def run_input(self, directory: Path, payload: bytes, arguments: tuple[str, ...]) -> Any:
+        if not payload or len(payload) > 2 * 1024 * 1024:
+            raise ToolError("workspace request exceeds its input budget")
+        async with self._slot():
+            try:
+                with private_request(directory, payload) as path:
+                    return await self._spawn((*arguments, "--request-file", str(path)))
+            except OSError:
+                raise ToolError("private workspace request staging or cleanup failed") from None
+
+    @contextlib.asynccontextmanager
+    async def _slot(self) -> AsyncIterator[None]:
         try:
             await asyncio.wait_for(self.slots.acquire(), timeout=2)
         except asyncio.TimeoutError:
             raise ToolError("workspace client is busy; retry the request") from None
         try:
-            return await self._spawn(arguments)
+            yield
         finally:
             self.slots.release()
 
