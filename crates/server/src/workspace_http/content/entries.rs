@@ -4,6 +4,57 @@
 
 use super::*;
 
+pub(super) fn resolve(
+    store: &mut AccessStore<'_>,
+    actor: Actor,
+    input: &Input,
+    now: i64,
+) -> Result<Reply, Error> {
+    let body: api::ResolveEntryOperation = decode(&input.body)?;
+    if body.request_hash.len() != 64
+        || !body
+            .request_hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(Error::BadRequest);
+    }
+    let bytes = body
+        .request_hash
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let text = std::str::from_utf8(pair).map_err(|_hash| Error::BadRequest)?;
+            u8::from_str_radix(text, 16).map_err(|_hash| Error::BadRequest)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let target = domain::EntryOperationTarget {
+        operation_id: id(&body.operation_id)?,
+        credential_id: id(&body.credential_id)?,
+        request_hash: bytes.try_into().map_err(|_hash| Error::BadRequest)?,
+    };
+    let workspace = id(&body.workspace_id)?;
+    let result = store
+        .resolve_entry_operation(actor, workspace, &target, now)
+        .map_err(operation)?;
+    let outcome = match result {
+        domain::EntryOperationOutcome::Committed(value) => api::EntryOperationOutcome::Committed {
+            entry_id: value.entry_id.to_string(),
+            revision: value.revision,
+        },
+        domain::EntryOperationOutcome::Cancelled => api::EntryOperationOutcome::Cancelled,
+    };
+    response::success(api::EntryOperationResolution {
+        workspace_id: workspace.to_string(),
+        operation_id: target.operation_id.to_string(),
+        credential_id: target.credential_id.to_string(),
+        request_hash: body.request_hash,
+        outcome,
+    })
+}
+
 pub(super) fn mutate(
     store: &mut AccessStore<'_>,
     actor: Actor,

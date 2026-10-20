@@ -32,8 +32,9 @@ pub use certificate::{
 };
 pub use content::{HierarchyPage, NodeDraft, WorkspaceBook, WorkspaceShelf};
 pub use entry::{
-    ContentError, EntryChange, EntryContent, EntryMutation, EntryPageRequest, EntryReceipt,
-    EntryRevision, EntrySnapshot, EntrySummary, RevisionPage, RevisionPageRequest,
+    ContentError, EntryChange, EntryContent, EntryMutation, EntryOperationOutcome,
+    EntryOperationTarget, EntryPageRequest, EntryReceipt, EntryRevision, EntrySnapshot,
+    EntrySummary, RevisionPage, RevisionPageRequest,
 };
 pub use invitation::{
     IndividualInvitationRequest, InitialInvitationRequest, InvitationStatus, IssuedInvitation,
@@ -63,6 +64,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(include_str!("content.sql"))?;
     transaction.execute_batch(include_str!("entry.sql"))?;
+    transaction.execute_batch(include_str!("operation_resolution.sql"))?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

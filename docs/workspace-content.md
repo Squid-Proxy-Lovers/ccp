@@ -105,7 +105,9 @@ retention is the default and this slice starts no cleanup worker.
 ## Schema and legacy data
 
 Schema 15 adds `ccp_content_shelves` and `ccp_content_books`; schema 16 adds
-entries, immutable versions and operation receipts. These additions leave native
+entries, immutable versions and operation receipts. Schema 17 adds permanent
+body-free [client operation resolution fences](workspace-operation-resolution.md).
+These additions leave native
 session payload, history, archives and journal storage intact. Instance identities,
 CA material, admin keys, grants and client profiles retain their existing formats.
 Native wire protocol 1 and workspace JSON API 1 are unchanged.
@@ -120,8 +122,8 @@ Do not activate workspace mode for legacy content yet: activation blocks native
 access and has no in-place deactivation. See the
 [activation and backup boundary](workspace-runtime-mode.md#explicit-workspace-activation).
 
-Keep a complete protected backup before upgrading. A schema-15 binary refuses
-schema 16; rollback uses the matching whole pre-upgrade backup and its
+Keep a complete protected backup before upgrading. A schema-16 binary refuses
+schema 17; rollback uses the matching whole pre-upgrade backup and its
 producing software. Do not lower the version or discard new tables to force an
 older server to open it. No power-loss, throughput or full-content migration claim
 is made by this storage foundation.

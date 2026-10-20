@@ -196,3 +196,28 @@ pub struct History {
     pub items: Vec<EntryRevision>,
     pub next_cursor: Option<u64>,
 }
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResolveEntryOperation {
+    pub workspace_id: String,
+    pub operation_id: String,
+    pub credential_id: String,
+    pub request_hash: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EntryOperationResolution {
+    pub workspace_id: String,
+    pub operation_id: String,
+    pub credential_id: String,
+    pub request_hash: String,
+    pub outcome: EntryOperationOutcome,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum EntryOperationOutcome {
+    Committed { entry_id: String, revision: u64 },
+    Cancelled,
+}

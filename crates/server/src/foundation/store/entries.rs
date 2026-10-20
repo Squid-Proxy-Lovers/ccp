@@ -11,6 +11,7 @@ use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 mod read;
+mod resolution;
 mod write;
 
 const BODY_BYTES: usize = 256 * 1024;
@@ -33,6 +34,7 @@ impl AccessStore<'_> {
         let hash = request_hash(request)?;
         self.mutate(|tx| {
             content::content_scope(tx, actor, workspace, Action::WriteContext, now)?;
+            resolution::require_not_cancelled(tx, actor, workspace, request, &hash, now)?;
             if let Some(receipt) = replay(tx, actor, workspace, request, &hash)? {
                 return Ok(receipt);
             }

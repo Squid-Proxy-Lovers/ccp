@@ -206,7 +206,7 @@ fn schema15_upgrade_preserves_hierarchy_identity_and_entry_history_survives_reop
         .unwrap()
         .instance_id()
         .unwrap();
-    f.connection.execute_batch("DROP TABLE ccp_content_operations; DROP TABLE ccp_content_versions; DROP TABLE ccp_content_entries; DELETE FROM schema_version WHERE version>15; INSERT OR IGNORE INTO schema_version(version) VALUES(15); INSERT INTO sessions(id,name) VALUES(99,'old'); INSERT INTO message_packs(session_id,name,context) VALUES(99,'entry','retained native');").unwrap();
+    f.connection.execute_batch("DROP TABLE ccp_content_cancellations; DROP TABLE ccp_content_operations; DROP TABLE ccp_content_versions; DROP TABLE ccp_content_entries; DELETE FROM schema_version WHERE version>15; INSERT OR IGNORE INTO schema_version(version) VALUES(15); INSERT INTO sessions(id,name) VALUES(99,'old'); INSERT INTO message_packs(session_id,name,context) VALUES(99,'entry','retained native');").unwrap();
     drop(f.connection);
     crate::init::init_sqlite(&path).unwrap();
     let mut db = Connection::open(&path).unwrap();

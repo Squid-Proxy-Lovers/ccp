@@ -15,6 +15,7 @@ pub enum ContentError {
     InvalidInput,
     NotFound,
     Conflict,
+    OperationCancelled,
     LegacyConversionRequired,
 }
 
@@ -25,6 +26,7 @@ impl std::fmt::Display for ContentError {
             Self::InvalidInput => "invalid content input",
             Self::NotFound => "content is unavailable in this workspace",
             Self::Conflict => "content revision, name or operation conflicts",
+            Self::OperationCancelled => "this client operation has been cancelled",
             Self::LegacyConversionRequired => {
                 "legacy workspace content requires a verified conversion"
             }
@@ -33,6 +35,18 @@ impl std::fmt::Display for ContentError {
 }
 
 impl std::error::Error for ContentError {}
+
+pub struct EntryOperationTarget {
+    pub operation_id: Uuid,
+    pub credential_id: Uuid,
+    pub request_hash: [u8; 32],
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum EntryOperationOutcome {
+    Committed(EntryReceipt),
+    Cancelled,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryContent {

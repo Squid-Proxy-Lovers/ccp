@@ -30,6 +30,7 @@ pub(super) fn handles(path: &str) -> bool {
             | "/api/v1/content/entries/get"
             | "/api/v1/content/entries/list"
             | "/api/v1/content/entries/history"
+            | "/api/v1/content/entries/resolve-operation"
     )
 }
 
@@ -47,6 +48,7 @@ pub(super) fn dispatch(
         "/api/v1/content/entries/get" => entries::get(store, actor, input, now),
         "/api/v1/content/entries/list" => entries::list(store, actor, input, now),
         "/api/v1/content/entries/history" => entries::history(store, actor, input, now),
+        "/api/v1/content/entries/resolve-operation" => entries::resolve(store, actor, input, now),
         _ => nodes::dispatch(store, actor, input, now),
     }
 }
@@ -57,6 +59,7 @@ fn operation(error: anyhow::Error) -> Error {
         Some(ContentError::Forbidden) => Error::Forbidden,
         Some(ContentError::NotFound) => Error::NotFound,
         Some(ContentError::Conflict) => Error::Conflict,
+        Some(ContentError::OperationCancelled) => Error::OperationCancelled,
         Some(ContentError::LegacyConversionRequired) => Error::LegacyContent,
         None => Error::Unavailable,
     }

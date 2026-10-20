@@ -8,7 +8,9 @@ are connected, along with client lifecycle, explicit selections and workspace MC
 metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
 entries and revisions on both authenticated listeners. The normal client now
 supports [content reads](workspace-content-client.md); client mutations, MCP
-content tools, browser login and the human panel remain subsequent work. Keep this
+content tools, browser login and the human panel remain subsequent work. A
+[client operation resolution fence](workspace-operation-resolution.md) supports
+body-free outcome recovery without replaying a write under new credentials. Keep this
 draft implementation separate from a production rollout.
 
 [Documentation index](README.md) · [Instance TLS](instance-tls-identity.md) ·
@@ -310,7 +312,7 @@ closing after a request with both Transfer-Encoding and Content-Length.
 Admin authentication failure is 401 with a Bearer challenge. Client-registry,
 profile, scope and operation refusals use 403 without internal details. Other
 application errors include 400 invalid request, 404 route/target, 405 method,
-409 content conflict/conversion required, 408 body
+409 content conflict/cancelled/conversion required, 408 body
 timeout, 413 size, 415 media, 501 transfer coding and 503 unavailable storage or
 response capacity. Malformed HTTP may receive Hyper's framing rejection without
 the JSON envelope. Responses disable caching; no request bodies, keys, CSRs or

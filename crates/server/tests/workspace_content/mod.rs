@@ -7,6 +7,7 @@ use super::*;
 mod boundaries;
 mod lifecycle;
 mod ownership;
+mod resolution;
 
 struct User {
     client: Client,

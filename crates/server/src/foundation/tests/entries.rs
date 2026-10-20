@@ -91,3 +91,5 @@ fn page(book_id: Uuid, archived: bool) -> EntryPageRequest {
         limit: 100,
     }
 }
+
+mod resolution;

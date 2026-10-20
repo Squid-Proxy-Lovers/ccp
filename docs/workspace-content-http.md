@@ -15,7 +15,9 @@ the human panel remain later work. Native commands keep their native-mode API.
 Use the mandatory-mTLS listener with a registered client's valid certificate and
 key. Its current workspace grant determines access. Do not send an Authorization
 header there. Use the separate HTTPS listener with an admin bearer key for
-administration. Both listeners use the same content routes and store checks.
+administration. Both listeners use the same content routes and store checks. The client
+self-service `entries/resolve-operation` route requires mTLS client identity;
+admin keys receive 403 for that operation.
 An instance-wide admin key can read all workspaces but cannot create or edit
 content, even if its principal also owns the workspace. Use that workspace's
 scoped owner/admin key for those writes. No anonymous or cookie login is added.
@@ -54,6 +56,7 @@ All paths below start with `/api/v1/content/`. Each request includes
 | `entries/get` | `entry_id`; optional `revision` | Entry snapshot |
 | `entries/list` | `book_id`, `archived`; optional `after`, `limit` | Summary `items`, `next_cursor` |
 | `entries/history` | `entry_id`; optional `after`, `limit` | Revision metadata `items`, `next_cursor` |
+| `entries/resolve-operation` | Original `credential_id`, `operation_id`, `request_hash` | Body-free committed receipt or cancellation |
 | `entries/mutate` | `operation_id`, optional `agent`, `change` | `entry_id`, `revision` receipt |
 
 A current or historical snapshot request looks like this. Omit `revision` or use
@@ -124,8 +127,9 @@ the same operation UUID, agent and credential/key. A successful exact retry
 returns the original receipt without a second append. Reusing its operation UUID
 with different input or identity conflicts. Lost write access blocks replay too.
 Renewal or recovery retains client ownership but changes credentials; do not
-assume a new credential can replay an uncertain old operation. Resolve current
-state before making a new operation. No client auto-retry adapter is added here.
+assume a new credential can replay an uncertain old operation. Use the [client operation resolution fence](workspace-operation-resolution.md)
+to confirm the old commit or cancel the original intent before deciding on a
+fresh operation. No normal client mutation/retry adapter is added here.
 
 Shelf/book creation has no operation receipt: a repeated name conflicts instead
 of overwriting an existing node. Inspect the existing node after an uncertain
@@ -169,6 +173,7 @@ request bodies. Common status/code pairs are:
 | 403 | `forbidden` | Current identity has insufficient access |
 | 404 | `not_found` | Missing, foreign or archived full-content target; unknown route |
 | 409 | `content_conflict` | Stale revision, duplicate active name, restore collision or mismatched operation replay |
+| 409 | `operation_cancelled` | Exact original mutation was terminally cancelled |
 | 409 | `content_conversion_required` | Authorized legacy workspace awaits verified conversion |
 | 413 | `request_too_large` | Encoded request exceeds its route's byte limit |
 | 503 | `service_unavailable` | Storage or response-capacity failure |
