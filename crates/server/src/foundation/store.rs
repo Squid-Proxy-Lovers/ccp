@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 mod invitations;
 mod keys;
+mod local;
 mod readmission;
 mod recovery;
 mod redemption;

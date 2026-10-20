@@ -120,3 +120,8 @@ the new HTTP, browser or enrollment flows before those phases are implemented.
 local native tools from an activated workspace data directory. This storage
 boundary does not grant any client/admin role, implement a new transport or
 convert legacy contents. Native mode remains the default.
+
+The [local administration CLI](local-workspace-administration.md) implements the
+exclusive OS/data-directory boundary for first-instance provisioning and scoped
+key recovery. It does not expose these operations through client or admin
+network routes, change ownership or reopen enrollment.

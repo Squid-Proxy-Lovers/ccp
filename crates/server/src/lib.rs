@@ -8,6 +8,7 @@ pub mod foundation;
 pub mod identity;
 pub mod init;
 pub mod journal;
+pub mod local_admin;
 pub mod message;
 pub mod state;
 

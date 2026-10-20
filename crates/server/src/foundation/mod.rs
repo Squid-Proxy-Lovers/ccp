@@ -18,7 +18,10 @@ mod recovery;
 mod store;
 
 pub use access::authorize;
-pub use admin::{AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
+pub use admin::{
+    AdminKeyRequest, AdminKeyScope, BootstrappedInstance, IssuedAdminKey, LocalKeyReset,
+    LocalKeyTarget,
+};
 pub use certificate::{
     EnrollmentReceipt, IssuingAuthority, RedemptionRequest, RenewalReceipt, RenewalRequest,
 };

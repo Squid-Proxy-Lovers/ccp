@@ -129,3 +129,25 @@ pub(super) fn live_admin_key(
     }
     Ok(Some((principal, workspace)))
 }
+
+/// Initial local setup secrets. No implicit Debug/Serialize/Clone disclosure.
+pub struct BootstrappedInstance {
+    pub instance_id: Uuid,
+    pub workspace_id: Uuid,
+    pub instance_key: IssuedAdminKey,
+    pub owner_key: IssuedAdminKey,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum LocalKeyTarget {
+    InstancePrincipal(Uuid),
+    WorkspaceOwner(Uuid),
+}
+
+/// A replacement returned once to an explicitly authorized host operator.
+pub struct LocalKeyReset {
+    pub key: IssuedAdminKey,
+    pub scope: AdminKeyScope,
+    pub expires_at: Option<i64>,
+    pub revoked_keys: usize,
+}

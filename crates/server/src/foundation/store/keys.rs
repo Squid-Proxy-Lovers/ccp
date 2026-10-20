@@ -111,7 +111,7 @@ fn key_action(scope: AdminKeyScope) -> Action {
     }
 }
 
-fn insert_key(
+pub(super) fn insert_key(
     connection: &Connection,
     issued: &IssuedAdminKey,
     workspace: Option<Uuid>,

@@ -4,7 +4,7 @@ The unreleased workspace server needs a different authorization and persistence
 path from the legacy native runtime. A data directory must not be served through
 both at once. Mode leases now cover current native startup, session discovery,
 health and token issuance, and provide an exclusive boundary for future
-workspace startup and local provisioning/reset. No workspace listener or
+workspace startup and [local provisioning/reset](local-workspace-administration.md). No workspace listener or
 operator activation command is exposed by this batch. See the
 [documentation index](README.md) for supported interfaces.
 
@@ -14,7 +14,9 @@ Native mode remains the default. Native runtime and local tools acquire shared
 leases before opening the data database or journal. Matching protected directories
 are refused by explicit startup/tool paths; legacy directory scans omit protected
 SQLite fallbacks without reading their sessions. Normal native CLI, enrollment,
-MCP and persistence formats remain supported.
+MCP and persistence formats remain supported. Name-based scans may initialize
+mode metadata in candidate native directories; unexpected sibling errors abort
+the scan. Explicit data-directory selection avoids discovery fallback.
 
 A bootstrap keeps its lease. The runtime passes a clone to the journal handle
 and writer thread, and state/handlers retain the journal handle. Background
@@ -52,7 +54,7 @@ backup with its producing binary after every server process has stopped.
 
 ## Local maintenance and lock lifetime
 
-`DirectoryLease::maintenance` obtains exclusive access for future local
+`DirectoryLease::maintenance` obtains exclusive access for local
 provisioning/reset operations. It preserves workspace activation and does not
 grant an administrative role, clear grants or reset enrollment. These methods
 must never be exposed as unauthenticated remote operations.
@@ -98,5 +100,5 @@ restart, durable markers, missing ledger and interrupted second commit, audit
 rollback, schema-11 identity preservation, aliases, contention races and journal
 lifetime. Child-process tests exercise actual native runtime, initializer, health,
 token and discovery entry points against protected directories with unreadable
-native-format sentinels. Workspace HTTP, local reset and new content flows remain
-unverified until implemented.
+native-format sentinels. Workspace HTTP and new content flows remain
+unverified until implemented. Local setup/reset has separate command tests.

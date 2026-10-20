@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use std::io::{self, Write};
+use std::path::PathBuf;
+use uuid::Uuid;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -10,7 +12,11 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server <session-name>
   server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
-  server health <session>"#;
+  server health <session>
+  server workspace-init --data-dir <DIR> --operator <NAME> --workspace <NAME>
+  server admin-info --data-dir <DIR>
+  server reset-instance-key --data-dir <DIR> --principal <UUID> [--ttl-seconds <SECONDS>]
+  server reset-owner-key --data-dir <DIR> --workspace <UUID> [--ttl-seconds <SECONDS>]"#;
 
 #[derive(Parser)]
 #[command(name = "server", args_conflicts_with_subcommands = true)]
@@ -25,6 +31,10 @@ struct Cli {
 enum Command {
     IssueToken(IssueTokenArgs),
     Health(HealthArgs),
+    WorkspaceInit(WorkspaceInitArgs),
+    AdminInfo(LocalDataArgs),
+    ResetInstanceKey(ResetInstanceArgs),
+    ResetOwnerKey(ResetOwnerArgs),
 }
 
 #[derive(Args)]
@@ -41,6 +51,42 @@ struct IssueTokenArgs {
     access_level: AccessLevel,
     #[arg(long, value_name = "seconds")]
     ttl: Option<u64>,
+}
+
+#[derive(Args)]
+struct LocalDataArgs {
+    #[arg(long, value_name = "DIR")]
+    data_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct WorkspaceInitArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "NAME")]
+    operator: String,
+    #[arg(long, value_name = "NAME")]
+    workspace: String,
+}
+
+#[derive(Args)]
+struct ResetInstanceArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "UUID")]
+    principal: Uuid,
+    #[arg(long, value_name = "SECONDS")]
+    ttl_seconds: Option<u64>,
+}
+
+#[derive(Args)]
+struct ResetOwnerArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "UUID")]
+    workspace: Uuid,
+    #[arg(long, value_name = "SECONDS")]
+    ttl_seconds: Option<u64>,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -66,22 +112,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = parse_cli();
 
     if let Some(command) = cli.command {
-        match command {
-            Command::IssueToken(args) => {
-                let token = server::init::issue_enrollment_token(
-                    &args.session,
-                    args.access_level.as_str(),
-                    args.ttl,
-                )?;
-                println!("{}", serde_json::to_string_pretty(&token)?);
-                return Ok(());
-            }
-            Command::Health(args) => {
-                let health = server::init::check_server_health(&args.session)?;
-                println!("{}", serde_json::to_string_pretty(&health)?);
-                return Ok(());
-            }
-        }
+        return execute_command(command);
     }
 
     server::run_server(
@@ -90,6 +121,62 @@ async fn main() -> anyhow::Result<()> {
             .context("clap should require a session name when no subcommand is present")?,
     )
     .await
+}
+
+fn execute_command(command: Command) -> anyhow::Result<()> {
+    match command {
+        Command::IssueToken(args) => print_json(&server::init::issue_enrollment_token(
+            &args.session,
+            args.access_level.as_str(),
+            args.ttl,
+        )?),
+        Command::Health(args) => print_json(&server::init::check_server_health(&args.session)?),
+        Command::WorkspaceInit(args) => {
+            let result = server::local_admin::bootstrap(
+                &args.data.data_dir,
+                &args.operator,
+                &args.workspace,
+            )?;
+            print_json(&serde_json::json!({
+                "instance_id": result.instance_id.to_string(),
+                "workspace_id": result.workspace_id.to_string(),
+                "principal_id": result.instance_key.principal_id.to_string(),
+                "instance_admin_key": {"id": result.instance_key.id.to_string(), "secret": result.instance_key.secret()},
+                "workspace_owner_key": {"id": result.owner_key.id.to_string(), "secret": result.owner_key.secret()}
+            }))
+        }
+        Command::AdminInfo(args) => print_json(&server::local_admin::info(&args.data_dir)?),
+        Command::ResetInstanceKey(args) => print_reset(server::local_admin::reset_key(
+            &args.data.data_dir,
+            server::foundation::LocalKeyTarget::InstancePrincipal(args.principal),
+            args.ttl_seconds,
+        )?),
+        Command::ResetOwnerKey(args) => print_reset(server::local_admin::reset_key(
+            &args.data.data_dir,
+            server::foundation::LocalKeyTarget::WorkspaceOwner(args.workspace),
+            args.ttl_seconds,
+        )?),
+    }
+}
+
+fn print_reset(result: server::foundation::LocalKeyReset) -> anyhow::Result<()> {
+    let workspace = match result.scope {
+        server::foundation::AdminKeyScope::Instance => None,
+        server::foundation::AdminKeyScope::Workspace(id) => Some(id.to_string()),
+    };
+    print_json(&serde_json::json!({
+        "principal_id": result.key.principal_id.to_string(), "workspace_id": workspace,
+        "key_id": result.key.id.to_string(), "secret": result.key.secret(),
+        "expires_at": result.expires_at, "revoked_keys": result.revoked_keys
+    }))
+}
+
+fn print_json(value: &impl serde::Serialize) -> anyhow::Result<()> {
+    let serialized = serde_json::to_string_pretty(value)?;
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{serialized}")?;
+    stdout.flush()?;
+    Ok(())
 }
 
 fn parse_cli() -> Cli {

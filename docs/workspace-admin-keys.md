@@ -54,9 +54,9 @@ Authentication does not create an authority lease or a browser session.
 Key creation/revocation and their audit records commit atomically. Actions made
 with a key record both its principal and key ID, including self-revocation.
 Local initial bootstrap commits the principal, global role, first key verifier
-and audit together; it cannot be repeated once a global record exists. An
-operator-facing bootstrap/reset command still needs the correct OS/data-directory
-boundary and exclusive-operation design before exposure. No remote reset is
+and audit together; it cannot be repeated once a global record exists. The
+[local administration CLI](local-workspace-administration.md) now provides the
+exclusive OS/data-directory boundary for setup and reset. No remote reset is
 introduced by these primitives.
 
 ## Schema and verification
@@ -72,3 +72,13 @@ expiry/revocation, role loss/global demotion, disabled principals, archive
 boundaries, secret/verifier separation, audit rollback, schema-5 upgrade and
 revocation across database connections. HTTP, browser-session, fragment-login
 and certificate flows are not established by those internal tests.
+
+## Local setup and key recovery
+
+The [local administration commands](local-workspace-administration.md) now
+provision the first instance administrator and first workspace owner atomically
+under exclusive maintenance. The same person receives two independently random
+keys with separate scopes. Local reset replaces only an existing enabled
+principal's instance keys or a workspace's current owner's scoped keys. It does
+not let a remote global key issue workspace-owner credentials, change ownership
+or re-enable a disabled principal.

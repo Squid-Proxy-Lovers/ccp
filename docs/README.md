@@ -1,7 +1,8 @@
 # CCP documentation
 
 Start with the [quick start](../README.md#quick-start). Choose a guide by the task
-you need to complete. These guides describe the current `main` branch.
+you need to complete. Guides marked unreleased cover the workspace redesign;
+the other guides describe the supported native interface.
 
 ## Use CCP
 
@@ -20,6 +21,7 @@ you need to complete. These guides describe the current `main` branch.
 | --- | --- |
 | Deploy, issue tokens, inspect health, and manage persistence | [Server guide](server.md) |
 | Install or pin a main nightly | [Nightly builds](nightly-builds.md) |
+| Set up unreleased workspace administration or replace lost admin keys locally | [Local administration](local-workspace-administration.md) |
 | Report a vulnerability or read bounty terms | [Security policy](../SECURITY.md) |
 | Find disclosure credits | [Hall of Fame](../HALL-OF-FAME.md) |
 
