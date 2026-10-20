@@ -2,7 +2,8 @@
 
 This unreleased internal batch adds admin-key issuance, authentication and
 revocation to the workspace access foundation. It does not expose an HTTP
-listener, browser login, session cookie or operator CLI yet. Those adapters must
+listener, browser login or session cookie yet. Local setup/reset commands exist;
+network adapters must
 preserve the checks here before they can serve users.
 
 ## Key scope and current authority
@@ -17,8 +18,11 @@ Each protected operation checks current key validity, scope,
 principal enablement, role and workspace state inside its own transaction.
 
 Only global administrators manage instance keys, and recipients must currently
-be global administrators. Only a workspace's owner manages that workspace's
-keys; recipients must already be its owner or an appointed workspace admin.
+be global administrators. Routine workspace-key management belongs to that
+workspace's owner; recipients must already be its owner or an appointed admin.
+The [initial-owner provisioning operation](initial-workspace-owners.md) can
+deliver one owner key atomically with global-authorized creation or missing
+first-owner appointment. It adds no ongoing global workspace-key power.
 Issuance cannot appoint someone or add a role. A workspace admin cannot issue
 keys, including another key for themselves. Personal and deliberately shared
 keys use the same authority checks; a shared admin principal must hold an
@@ -79,6 +83,6 @@ The [local administration commands](local-workspace-administration.md) now
 provision the first instance administrator and first workspace owner atomically
 under exclusive maintenance. The same person receives two independently random
 keys with separate scopes. Local reset replaces only an existing enabled
-principal's instance keys or a workspace's current owner's scoped keys. It does
-not let a remote global key issue workspace-owner credentials, change ownership
-or re-enable a disabled principal.
+principal's instance keys or a workspace's current owner's scoped keys. It adds no routine global-key authority to issue workspace-owner credentials,
+change ownership or re-enable a disabled principal. First-key delivery during
+[initial provisioning](initial-workspace-owners.md) is a separate, one-time boundary.

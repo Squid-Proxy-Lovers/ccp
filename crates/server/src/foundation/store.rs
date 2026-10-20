@@ -10,6 +10,7 @@ mod invitations;
 mod keys;
 mod local;
 mod peer;
+mod provisioning;
 mod readmission;
 mod recovery;
 mod redemption;

@@ -14,6 +14,7 @@ mod admin;
 mod certificate;
 mod invitation;
 mod model;
+mod provisioning;
 mod recovery;
 mod store;
 
@@ -33,6 +34,7 @@ pub use invitation::{
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, WorkspaceSummary,
 };
+pub use provisioning::{InitialOwner, OwnerProvisioning, ProvisionedWorkspace};
 pub use recovery::{
     IssuedRecoveryInvitation, RecoveryInvitationRequest, RecoveryInvitationStatus, RecoveryReceipt,
     RecoveryRedemptionRequest, RecoveryScope,
