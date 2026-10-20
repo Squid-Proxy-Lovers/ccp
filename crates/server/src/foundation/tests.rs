@@ -1298,3 +1298,5 @@ mod management;
 
 mod content;
 mod team;
+
+mod entries;

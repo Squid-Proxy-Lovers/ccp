@@ -507,7 +507,7 @@ fn schema14_upgrade_preserves_security_native_payload_and_hierarchy_survives_reo
     let version: u32 = db
         .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 15);
+    assert_eq!(version, crate::init::SCHEMA_VERSION);
     drop(db);
     fs::remove_file(path).unwrap();
 }

@@ -130,23 +130,23 @@ impl AccessStore<'_> {
     }
 }
 
-fn content_scope(
+pub(super) fn content_scope(
     db: &Connection,
     actor: Actor,
     workspace: Uuid,
     action: Action,
     now: i64,
 ) -> anyhow::Result<()> {
-    authorize(db, actor, action, Some(workspace), now)?;
+    if now < 0 || !permitted(db, actor, action, Some(workspace), now)? {
+        return Err(crate::foundation::ContentError::Forbidden.into());
+    }
     let legacy: bool = db.query_row(
         "SELECT legacy_session_id IS NOT NULL FROM ccp_workspaces WHERE id=?1",
         [workspace.to_string()],
         |r| r.get(0),
     )?;
     if legacy {
-        bail!(
-            "legacy workspace content requires a verified conversion before this interface is available"
-        );
+        return Err(crate::foundation::ContentError::LegacyConversionRequired.into());
     }
     Ok(())
 }
@@ -196,7 +196,7 @@ fn shelf(db: &Connection, workspace: Uuid, id: Uuid) -> anyhow::Result<Workspace
     shelf_value(workspace, row)
 }
 
-fn book(db: &Connection, workspace: Uuid, id: Uuid) -> anyhow::Result<WorkspaceBook> {
-    let row=db.query_row("SELECT b.id,b.name,b.description,b.created_at,b.shelf_id FROM ccp_content_books b JOIN ccp_content_shelves s ON s.id=b.shelf_id AND s.workspace_id=b.workspace_id WHERE b.workspace_id=?1 AND b.id=?2 AND s.archived=0",params![workspace.to_string(),id.to_string()],|r|Ok((shelf_row(r)?,r.get::<_,String>(4)?))).optional()?.context("book is unavailable in this workspace")?;
+pub(super) fn book(db: &Connection, workspace: Uuid, id: Uuid) -> anyhow::Result<WorkspaceBook> {
+    let row=db.query_row("SELECT b.id,b.name,b.description,b.created_at,b.shelf_id FROM ccp_content_books b JOIN ccp_content_shelves s ON s.id=b.shelf_id AND s.workspace_id=b.workspace_id WHERE b.workspace_id=?1 AND b.id=?2 AND s.archived=0",params![workspace.to_string(),id.to_string()],|r|Ok((shelf_row(r)?,r.get::<_,String>(4)?))).optional()?.ok_or(crate::foundation::ContentError::NotFound)?;
     book_value(workspace, parse_id(row.1)?, row.0)
 }

@@ -7,8 +7,9 @@ redemption adds schema 8, credential renewal adds schema 9, targeted recovery
 adds schema 10, explicit targeted readmission adds schema 11 and data-directory
 mode isolation adds schema 12; the public instance-TLS pin adds schema 13;
 immutable TLS renewal generations add schema 14. Schema 15 adds the separate
-[workspace shelf/book storage foundation](workspace-content.md); verified legacy
-content conversion remains subsequent work.
+[workspace shelf/book storage foundation](workspace-content.md); schema 16 adds
+client-owned entries, immutable versions and recoverable entry archives there.
+Verified legacy content conversion remains subsequent work.
 See [instance TLS setup](instance-tls-identity.md) for its separate private
 bundle. The existing native mTLS client protocol and CLI remain in service in
 native mode. The separate [workspace HTTPS API](workspace-http-api.md)
