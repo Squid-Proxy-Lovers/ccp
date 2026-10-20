@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 pub mod content;
+pub mod guidance;
 
 pub const API_VERSION: u32 = 1;
 

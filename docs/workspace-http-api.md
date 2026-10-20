@@ -7,7 +7,9 @@ Initial [client trust/profiles, enrollment and discovery](workspace-client.md)
 are connected, along with client lifecycle, explicit selections and workspace MCP
 metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
 entries, revisions and shelf state/archive summaries on both authenticated
-listeners, plus shelf transitions on admin HTTPS. The normal client now
+listeners, plus shelf transitions on admin HTTPS.
+[Guidance reads and scoped live saves](#read-and-save-guidance) are also available.
+The normal client now
 supports [content reads](workspace-content-client.md) and
 [entry mutations](workspace-content-mutations.md). The [workspace MCP bridge](workspace-mcp.md)
 exposes content reads, shelf/book creation and guarded entry mutations. Browser login
@@ -70,6 +72,8 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
 | HTTPS | `POST /api/v1/admin/workspaces/create` or `/first-owner` | Current instance key; atomic workspace/first-owner key provisioning |
 | HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |
+| HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
+| HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |
 | HTTPS | `POST /api/v1/admin/content/shelves/transition` | Current scoped workspace owner/admin key; exact revision-bound shelf archive/restore |
 | HTTPS or client mTLS | `POST /api/v1/content/shelves/state` or `/archived` | Current workspace read authority; body-free state or safe paged archived-shelf summaries |
 | HTTPS | `POST /api/v1/admin/workspaces/archive` or `/reactivate` | Current workspace owner or instance key; recoverable lifecycle change |
@@ -298,6 +302,83 @@ Content HTTP and normal-client [content reads](workspace-content-client.md) are
 available, along with [entry mutations](workspace-content-mutations.md).
 MCP content reads, shelf/book creation and guarded entry mutations are available. Native
 commands keep their supported native-mode behavior.
+
+## Read and save guidance
+
+Use the trusted CA and protected admin header from [the request example](#try-a-protected-request).
+A registered client can read guidance over mTLS with its current certificate;
+publishing uses an admin Bearer key over HTTPS. Global keys publish the global
+board. Workspace owner/admin keys publish their own workspace board; a global
+key's read-all authority does not grant workspace publishing.
+
+First POST to `/api/v1/guidance/get`. For global guidance alone, send `{}` or
+`{"workspace_id":null}`. To include one authorized workspace, send:
+
+```json
+{"workspace_id":"11111111-1111-4111-8111-111111111111"}
+```
+
+The API 1 success envelope contains `data.precedence: "global_first"`, a `global`
+board and an optional `workspace` board. Each board has `scope`, `revision`,
+`text` and `publisher`. Scope is `{"kind":"global"}` or
+`{"kind":"workspace","workspace_id":"..."}`. Publisher records `actor_kind`
+(`key` or `admin`), `actor_id`, `principal_id` and `recorded_at` in Unix seconds.
+An unpublished board has revision 0, empty text and null publisher. Global and
+workspace sources share one authorized database snapshot. Board prose cannot
+change their source labels or grant permissions; host instructions and actual
+server permissions remain authoritative.
+
+To save, retain a fresh operation UUID and POST the complete request to
+`/api/v1/admin/guidance/save` with the appropriate scoped key. Read the current
+board first and use its revision; 0 creates its first publication. This example
+saves workspace guidance:
+
+```json
+{
+  "scope":{"kind":"workspace","workspace_id":"11111111-1111-4111-8111-111111111111"},
+  "operation_id":"22222222-2222-4222-8222-222222222222",
+  "expected_revision":0,
+  "text":"Keep workspace notes concise."
+}
+```
+
+For a global save, set `scope` to `{"kind":"global"}` and use a global key.
+Requests reject unknown fields, including claimed publisher identities and
+workspace fields inside global scope. Text preserves exact controls and is
+limited to 8192 UTF-8 bytes. The existing 64 KiB encoded request and 1 MiB
+response limits apply; two fully escaped boards fit the response budget.
+
+A successful new operation immediately makes the new revision live. Identical
+text with a new operation records another save. Empty text explicitly clears
+the board and retains a positive revision and publisher. The response is a
+body-free historical receipt:
+
+```json
+{
+  "api_version":1,
+  "data":{
+    "scope":{"kind":"workspace","workspace_id":"11111111-1111-4111-8111-111111111111"},
+    "operation_id":"22222222-2222-4222-8222-222222222222",
+    "revision":1
+  }
+}
+```
+
+If the response is lost, retry the exact request with its original key and
+operation UUID while current publishing authority remains valid. This returns
+the original receipt without reapplying. A changed request or publisher under
+the same board and operation conflicts; board operation namespaces are separate.
+A stale revision returns 409 `content_conflict`; reread and decide how to resolve
+it before saving with a fresh operation. Failed saves leave live guidance intact.
+Archived workspaces reject workspace saves and retries while preserving reads;
+global updates remain readable alongside that preserved workspace guidance.
+
+Current grant revocation and client disable block unauthorized reads. Storage
+failures, including a missing published revision, return sanitized 503 without
+substituting an empty board. This explicit read API adds no guidance freshness
+gate to other operations. CLI/MCP guidance commands, automatic initial/changed
+guidance with tool responses, stale warnings and desktop editors remain later
+work. See the [storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
 
 ## Limits and errors
 

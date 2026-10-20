@@ -159,3 +159,10 @@ Migration failure also rolls back all new guidance tables and retains the old
 schema record and workspace data before a successful retry.
 These test the internal store; automatic guidance delivery and editors remain
 subsequent work.
+
+Eight guidance HTTP cases exercise actual HTTPS/mTLS reads and scoped saves,
+source/publisher labels, scoped admin demotion, cross-workspace privacy, current
+revocation/disable, archived-workspace behavior, historical retries and conflicts,
+empty clearing, malformed nested scope/identity claims, listener separation,
+8192-byte UTF-8/control bounds and unchanged encoded budgets. Injected audit and
+missing-published-version faults verify atomic rollback and sanitized failures.

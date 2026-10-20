@@ -182,6 +182,7 @@ permissions remain authoritative; board text cannot grant permissions.
 Schema 20 adds version, live-head and retained body-free operation tables.
 Existing native content is preserved and is never promoted into guidance.
 A schema-19 server refuses schema 20; rollback requires the complete matching
-pre-upgrade backup and producing software. These are internal storage APIs only.
-HTTP, CLI, MCP, desktop editors, automatic initial/changed delivery and explicit
-stale/unavailable warnings remain subsequent work.
+pre-upgrade backup and producing software.
+[Authenticated guidance reads and scoped saves](workspace-http-api.md#read-and-save-guidance)
+now expose these APIs over TLS. CLI, MCP, desktop editors, automatic initial/changed
+delivery and explicit stale/unavailable warnings remain subsequent work.

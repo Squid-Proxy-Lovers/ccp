@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    State, Surface, content, invitations, management,
+    State, Surface, content, guidance, invitations, management,
     request::Input,
     response::{self, Error, Reply},
     session::Context,
@@ -67,10 +67,14 @@ fn https(
         && !management::handles(&input.path)
         && !team::handles(&input.path)
         && !content::handles(&input.path)
+        && !guidance::handles(&input.path)
     {
         return Err(Error::NotFound);
     }
     let actor = admin(store, input.authorization.as_deref(), now)?;
+    if guidance::handles(&input.path) {
+        return guidance::dispatch(store, actor, &input, now);
+    }
     if content::handles(&input.path) {
         return content::dispatch(store, actor, &input, now);
     }
@@ -153,6 +157,7 @@ fn client(
         input.path.as_str(),
         "/api/v1/workspaces" | "/api/v1/admissions" | "/api/v1/credentials/renew"
     ) && !content::client_handles(&input.path)
+        && input.path != guidance::GET
     {
         return Err(Error::NotFound);
     }
@@ -190,6 +195,9 @@ fn client(
     let actor = store
         .authenticate_peer(&peer, now)
         .map_err(|error| response::operation(error, Error::Forbidden))?;
+    if input.path == guidance::GET {
+        return guidance::dispatch(store, actor, &input, now);
+    }
     if content::client_handles(&input.path) {
         return content::dispatch(store, actor, &input, now);
     }

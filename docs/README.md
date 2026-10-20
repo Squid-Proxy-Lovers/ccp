@@ -43,6 +43,7 @@ the other guides describe the supported native interface.
 | Build the client crate | [Client crate](../crates/client/README.md) |
 | Build the server crate | [Server crate](../crates/server/README.md) |
 | Work with wire types and compatibility | [Protocol crate](../crates/protocol/README.md) |
+| Read or edit live guidance over TLS | [Guidance HTTP API](workspace-http-api.md#read-and-save-guidance) |
 | Understand the unreleased workspace migration, permissions and guidance foundation | [Workspace access foundation](workspace-foundation.md) |
 | Create shelves/books and read workspace context and shelf lifecycle metadata through the normal client | [Workspace content client](workspace-content-client.md) |
 | Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |
