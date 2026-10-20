@@ -3,7 +3,7 @@
 This unreleased API connects the reviewed workspace identity, key and certificate
 foundations to direct TLS listeners. It supports invitations, enrollment,
 discovery, existing-client admission, credential renewal and targeted recovery.
-Content endpoints, owner-team/key management, browser login, client profiles,
+Content endpoints, browser login, client profiles,
 MCP integration and the human panel remain subsequent work. Keep this draft
 implementation separate from a production rollout.
 
@@ -64,6 +64,9 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `POST /api/v1/admin/workspaces/archive` or `/reactivate` | Current workspace owner or instance key; recoverable lifecycle change |
 | HTTPS | `POST /api/v1/admin/grants/revoke` | Current owner/admin key for the grant's workspace; terminal membership revocation |
 | HTTPS | `POST /api/v1/admin/clients/disable` | Current instance key; disables a client across the instance |
+| HTTPS | `POST /api/v1/admin/team/appoint`, `/revoke` or `/list` | Current owner key; scoped admin appointment/revocation or roster metadata |
+| HTTPS | `POST /api/v1/admin/keys/issue`, `/revoke` or `/list` | Current owner key; scoped key management or metadata |
+| HTTPS | `POST /api/v1/admin/workspaces/transfer-owner` | Current owner key; transfer to an eligible provisioned scoped admin |
 | HTTPS | `POST /api/v1/admin/invitations/initial` | Current workspace owner/admin key; bounded initial group link |
 | HTTPS | `POST /api/v1/admin/invitations/individual` | Current workspace owner/admin key; individual link under existing window/expiry policy |
 | HTTPS | `POST /api/v1/admin/enrollment/close` | Scoped security authority; terminal initial-window closure |
@@ -180,6 +183,13 @@ workspace access. Global client disable instead blocks the client's identity
 across the instance, including renewal and recovery, on the next protected
 request over an existing connection. It retains stored grants and history.
 There is no enable-client endpoint in this batch.
+
+Owner-only team/key administration and transfer are documented in the
+[owner administration guide](workspace-owner-administration.md). Global read does
+not expose its roster/key inventory. Transfer requires an active workspace and
+an enabled scoped admin with a live key record; former-owner workspace keys are
+terminally revoked. Archived workspaces retain security key rotation/revocation
+for existing roles, while team expansion and transfer stop.
 
 ## Manage invitations and recover a client
 

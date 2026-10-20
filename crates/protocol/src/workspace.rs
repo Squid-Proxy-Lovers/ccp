@@ -243,3 +243,78 @@ pub struct GrantTarget {
 pub struct ClientTarget {
     pub client_id: String,
 }
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminAppointment {
+    pub workspace_id: String,
+    pub principal: InitialOwner,
+    pub key_expires_at: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminTarget {
+    pub workspace_id: String,
+    pub principal_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OwnerTransfer {
+    pub workspace_id: String,
+    pub new_owner_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceKeyRequest {
+    pub workspace_id: String,
+    pub principal_id: String,
+    pub name: String,
+    pub expires_at: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceKeyTarget {
+    pub workspace_id: String,
+    pub key_id: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct AdminKeySecret {
+    pub key_id: String,
+    pub principal_id: String,
+    pub secret: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorkspaceAdmin {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub is_owner: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorkspaceAdmins {
+    pub admins: Vec<WorkspaceAdmin>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorkspaceAdminKey {
+    pub id: String,
+    pub principal_id: String,
+    pub name: String,
+    pub expires_at: Option<i64>,
+    pub revoked_at: Option<i64>,
+    pub role_active: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct WorkspaceAdminKeys {
+    pub keys: Vec<WorkspaceAdminKey>,
+    pub next_cursor: Option<String>,
+}

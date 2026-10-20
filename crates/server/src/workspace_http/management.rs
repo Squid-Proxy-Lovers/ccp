@@ -105,13 +105,15 @@ fn provisioning(
     key_expires_at: Option<i64>,
 ) -> Result<OwnerProvisioning, Error> {
     Ok(OwnerProvisioning {
-        owner: match owner {
-            api::InitialOwner::Existing { principal_id } => {
-                InitialOwner::Existing(id(&principal_id)?)
-            }
-            api::InitialOwner::NewPrincipal { name } => InitialOwner::NewPrincipal(name),
-        },
+        owner: principal(owner)?,
         key_expires_at,
+    })
+}
+
+pub(super) fn principal(owner: api::InitialOwner) -> Result<InitialOwner, Error> {
+    Ok(match owner {
+        api::InitialOwner::Existing { principal_id } => InitialOwner::Existing(id(&principal_id)?),
+        api::InitialOwner::NewPrincipal { name } => InitialOwner::NewPrincipal(name),
     })
 }
 

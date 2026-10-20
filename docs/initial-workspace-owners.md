@@ -61,7 +61,8 @@ Once the first appointment commits, it cannot be repeated to retrieve a lost
 secret, issue another key or transfer ownership. A global key alone cannot
 perform routine workspace-key issuance or reset. An authorized workspace owner
 uses the normal owner-only key operations to manage their team and credentials.
-Owner-initiated ownership transfer remains separate implementation work.
+[Owner-initiated transfer](workspace-owner-administration.md#transfer-ownership)
+uses a separate authenticated operation after provisioning the recipient.
 
 If delivery is lost, inspect the current IDs through the authenticated workspace
 listing/inspection API or [local administration](local-workspace-administration.md). A working owner key

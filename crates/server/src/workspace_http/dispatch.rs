@@ -7,6 +7,7 @@ use super::{
     request::Input,
     response::{self, Error, Reply},
     session::Context,
+    team,
 };
 use crate::foundation::{
     AccessStore, Actor, DataRole, RecoveryRedemptionRequest, RedemptionRequest, RenewalRequest,
@@ -64,6 +65,7 @@ fn https(
     if input.path != "/api/v1/admin/workspaces"
         && !invitations::handles(&input.path)
         && !management::handles(&input.path)
+        && !team::handles(&input.path)
     {
         return Err(Error::NotFound);
     }
@@ -73,6 +75,9 @@ fn https(
     }
     if management::handles(&input.path) {
         return management::dispatch(store, actor, &input, now);
+    }
+    if team::handles(&input.path) {
+        return team::dispatch(store, actor, &input, now);
     }
     if input.method != Method::GET {
         return Err(Error::Method);

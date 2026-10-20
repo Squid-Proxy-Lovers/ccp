@@ -17,6 +17,7 @@ mod readmission;
 mod recovery;
 mod redemption;
 mod renewal;
+mod team;
 
 use super::access::{authenticated_client, permitted};
 use super::{
@@ -182,10 +183,19 @@ impl<'a> AccessStore<'a> {
                 Some(workspace),
                 now,
             )?;
+            let owner: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ccp_workspaces WHERE id=?1 AND owner_admin_id=?2)",
+                params![workspace.to_string(), admin.to_string()],
+                |r| r.get(0),
+            )?;
+            if owner {
+                bail!("ownership must be transferred, not revoked as an admin");
+            }
             require_changed(transaction.execute(
                 "DELETE FROM ccp_workspace_admins WHERE workspace_id = ?1 AND admin_id = ?2",
                 params![workspace.to_string(), admin.to_string()],
             )?)?;
+            team::revoke_principal_keys(transaction, actor, workspace, admin, now)?;
             audit(
                 transaction,
                 actor,

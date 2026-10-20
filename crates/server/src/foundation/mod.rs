@@ -17,6 +17,7 @@ mod model;
 mod provisioning;
 mod recovery;
 mod store;
+mod team;
 
 pub use access::authorize;
 pub use admin::{
@@ -41,6 +42,9 @@ pub use recovery::{
     RecoveryRedemptionRequest, RecoveryScope,
 };
 pub use store::AccessStore;
+pub use team::{
+    AdminAppointment, AdminKeyPage, AdminKeySummary, AdminPage, AdminSummary, PrincipalSelection,
+};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};

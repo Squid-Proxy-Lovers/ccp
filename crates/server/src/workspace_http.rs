@@ -10,6 +10,7 @@ mod management;
 mod request;
 mod response;
 mod session;
+mod team;
 
 use std::future::Future;
 use std::net::SocketAddr;

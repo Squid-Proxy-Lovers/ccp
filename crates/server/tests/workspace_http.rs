@@ -2901,4 +2901,519 @@ mod tests {
         assert_eq!(management_counts(&f), before);
         f.finish().await;
     }
+    async fn team_member(f: &Fixture, name: &str) -> Value {
+        admin_action(f,f.setup.owner_key.secret(),"/api/v1/admin/team/appoint",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal":{"kind":"new_principal","name":name}}),200).await
+    }
+    async fn team_page(
+        f: &Fixture,
+        key: &str,
+        action: &str,
+        after: Option<&str>,
+        limit: u32,
+        status: u16,
+    ) -> Value {
+        admin_action(
+            f,
+            key,
+            &format!("/api/v1/admin/{action}/list"),
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"after":after,"limit":limit}),
+            status,
+        )
+        .await
+    }
+    async fn transfer_owner(f: &Fixture, key: &str, target: &Value, status: u16) -> Value {
+        admin_action(
+            f,
+            key,
+            "/api/v1/admin/workspaces/transfer-owner",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"new_owner_id":target}),
+            status,
+        )
+        .await
+    }
+    async fn owner_key(f: &Fixture, key: &str, principal: &Value, status: u16) -> Value {
+        admin_action(f,key,"/api/v1/admin/keys/issue",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal_id":principal,"name":"rotated key","expires_at":now()+3600}),status).await
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_appoints_admin_and_rotates_keys_without_granting_team_or_global_powers() {
+        let f = Fixture::new().await;
+        let admin = team_member(&f, "personal admin").await;
+        let secret = admin["secret"].as_str().unwrap();
+        let info =
+            inspect_workspace(&f, secret, &json!(f.setup.workspace_id.to_string()), 200).await;
+        assert_eq!(info["owner_id"], f.setup.owner_key.principal_id.to_string());
+        let before = management_counts(&f);
+        for key in [secret, f.setup.instance_key.secret()] {
+            admin_action(&f,key,"/api/v1/admin/team/appoint",
+                &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal":{"kind":"new_principal","name":"forbidden"}}),403).await;
+            team_page(&f, key, "team", None, 10, 403).await;
+            team_page(&f, key, "keys", None, 10, 403).await;
+            owner_key(&f, key, &admin["principal_id"], 403).await;
+            transfer_owner(&f, key, &admin["principal_id"], 403).await;
+        }
+        assert_eq!(management_counts(&f), before);
+        let rotated = owner_key(&f, f.setup.owner_key.secret(), &admin["principal_id"], 200).await;
+        assert_eq!(rotated["principal_id"], admin["principal_id"]);
+        assert_ne!(rotated["key_id"], admin["key_id"]);
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/keys/revoke",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"key_id":admin["key_id"]}),
+            200,
+        )
+        .await;
+        inspect_workspace(&f, secret, &json!(f.setup.workspace_id.to_string()), 401).await;
+        inspect_workspace(
+            &f,
+            rotated["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            200,
+        )
+        .await;
+        let pages = team_page(&f, f.setup.owner_key.secret(), "keys", None, 10, 200).await;
+        assert!(!pages.to_string().contains(secret));
+        assert!(
+            !pages
+                .to_string()
+                .contains(rotated["secret"].as_str().unwrap())
+        );
+        assert!(
+            pages["keys"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|k| k["id"] == admin["key_id"] && k["revoked_at"].is_i64())
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn revoked_admin_reappointment_preserves_identity_but_never_resurrects_old_keys() {
+        let f = Fixture::new().await;
+        let admin = team_member(&f, "returning admin").await;
+        let second = f.second();
+        let other=admin_action(&f,second.owner_key.secret(),"/api/v1/admin/team/appoint",
+            &json!({"workspace_id":second.workspace_id.to_string(),"principal":{"kind":"existing","principal_id":admin["principal_id"]}}),200).await;
+        let target = json!({"workspace_id":f.setup.workspace_id.to_string(),"principal_id":admin["principal_id"]});
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/team/revoke",
+            &target,
+            200,
+        )
+        .await;
+        inspect_workspace(
+            &f,
+            admin["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            401,
+        )
+        .await;
+        let fresh=admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/team/appoint",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal":{"kind":"existing","principal_id":admin["principal_id"]}}),200).await;
+        assert_eq!(fresh["principal_id"], admin["principal_id"]);
+        inspect_workspace(
+            &f,
+            fresh["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            200,
+        )
+        .await;
+        inspect_workspace(
+            &f,
+            admin["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            401,
+        )
+        .await;
+        inspect_workspace(
+            &f,
+            other["secret"].as_str().unwrap(),
+            &json!(second.workspace_id.to_string()),
+            200,
+        )
+        .await;
+        f.finish().await;
+    }
+
+    async fn collect_owner_page(f: &Fixture, action: &str, field: &str) -> Vec<Value> {
+        let mut after = None;
+        let mut found = Vec::new();
+        loop {
+            let page = team_page(
+                f,
+                f.setup.owner_key.secret(),
+                action,
+                after.as_deref(),
+                2,
+                200,
+            )
+            .await;
+            let entries = page[field].as_array().unwrap();
+            assert!(entries.len() <= 2);
+            found.extend(entries.iter().cloned());
+            after = page["next_cursor"].as_str().map(str::to_string);
+            if after.is_none() {
+                break;
+            }
+        }
+        found
+    }
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_roster_and_key_pages_are_bounded_private_and_scope_exact() {
+        let f = Fixture::new().await;
+        let a = team_member(&f, "alice").await;
+        let b = team_member(&f, "bob").await;
+        let second = f.second();
+        let admins = collect_owner_page(&f, "team", "admins").await;
+        assert_eq!(admins.len(), 3);
+        assert_eq!(admins.iter().filter(|a| a["is_owner"] == true).count(), 1);
+        let keys = collect_owner_page(&f, "keys", "keys").await;
+        assert_eq!(keys.len(), 3);
+        for entries in [&admins, &keys] {
+            let ids: Vec<_> = entries
+                .iter()
+                .map(|v| v["id"].as_str().unwrap().to_string())
+                .collect();
+            let mut sorted = ids.clone();
+            sorted.sort();
+            assert_eq!(ids, sorted);
+            sorted.dedup();
+            assert_eq!(sorted.len(), 3);
+            let text = serde_json::to_string(entries).unwrap();
+            assert!(!text.contains(a["secret"].as_str().unwrap()));
+            assert!(!text.contains(b["secret"].as_str().unwrap()));
+            assert!(!text.contains("token_hash"));
+        }
+        for action in ["team", "keys"] {
+            team_page(&f, second.owner_key.secret(), action, None, 2, 403).await;
+            let end = team_page(
+                &f,
+                f.setup.owner_key.secret(),
+                action,
+                Some(&Uuid::max().to_string()),
+                2,
+                200,
+            )
+            .await;
+            assert_eq!(end["next_cursor"], Value::Null);
+            assert!(
+                end[if action == "team" { "admins" } else { "keys" }]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_transfer_changes_authority_on_same_connection_and_preserves_unrelated_scopes() {
+        let f = Fixture::new().await;
+        let second = f.second();
+        let admin = team_member(&f, "successor").await;
+        let secret = admin["secret"].as_str().unwrap();
+        let mut wire = Wire::connect(&f, None).await;
+        let request = format!(
+            "GET /api/v1/admin/workspaces HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {}\r\n\r\n",
+            f.setup.owner_key.secret()
+        );
+        wire.send(&request).await;
+        assert_eq!(wire.response().await.0, 200);
+        transfer_owner(&f, f.setup.owner_key.secret(), &admin["principal_id"], 200).await;
+        wire.send(&request).await;
+        assert_eq!(wire.response().await.0, 401);
+        let info = inspect_workspace(
+            &f,
+            f.setup.instance_key.secret(),
+            &json!(f.setup.workspace_id.to_string()),
+            200,
+        )
+        .await;
+        assert_eq!(info["owner_id"], admin["principal_id"]);
+        let team = team_page(&f, secret, "team", None, 10, 200).await;
+        assert_eq!(team["admins"].as_array().unwrap().len(), 1);
+        assert_eq!(team["admins"][0]["is_owner"], true);
+        owner_key(&f, secret, &admin["principal_id"], 200).await;
+        owner_key(
+            &f,
+            secret,
+            &json!(f.setup.owner_key.principal_id.to_string()),
+            403,
+        )
+        .await;
+        inspect_workspace(
+            &f,
+            second.owner_key.secret(),
+            &json!(second.workspace_id.to_string()),
+            200,
+        )
+        .await;
+        admin_action(&f,f.setup.instance_key.secret(),"/api/v1/admin/workspaces/first-owner",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"owner":{"kind":"existing","principal_id":f.setup.owner_key.principal_id.to_string()}}),403).await;
+        transfer_owner(
+            &f,
+            f.setup.owner_key.secret(),
+            &json!(f.setup.owner_key.principal_id.to_string()),
+            401,
+        )
+        .await;
+        let audit: String = f
+            .db()
+            .query_row(
+                "SELECT admin_key_id FROM ccp_access_audit WHERE action='transfer_owner'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(audit, f.setup.owner_key.id.to_string());
+        drop(wire);
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn competing_owner_transfers_have_one_winner_and_no_ownerless_state() {
+        let f = Fixture::new().await;
+        let a = team_member(&f, "one").await;
+        let b = team_member(&f, "two").await;
+        let request = |target: &Value| {
+            f.public_client()
+                .post(f.url("/api/v1/admin/workspaces/transfer-owner"))
+                .bearer_auth(f.setup.owner_key.secret())
+                .json(
+                    &json!({"workspace_id":f.setup.workspace_id.to_string(),"new_owner_id":target}),
+                )
+        };
+        let (ra, rb) = tokio::join!(
+            request(&a["principal_id"]).send(),
+            request(&b["principal_id"]).send()
+        );
+        let ra = ra.unwrap();
+        let rb = rb.unwrap();
+        let codes = [ra.status().as_u16(), rb.status().as_u16()];
+        assert_eq!(codes.iter().filter(|code| **code == 200).count(), 1);
+        assert!(codes.iter().all(|code| [200, 401, 403].contains(code)));
+        let winner = if codes[0] == 200 {
+            json_reply(rb, codes[1]).await;
+            json_reply(ra, 200).await;
+            a
+        } else {
+            json_reply(ra, codes[0]).await;
+            json_reply(rb, 200).await;
+            b
+        };
+        assert_eq!(
+            inspect_workspace(
+                &f,
+                f.setup.instance_key.secret(),
+                &json!(f.setup.workspace_id.to_string()),
+                200
+            )
+            .await["owner_id"],
+            winner["principal_id"]
+        );
+        team_page(
+            &f,
+            winner["secret"].as_str().unwrap(),
+            "keys",
+            None,
+            10,
+            200,
+        )
+        .await;
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM ccp_access_audit WHERE action='transfer_owner'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_transfer_audit_failure_keeps_old_key_owner_and_recipient_role_working() {
+        let f = Fixture::new().await;
+        let admin = team_member(&f, "successor").await;
+        let before = management_counts(&f);
+        f.db().execute_batch("CREATE TRIGGER fail_owner_transfer BEFORE INSERT ON ccp_access_audit WHEN NEW.action='transfer_owner' BEGIN SELECT RAISE(ABORT,'injected transfer audit'); END;").unwrap();
+        transfer_owner(&f, f.setup.owner_key.secret(), &admin["principal_id"], 503).await;
+        assert_eq!(management_counts(&f), before);
+        assert_eq!(
+            inspect_workspace(
+                &f,
+                f.setup.owner_key.secret(),
+                &json!(f.setup.workspace_id.to_string()),
+                200
+            )
+            .await["owner_id"],
+            f.setup.owner_key.principal_id.to_string()
+        );
+        team_page(&f, admin["secret"].as_str().unwrap(), "team", None, 10, 403).await;
+        f.db()
+            .execute_batch("DROP TRIGGER fail_owner_transfer")
+            .unwrap();
+        transfer_owner(&f, f.setup.owner_key.secret(), &admin["principal_id"], 200).await;
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn archived_owner_can_rotate_or_revoke_existing_admin_keys_without_expanding_team() {
+        let f = Fixture::new().await;
+        let admin = team_member(&f, "existing admin").await;
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/workspaces/archive",
+            &json!({"workspace_id":f.setup.workspace_id.to_string()}),
+            200,
+        )
+        .await;
+        admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/team/appoint",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal":{"kind":"new_principal","name":"frozen"}}),403).await;
+        transfer_owner(&f, f.setup.owner_key.secret(), &admin["principal_id"], 403).await;
+        let rotated = owner_key(&f, f.setup.owner_key.secret(), &admin["principal_id"], 200).await;
+        team_page(&f, f.setup.owner_key.secret(), "team", None, 10, 200).await;
+        admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/team/revoke",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal_id":admin["principal_id"]}),200).await;
+        inspect_workspace(
+            &f,
+            rotated["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            401,
+        )
+        .await;
+        inspect_workspace(
+            &f,
+            admin["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            401,
+        )
+        .await;
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn team_appointment_failure_and_lost_response_have_no_orphan_or_secret_retrieval_route() {
+        let f = Fixture::new().await;
+        let before = management_counts(&f);
+        let body = json!({"workspace_id":f.setup.workspace_id.to_string(),"principal":{"kind":"new_principal","name":"lost admin"}});
+        f.db().execute_batch("CREATE TRIGGER fail_appointment BEFORE INSERT ON ccp_access_audit WHEN NEW.action='issue_admin_key' BEGIN SELECT RAISE(ABORT,'injected appointment audit'); END;").unwrap();
+        admin_action(
+            &f,
+            f.setup.owner_key.secret(),
+            "/api/v1/admin/team/appoint",
+            &body,
+            503,
+        )
+        .await;
+        assert_eq!(management_counts(&f), before);
+        f.db()
+            .execute_batch("DROP TRIGGER fail_appointment")
+            .unwrap();
+        let response = f
+            .public_client()
+            .post(f.url("/api/v1/admin/team/appoint"))
+            .bearer_auth(f.setup.owner_key.secret())
+            .json(&body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        drop(response);
+        let page = team_page(&f, f.setup.owner_key.secret(), "team", None, 10, 200).await;
+        let principal = page["admins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["name"] == "lost admin")
+            .unwrap()["id"]
+            .clone();
+        admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/team/appoint",
+            &json!({"workspace_id":f.setup.workspace_id.to_string(),"principal":{"kind":"existing","principal_id":principal}}),403).await;
+        let fresh = owner_key(&f, f.setup.owner_key.secret(), &principal, 200).await;
+        inspect_workspace(
+            &f,
+            fresh["secret"].as_str().unwrap(),
+            &json!(f.setup.workspace_id.to_string()),
+            200,
+        )
+        .await;
+        assert!(page.get("secret").is_none());
+        f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn owner_endpoints_reject_scope_inference_identity_claims_methods_and_client_surface() {
+        let f = Fixture::new().await;
+        let (old, key) = f.enroll().await;
+        let before = management_counts(&f);
+        for action in [
+            "team/list",
+            "keys/list",
+            "team/revoke",
+            "keys/revoke",
+            "keys/issue",
+            "team/appoint",
+            "workspaces/transfer-owner",
+        ] {
+            let path = format!("/api/v1/admin/{action}");
+            let body = json!({"workspace_id":f.setup.workspace_id.to_string(),"actor":"global","scope":"instance"});
+            admin_action(&f, f.setup.owner_key.secret(), &path, &body, 400).await;
+            json_reply(
+                f.public_client()
+                    .get(f.url(&path))
+                    .bearer_auth(f.setup.owner_key.secret())
+                    .send()
+                    .await
+                    .unwrap(),
+                405,
+            )
+            .await;
+            admin_action(
+                &f,
+                f.setup.owner_key.secret(),
+                &format!("{path}?scope=instance"),
+                &body,
+                400,
+            )
+            .await;
+            json_reply(
+                f.private_client(old["certificate_pem"].as_str().unwrap(), &key)
+                    .post(f.mtls(&path))
+                    .json(&body)
+                    .send()
+                    .await
+                    .unwrap(),
+                404,
+            )
+            .await;
+        }
+        for action in ["team", "keys"] {
+            for limit in [0, 501] {
+                team_page(&f, f.setup.owner_key.secret(), action, None, limit, 400).await;
+            }
+            team_page(
+                &f,
+                f.setup.owner_key.secret(),
+                action,
+                Some("invalid"),
+                10,
+                400,
+            )
+            .await;
+        }
+        admin_action(&f,f.setup.owner_key.secret(),"/api/v1/admin/keys/issue",
+            &json!({"workspace_id":Value::Null,"principal_id":f.setup.owner_key.principal_id.to_string(),"name":"global"}),400).await;
+        assert_eq!(management_counts(&f), before);
+        f.finish().await;
+    }
 }

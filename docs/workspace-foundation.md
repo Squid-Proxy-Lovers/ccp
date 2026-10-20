@@ -82,8 +82,9 @@ publication, client admission, grant revocation or owner-only admin-team powers.
 Workspace owners and admins act only within their current scopes. There is one
 owner reference per workspace; initial assignment cannot replace an owner.
 Targeted recovery and retained binding revocations are documented in
-[Client recovery](workspace-recovery.md). Ownership transfer and payload purge
-remain subsequent work.
+[Client recovery](workspace-recovery.md).
+[Owner administration](workspace-owner-administration.md) adds scoped team/key
+management and ownership transfer. Payload purge remains subsequent work.
 Initial-owner appointment is an explicit, audited global-admin operation for an
 unowned workspace. The appointee may be that same global administrator; they
 then exercise workspace powers through the separately recorded owner role.

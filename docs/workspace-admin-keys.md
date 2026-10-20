@@ -86,3 +86,11 @@ keys with separate scopes. Local reset replaces only an existing enabled
 principal's instance keys or a workspace's current owner's scoped keys. It adds no routine global-key authority to issue workspace-owner credentials,
 change ownership or re-enable a disabled principal. First-key delivery during
 [initial provisioning](initial-workspace-owners.md) is a separate, one-time boundary.
+
+## Owner administration over HTTPS
+
+The [owner administration guide](workspace-owner-administration.md) documents
+atomic appointment with a first key, owner-only metadata and scoped key
+issue/revoke. Admin revocation terminally revokes its workspace keys. Ownership
+transfer revokes the former owner's workspace keys while preserving unrelated
+roles and keys. Browser fragment login and session handling remain later work.
