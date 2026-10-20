@@ -215,7 +215,8 @@ owners/admins configure policies; a trusted bounded cleanup method rechecks exac
 due archive/policy state in its deletion transaction. Original write receipts and
 cancellation fences survive; purge proofs prevent entry UUID reuse.
 
-No policy is seeded or cleanup activated by migration. No public configuration
-adapter or production worker is exposed by this internal slice. See the
+No policy is seeded or cleanup activated by migration. The workspace HTTPS
+server now exposes scoped configuration and schedules current due cleanup with
+bounded jobs, retained leases and shutdown draining. See the
 [retention contract](workspace-retention.md) for confirmation, policy changes,
 clock limits, audit and backup/rollback requirements.

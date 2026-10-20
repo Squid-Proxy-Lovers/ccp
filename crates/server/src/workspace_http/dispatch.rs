@@ -6,6 +6,7 @@ use super::{
     State, Surface, content, guidance, invitations, management,
     request::Input,
     response::{self, Error, Reply},
+    retention,
     session::Context,
     team,
 };
@@ -68,10 +69,14 @@ fn https(
         && !team::handles(&input.path)
         && !content::handles(&input.path)
         && !guidance::handles(&input.path)
+        && !retention::handles(&input.path)
     {
         return Err(Error::NotFound);
     }
     let actor = admin(store, input.authorization.as_deref(), now)?;
+    if retention::handles(&input.path) {
+        return retention::dispatch(store, actor, &input, now);
+    }
     if guidance::handles(&input.path) {
         return guidance::dispatch(store, actor, &input, now);
     }

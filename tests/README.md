@@ -229,3 +229,15 @@ retained receipts/siblings/guidance, immutable proofs and UUID tombstones. Abort
 and ignored-write faults in policy, head, clocks, audit, workspace state and purge
 steps roll back all captured changes. A schema-record fault rolls back every new
 table before retry. No public setting or running cleanup worker is claimed.
+
+
+Retention adapter tests use actual HTTPS/mTLS to verify current policy reads,
+scoped confirmed changes, strict required-null duration, CAS/exact historical
+receipts, archived configuration freeze, demotion/revocation, request bounds and
+audit-fault rollback. Four live-server worker cases enable through HTTPS and
+observe real asynchronous cleanup: manual default, fresh existing windows, old
+write receipts without resurrection, disable/re-enable, pause across restart,
+restore/rearchive and injected purge failure/retry. Runtime unit cases verify
+single-job budgeting, blocked-SQL shutdown/directory exclusion, per-workspace
+failure isolation and bounded cursor pagination. Scheduling metadata is not
+authority; the core still rechecks every deletion transaction.

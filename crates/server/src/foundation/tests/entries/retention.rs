@@ -556,3 +556,78 @@ fn final_policy_revision_remains_available_for_disable_and_stale_clocks_cannot_p
     assert_eq!(policy.retention_seconds, None);
     assert!(cleanup(&mut f, i64::MAX).is_empty());
 }
+
+#[test]
+fn worker_scheduling_pages_are_bounded_and_only_current_active_timed_workspaces_appear() {
+    let mut f = fixture();
+    assert!(
+        AccessStore::new(&mut f.connection)
+            .unwrap()
+            .timed_retention_workspaces(None, 16)
+            .unwrap()
+            .is_empty()
+    );
+    configure(&mut f, &change(0, Some(1)), NOW);
+    AccessStore::new(&mut f.connection)
+        .unwrap()
+        .change_entry_retention(
+            Actor::Admin(f.other_owner),
+            f.other_workspace,
+            &change(0, Some(2)),
+            NOW,
+        )
+        .unwrap();
+    let mut expected = vec![f.workspace, f.other_workspace];
+    expected.sort();
+    let mut store = AccessStore::new(&mut f.connection).unwrap();
+    assert_eq!(
+        store.timed_retention_workspaces(None, 16).unwrap(),
+        expected
+    );
+    assert_eq!(
+        store.timed_retention_workspaces(None, 1).unwrap(),
+        vec![expected[0]]
+    );
+    assert_eq!(
+        store
+            .timed_retention_workspaces(Some(expected[0]), 1)
+            .unwrap(),
+        vec![expected[1]]
+    );
+    assert!(
+        store
+            .timed_retention_workspaces(Some(expected[1]), 1)
+            .unwrap()
+            .is_empty()
+    );
+    for limit in [0, 33, usize::MAX] {
+        error(
+            store.timed_retention_workspaces(None, limit),
+            ContentError::InvalidInput,
+        );
+    }
+    lifecycle(&mut f, true, NOW);
+    assert_eq!(
+        AccessStore::new(&mut f.connection)
+            .unwrap()
+            .timed_retention_workspaces(None, 16)
+            .unwrap(),
+        vec![f.other_workspace]
+    );
+    AccessStore::new(&mut f.connection)
+        .unwrap()
+        .change_entry_retention(
+            Actor::Admin(f.other_owner),
+            f.other_workspace,
+            &change(1, None),
+            NOW,
+        )
+        .unwrap();
+    assert!(
+        AccessStore::new(&mut f.connection)
+            .unwrap()
+            .timed_retention_workspaces(None, 16)
+            .unwrap()
+            .is_empty()
+    );
+}

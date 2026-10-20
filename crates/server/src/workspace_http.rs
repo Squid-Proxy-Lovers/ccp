@@ -11,6 +11,8 @@ mod invitations;
 mod management;
 mod request;
 mod response;
+mod retention;
+mod retention_worker;
 mod session;
 mod team;
 
@@ -57,6 +59,7 @@ pub struct WorkspaceServer {
     https_tls: TlsAcceptor,
     mtls_tls: TlsAcceptor,
     state: Arc<State>,
+    cleanup_budget: Arc<Semaphore>,
 }
 
 struct State {
@@ -100,6 +103,7 @@ impl WorkspaceServer {
             https_tls,
             mtls_tls,
             state,
+            cleanup_budget: Arc::new(Semaphore::new(1)),
         })
     }
 
@@ -120,6 +124,11 @@ impl WorkspaceServer {
         let budget = Arc::new(Semaphore::new(64));
         let (stop, receiver) = watch::channel(false);
         let mut tasks = JoinSet::new();
+        tasks.spawn(retention_worker::run(
+            self.state.clone(),
+            receiver.clone(),
+            self.cleanup_budget.clone(),
+        ));
         let mut report = Report::default();
         let outcome = loop {
             tokio::select! {
@@ -163,6 +172,14 @@ impl WorkspaceServer {
             .context("workspace database jobs did not drain")?
             .context("workspace admission budget closed")?;
         drop(all_slots);
+        let cleanup_slot = timeout(
+            Duration::from_secs(30),
+            self.cleanup_budget.clone().acquire_owned(),
+        )
+        .await
+        .context("workspace retention job did not drain")?
+        .context("workspace retention budget closed")?;
+        drop(cleanup_slot);
         outcome?;
         Ok(report)
     }

@@ -15,6 +15,20 @@ mod purge;
 pub(super) use clocks::{entry_changed, workspace_state};
 
 impl AccessStore<'_> {
+    /// Trusted scheduling metadata only. A listed ID is not purge authority;
+    /// the cleanup transaction rechecks current policy and workspace state.
+    pub(crate) fn timed_retention_workspaces(
+        &mut self,
+        after: Option<Uuid>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<Uuid>> {
+        if !(1..=32).contains(&limit) {
+            return Err(ContentError::InvalidInput.into());
+        }
+        self.connection.prepare("SELECT h.workspace_id FROM ccp_entry_retention_heads h JOIN ccp_entry_retention_versions p ON p.workspace_id=h.workspace_id AND p.revision=h.revision JOIN ccp_workspaces w ON w.id=h.workspace_id WHERE p.retention_seconds IS NOT NULL AND w.state='active' AND w.legacy_session_id IS NULL AND (?1 IS NULL OR h.workspace_id>?1) ORDER BY h.workspace_id LIMIT ?2")?
+            .query_map(params![after.map(|id|id.to_string()),i64::try_from(limit)?],|r|r.get::<_,String>(0))?
+            .map(|row|parse_id(row?)).collect()
+    }
     /// Administrative metadata, checked against current read scope. No lease.
     pub fn entry_retention(
         &mut self,

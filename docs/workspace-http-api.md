@@ -8,7 +8,8 @@ are connected, along with client lifecycle, explicit selections and workspace MC
 metadata. The [content HTTP API](workspace-content-http.md) now exposes hierarchy,
 entries, revisions and shelf state/archive summaries on both authenticated
 listeners, plus shelf transitions on admin HTTPS.
-[Guidance reads and scoped live saves](#read-and-save-guidance) are also available.
+[Guidance reads and scoped live saves](#read-and-save-guidance) and
+[explicit timed archive-retention configuration](workspace-retention.md) are also available.
 The normal client now
 supports [content reads](workspace-content-client.md) and
 [entry mutations](workspace-content-mutations.md). The [workspace MCP bridge](workspace-mcp.md)
@@ -55,7 +56,10 @@ The initial JSON reports the actual listener addresses, instance UUID and API
 version, including when port zero chooses ephemeral ports. Ctrl-C stops accepts
 and sessions and reports a connection-failure count without request details.
 An already dispatched atomic database job may finish after a connection closes;
-it retains the directory lease and concurrency slot until completion.
+it retains the directory lease and concurrency slot until completion. The
+workspace retention worker has one separately tracked blocking-job slot and also
+drains on shutdown. Only explicit timed policies make archives eligible; native
+mode starts no retention worker.
 
 TLS is required on both listeners. The client listener uses the built-in
 mandatory client-certificate verifier. TLS termination with forwarded identity
@@ -76,6 +80,8 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
 | HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |
 | HTTPS | `POST /api/v1/admin/content/entries/purge` | Current scoped owner/admin key; explicitly confirmed, revision-bound purge of an individually archived entry, including in archived workspaces |
+| HTTPS | `POST /api/v1/admin/content/retention/get` | Current administrative workspace read access; current policy metadata |
+| HTTPS | `POST /api/v1/admin/content/retention/change` | Current scoped workspace owner/admin; explicit confirmed timed enable or manual disable with nonce/revision |
 | HTTPS | `POST /api/v1/admin/content/shelves/transition` | Current scoped workspace owner/admin key; exact revision-bound shelf archive/restore |
 | HTTPS or client mTLS | `POST /api/v1/content/shelves/state` or `/archived` | Current workspace read authority; body-free state or safe paged archived-shelf summaries |
 | HTTPS | `POST /api/v1/admin/workspaces/archive` or `/reactivate` | Current workspace owner or instance key; recoverable lifecycle change |

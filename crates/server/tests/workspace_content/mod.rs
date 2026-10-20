@@ -10,6 +10,7 @@ mod lifecycle;
 mod ownership;
 mod purge;
 mod resolution;
+mod retention;
 mod shelves;
 
 struct User {
