@@ -188,24 +188,48 @@ mod tests {
         assert_eq!(trust, json(command(&f.directory, &["workspace-tls-info"])));
     }
 
+    fn concurrent_setup(directory: &Path, worker: u64) -> Output {
+        // The lease deliberately refuses promptly. Simultaneous SQLite header
+        // readers can make every initial exclusive attempt report Busy; retry
+        // only that documented transient result with bounded, staggered waits.
+        for _ in 0..20 {
+            let output = command(directory, &["workspace-tls-init", "--name", "localhost"]);
+            if output.status.success() {
+                return output;
+            }
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains(
+                    "data directory is in use by another server or maintenance operation"
+                ),
+                "unexpected setup failure: {error}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10 * (worker + 1)));
+        }
+        panic!("concurrent setup never acquired the lease after bounded Busy retries")
+    }
+
     #[test]
     fn parallel_real_setup_processes_publish_one_identity_and_one_audit() {
         let f = Fixture::new();
         let workers: Vec<_> = (0..8)
-            .map(|_| {
+            .map(|worker| {
                 let dir = f.directory.clone();
-                std::thread::spawn(move || {
-                    command(&dir, &["workspace-tls-init", "--name", "localhost"])
-                })
+                std::thread::spawn(move || concurrent_setup(&dir, worker))
             })
             .collect();
         let outputs: Vec<_> = workers.into_iter().map(|w| w.join().unwrap()).collect();
+        let errors: Vec<_> = outputs
+            .iter()
+            .map(|out| String::from_utf8_lossy(&out.stderr).into_owned())
+            .collect();
         let successes: Vec<_> = outputs
             .into_iter()
             .filter(|o| o.status.success())
             .map(json)
             .collect();
-        assert!(!successes.is_empty());
+        assert!(!successes.is_empty(), "setup errors: {errors:?}");
+        assert_eq!(successes.len(), 8, "all workers must eventually succeed");
         let current = json(command(&f.directory, &["workspace-tls-info"]));
         assert!(successes.iter().all(|value| value == &current));
         let connection = rusqlite::Connection::open(f.directory.join("ccp.sqlite3")).unwrap();

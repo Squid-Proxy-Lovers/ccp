@@ -2,8 +2,10 @@
 
 This unreleased local setup step creates persistent certificates for the workspace
 redesign. It does not start a listener, activate workspace mode, install trust in
-your OS/browser, or change native session certificates. The HTTPS routes, client
-trust configuration and credential-registry authorization are subsequent work.
+your OS/browser, or change native session certificates. The HTTPS routes and
+client trust configuration are subsequent work; internal
+[registered-peer adapters](registered-tls-peers.md) bind actual TLS peers to
+current credential records.
 
 [Documentation index](README.md) · [Local administration](local-workspace-administration.md)
 
@@ -51,8 +53,9 @@ verification to bootstrap enrollment.
 The internal HTTPS configuration uses server authentication. Its separate mTLS
 configuration requires a CA-issued client certificate. Both negotiate
 HTTP/1.1. Cryptographic certificate validation alone does not establish a
-registered CCP identity: future request handling must bind the actual TLS peer
-certificate to its current instance/client/credential records and permissions.
+registered CCP identity: request handlers must use the [registered-peer adapters](registered-tls-peers.md)
+to bind the actual TLS peer certificate to its current instance/client/credential
+records and permissions.
 No endpoint exposes the private signing material.
 
 ## Storage, interruption and backup

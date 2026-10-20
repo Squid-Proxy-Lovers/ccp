@@ -10,15 +10,42 @@ use crate::foundation::{IssuingAuthority, RenewalReceipt, RenewalRequest};
 
 impl AccessStore<'_> {
     /// Rotate a currently authorized credential, or retrieve its exact committed
-    /// receipt. `actor` must identify the actual verified mTLS peer. A future
-    /// retry-only TLS adapter may accept a superseded but unexpired peer here;
-    /// it must never make that peer an ordinary authorized data caller.
+    /// receipt. `actor` must identify the actual verified mTLS peer. The separate
+    /// retry-only TLS adapter accepts a superseded but unexpired peer only for
+    /// its exact receipt; it never makes that peer an ordinary data caller.
     pub fn renew_credential(
         &mut self,
         actor: Actor,
         request: &RenewalRequest,
         authority: &IssuingAuthority,
         now: i64,
+    ) -> anyhow::Result<RenewalReceipt> {
+        self.renew_request(actor, request, authority, now, None)
+    }
+
+    pub(crate) fn renew_verified_peer(
+        &mut self,
+        peer: &crate::instance_tls::VerifiedPeer,
+        request: &RenewalRequest,
+        authority: &IssuingAuthority,
+        now: i64,
+    ) -> anyhow::Result<RenewalReceipt> {
+        self.renew_request(
+            Actor::Credential(peer.credential()),
+            request,
+            authority,
+            now,
+            Some(peer),
+        )
+    }
+
+    fn renew_request(
+        &mut self,
+        actor: Actor,
+        request: &RenewalRequest,
+        authority: &IssuingAuthority,
+        now: i64,
+        peer: Option<&crate::instance_tls::VerifiedPeer>,
     ) -> anyhow::Result<RenewalReceipt> {
         let Actor::Credential(previous) = actor else {
             bail!("renewal requires an authenticated client credential");
@@ -28,6 +55,9 @@ impl AccessStore<'_> {
         }
         let proof = VerifiedCsr::parse(&request.csr_pem)?;
         self.mutate(|tx| {
+            if let Some(peer) = peer {
+                peer.require_registered(tx, now, true)?;
+            }
             if let Some(receipt) = renewal_retry(tx, previous, request, &proof, now)? {
                 return Ok(receipt);
             }

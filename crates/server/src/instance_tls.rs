@@ -8,6 +8,8 @@
 
 mod bundle;
 mod files;
+mod peer;
+pub(crate) use peer::VerifiedPeer;
 
 use std::path::Path;
 use std::sync::Arc;

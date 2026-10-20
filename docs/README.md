@@ -44,6 +44,7 @@ the other guides describe the supported native interface.
 | Understand unreleased scoped/global client recovery | [Client recovery](workspace-recovery.md) |
 | Understand explicit readmission of a revoked workspace member | [Targeted readmission](workspace-readmission.md) |
 | Understand native/workspace data-directory exclusion and activation | [Runtime mode isolation](workspace-runtime-mode.md) |
+| Understand registered mTLS peers and renewal-only retries | [Registered TLS peers](registered-tls-peers.md) |
 | Edit documentation | [Writing guide](writing.md) |
 
 ## Earlier versions
