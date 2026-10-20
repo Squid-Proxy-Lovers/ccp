@@ -33,6 +33,7 @@ from ccp_mcp_server.workspace_write import (
 )
 from fastmcp import Client
 from fastmcp.exceptions import ToolError, ValidationError
+from workspace_delivery_tests import WorkspaceDeliveryTests as WorkspaceDeliveryTests
 from workspace_entry_tests import WorkspaceEntryTests as WorkspaceEntryTests
 from workspace_guidance_tests import WorkspaceGuidanceTests as WorkspaceGuidanceTests
 

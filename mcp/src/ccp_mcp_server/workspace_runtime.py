@@ -102,6 +102,9 @@ class WorkspaceRuntime:
         self._handles[handle] = uuid4().hex
         return handle
 
+    def known_selection(self, handle: str | None) -> bool:
+        return handle is not None and handle in self._handles
+
     def _scope(self, handle: str, alias: str) -> CallerSelection:
         self.profile(alias)
         if handle not in self._handles:

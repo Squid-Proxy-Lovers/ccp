@@ -14,6 +14,7 @@ from fastmcp import Client
 from fastmcp.client.transports import StdioTransport
 from mcp_smoke import data
 from workspace_mcp_content_smoke import check as check_content
+from workspace_mcp_delivery import check as check_delivery
 from workspace_mcp_entry_smoke import check as check_entries
 from workspace_mcp_fixture import WorkspaceFixture
 from workspace_mcp_guidance import check_guidance
@@ -180,6 +181,7 @@ async def permission_changes(fixture, one, two, provisioned):
 
 
 async def check():
+    await check_delivery()
     await check_entries()
     await check_writes()
     await check_content()

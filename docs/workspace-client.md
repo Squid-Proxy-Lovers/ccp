@@ -293,9 +293,11 @@ intents stay intact and suppress new renewal; reads do not replay an entry write
 Scoped recovery profiles read only their captured still-authorized workspaces.
 
 This explicit reader does not publish guidance or implement automatic initial/
-changed guidance delivery with other tool results. The MCP bridge now supports
-[explicit guidance refresh](workspace-mcp.md#refresh-guidance-explicitly). Automatic
-delivery, stale/unavailable sideband warnings and desktop editors remain later.
+changed guidance delivery with other tool results. The MCP bridge supports
+[explicit refresh](workspace-mcp.md#refresh-guidance-explicitly) and
+[automatic initial/changed guidance](workspace-mcp.md#read-automatic-guidance-alongside-results)
+with unavailable warnings beside other successful tool results. Desktop editors
+remain later work.
 
 ## Retrieve a guidance delivery context
 
@@ -327,4 +329,5 @@ revisions unchanged. Combine these facts with a separate caller-specific
 emission context before deciding that guidance has already been returned. The
 IDs are not permission tokens or leases and cannot replace current server checks.
 This opt-in format adds no cache, cursor, automatic tool response or obedience
-tracking. See the [server context contract](workspace-http-api.md#retrieve-an-authenticated-guidance-context).
+tracking itself; the [MCP adapter](workspace-mcp.md#read-automatic-guidance-alongside-results)
+uses it for bounded caller-specific emission. See the [server context contract](workspace-http-api.md#retrieve-an-authenticated-guidance-context).

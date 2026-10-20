@@ -46,6 +46,7 @@ the other guides describe the supported native interface.
 | Permanently purge an archived entry through scoped admin HTTPS | [Confirmed purge request](workspace-content-http.md#permanently-purge-an-archived-entry) |
 | Understand explicit archived-entry purge and retained proof | [Entry purge core](workspace-content.md#permanently-purge-an-archived-entry) |
 | Inspect authenticated guidance-delivery context | [Client context output](workspace-client.md#retrieve-a-guidance-delivery-context) |
+| Read automatic guidance beside MCP results | [MCP guidance sidebands](workspace-mcp.md#read-automatic-guidance-alongside-results) |
 | Refresh current guidance through MCP | [Explicit MCP guidance](workspace-mcp.md#refresh-guidance-explicitly) |
 | Retrieve guidance with a registered client | [Client guidance reader](workspace-client.md#read-current-guidance) |
 | Read or edit live guidance over TLS | [Guidance HTTP API](workspace-http-api.md#read-and-save-guidance) |

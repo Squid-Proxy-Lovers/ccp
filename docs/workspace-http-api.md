@@ -379,9 +379,11 @@ Current grant revocation and client disable block unauthorized reads. Storage
 failures, including a missing published revision, return sanitized 503 without
 substituting an empty board. This explicit read API adds no guidance freshness
 gate to other operations. The normal client now supports
-[explicit guidance reads](workspace-client.md#read-current-guidance). MCP guidance,
-automatic initial/changed guidance with tool responses, stale warnings and desktop
-editors remain later work. See the [storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
+[explicit guidance reads](workspace-client.md#read-current-guidance). The MCP adapter returns
+[explicit and automatic guidance](workspace-mcp.md#read-automatic-guidance-alongside-results),
+including unavailable warnings beside successful primary results. Desktop editors
+remain later work. See the
+[storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
 
 ## Retrieve an authenticated guidance context
 
@@ -422,11 +424,11 @@ remain enforced. Archived workspace guidance remains readable. Re-admission may
 retain the credential UUID while replacing a revoked grant UUID; that changes the
 context even when board text and revisions stay unchanged.
 
-These identifiers support future delivery bookkeeping. They are not access
+These identifiers support delivery bookkeeping. They are not access
 tokens or permission leases, and do not identify a human or MCP conversation.
-They do not prove that a model received or obeyed guidance. Future emission
-tracking must also isolate each caller and recheck current server access. This endpoint records no delivery cursor and adds
-no requirement to acknowledge guidance before an operation. Existing 64 KiB
+They do not prove that a model received or obeyed guidance. Emission
+tracking must also isolate each caller and recheck current server access.
+This endpoint records no delivery cursor and adds no requirement to acknowledge guidance before an operation. Existing 64 KiB
 request and 1 MiB response limits apply. See the
 [opt-in client output](workspace-client.md#retrieve-a-guidance-delivery-context).
 

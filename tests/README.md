@@ -157,8 +157,8 @@ retries, revision conflicts and explicit empty saves. Nine cases also exercise
 failures, corrupted published heads, file reopen and independent stale writers.
 Migration failure also rolls back all new guidance tables and retains the old
 schema record and workspace data before a successful retry.
-These test the internal store; automatic guidance delivery and editors remain
-subsequent work.
+These test the internal store; separate automatic MCP delivery tests are below.
+Desktop editors remain subsequent work.
 
 Eight guidance HTTP cases exercise actual HTTPS/mTLS reads and scoped saves,
 source/publisher labels, scoped admin demotion, cross-workspace privacy, current
@@ -205,3 +205,15 @@ identity claims. Client units reject mismatched IDs, grant presence and unknown
 context formats. Actual TLS/library/CLI cases exercise opt-in output without
 changing the default shape, renewal and pending-renewal binding updates, and
 malformed guidance failing before new renewal or private-text output.
+
+Automatic MCP guidance tests verify initial/changed/cleared boards, fresh reads,
+independent/shared/stateless callers, captured operation scopes, credential/grant
+changes, equal/lower-revision replacement, bounded LRU state, scope limits,
+aggregate consistency and byte/deadline bounds. Errors/cancellation and successful
+primary results remain intact; partial failures or serialization faults do not
+advance stamps or expose cached prose. Real stdio/CLI/TLS checks model-visible
+extra text blocks alongside unchanged primary structured data, credential renewal,
+a fixture-seeded replacement grant for the same credential, scoped recovery, archived reads and
+disable. A malformed guidance publisher after a successful shelf creation yields
+a warning and exactly one committed shelf. Four supported SDK environments run
+the same bridge units and all five workspace smoke groups.

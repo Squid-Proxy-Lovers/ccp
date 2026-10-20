@@ -4,8 +4,8 @@ This unreleased stdio bridge connects an agent host to configured workspace
 client profiles. It exposes current workspace metadata and explicit caller
 selections, shelves, books, entries and revision history, plus shelf/book creation.
 It also exposes durable entry mutations and guarded outcome controls.
-Current guidance can also be refreshed explicitly. Automatic guidance delivery,
-status and the browser panel remain later work. The supported native
+Relevant guidance is returned automatically with successful addressed tool calls
+and can also be refreshed explicitly. Status and the browser panel remain later work. The supported native
 `ccp-mcp-server` entry point stays available.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md) ·
@@ -150,9 +150,69 @@ renewal and pending-operation behavior. Reads preserve caller choices and pendin
 intents; authorized renewal may update the credential.
 
 This tool performs an explicit current read with no delivery cache or emission
-cursor. Automatic initial/changed guidance attached to other tool responses and
-stale/unavailable sideband warnings remain subsequent work. A failed explicit
-read remains an error; guidance publication uses separate scoped admin APIs.
+cursor and does not update automatic emission stamps. A failed explicit read
+remains an error; guidance publication uses separate scoped admin APIs.
+See [automatic guidance](#read-automatic-guidance-alongside-results) for other tools.
+
+## Read automatic guidance alongside results
+
+Read every MCP content block. Successful addressed tool calls append a JSON text
+block containing `_ccp_guidance`, separately from the original operation content.
+The primary structured result, status and metadata stay unchanged. A host that
+reads only `structuredContent` or an SDK's `.data` misses automatic guidance;
+consume the extra text block or call `workspace_guidance` explicitly.
+
+The sideband has `format: 1`, `precedence: "global_first"`, `status`, relevant
+`workspace_ids` and `boards`. Each returned board contains its known source,
+revision, exact text and publisher, alongside verified instance/client/credential
+and optional workspace-grant context. Empty unpublished and explicitly cleared
+boards are returned too. These IDs are context facts, not authority tokens or
+human/model identities. Host instructions and actual server permissions retain
+priority; global CCP guidance wins workspace guidance conflicts.
+
+The first applicable use returns current boards. A valid bridge-issued selection
+handle partitions subsequent emission by profile and verified identity. Changed
+boards are returned with the next applicable successful call; unchanged boards
+may be omitted from `boards` after a fresh authorized read. New targets, current
+credentials or workspace grants force their current boards to be returned. Equal
+or lower revision numbers with changed board data also trigger emission. Share a
+handle only deliberately; independent handles have independent emission state.
+Calls without a known handle return full current guidance each time. An optional
+unknown handle beside an explicit workspace does not acquire emission state.
+
+| Successful operation | Guidance scope |
+| --- | --- |
+| Profile info, workspace discovery, pending entry metadata | Global only |
+| Selection inspection/replacement/resolution | Global and the returned selected targets |
+| Target resolution, content reads, container/entry writes and outcome controls | Global and the operation's captured workspace |
+| Recovery-based outcome resolution | Captured workspace through `via_profile`, when supplied |
+| Profile-alias listing or opening a handle | No addressed instance; no guidance fetch |
+| Explicit `workspace_guidance` | Its own current read; no extra fetch or emission update |
+
+Explicit targets do not select newly granted workspaces. A default is captured
+by the primary operation; the guidance step never resolves that mutable default
+again. Selection inspection can succeed locally even when a selected workspace
+is no longer readable; its guidance sideband then reports unavailability.
+
+`status: "unavailable"` includes a clear warning that previously returned guidance
+may be stale. It returns no cached prose and does not change the primary outcome,
+retry a mutation or require a guidance acknowledgment. Use explicit refresh after
+unavailability or response loss. Primary operation errors and cancellation remain
+errors/cancellation. Guidance failures never turn a committed mutation into a
+failed tool result.
+
+Collection has an extra 10-second deadline, including waiting for its profile's
+collection lock, and a separate 256 KiB JSON budget. Up to 100 relevant workspaces
+are checked serially. If any read fails, metadata is malformed, identity/global
+snapshots disagree, the deadline expires or whole boards exceed the budget, the
+entire guidance collection is unavailable and no emission stamps advance. Board
+text is never truncated. Workspace reads are individually authorized snapshots;
+the collection does not promise one transaction across workspaces. Primary entry
+snapshots retain their separate 4 MiB subprocess-output limit.
+
+The bridge keeps at most 4096 revision/hash emission stamps in memory, with no
+persistent prose cache. Eviction or restarting the bridge forces fresh emission.
+Stamps record a prepared response, not network receipt, model reading or obedience.
 
 ## Read content in one workspace
 
@@ -345,7 +405,8 @@ Aliases have separate choices within one handle and are not merged automatically
 Handles last for this bridge process, including across sessionless MCP requests.
 Reconnecting to a surviving process can keep a known handle. Restarting the bridge
 invalidates all old handles; open a fresh one and select deliberately. Unknown
-handles fail without creating state. There are at most 64 handles per process.
+handles used for choices or default resolution fail without creating state.
+There are at most 64 handles per process.
 The bridge does not infer caller identity from SDK session objects or agent labels.
 If the first selection initialization is interrupted after its file commits,
 that handle/alias may require a fresh handle; the credential profile stays intact.
