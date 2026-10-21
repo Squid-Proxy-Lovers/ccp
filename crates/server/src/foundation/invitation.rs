@@ -66,3 +66,22 @@ pub struct InvitationStatus {
     pub issuer_authorized: bool,
     pub target_client_id: Option<Uuid>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InvitationKind {
+    InitialGroup,
+    Individual,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvitationSummary {
+    pub kind: InvitationKind,
+    pub role: DataRole,
+    pub status: InvitationStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InvitationPage {
+    pub invitations: Vec<InvitationSummary>,
+    pub next_cursor: Option<Uuid>,
+}

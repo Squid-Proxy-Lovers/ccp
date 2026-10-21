@@ -97,7 +97,7 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `POST /api/v1/admin/invitations/initial` | Current workspace owner/admin key; bounded initial group link |
 | HTTPS | `POST /api/v1/admin/invitations/individual` | Current workspace owner/admin key; individual link under existing window/expiry policy |
 | HTTPS | `POST /api/v1/admin/enrollment/close` | Scoped security authority; terminal initial-window closure |
-| HTTPS | `POST /api/v1/admin/invitations/status` or `/revoke` | Scoped security authority; invitation metadata or revocation |
+| HTTPS | `POST /api/v1/admin/invitations/list`, `/status` or `/revoke` | Scoped security authority; paged metadata, individual status or revocation |
 | HTTPS | `POST /api/v1/admin/invitations/readmission` | Current workspace owner/admin key; fresh targeted admission after revoked membership |
 | HTTPS | `POST /api/v1/admin/recovery/issue` | Current global or scoped recovery authority; captures still-authorized grants |
 | HTTPS | `POST /api/v1/admin/recovery/status` or `/revoke` | Matching current global or scoped recovery authority |
@@ -117,8 +117,8 @@ CORS is not enabled. Supplied Origin must match the HTTPS origin in Host.
 Bearer admin requests retain their existing behavior; the
 [browser-session API](workspace-browser-session.md) adds bounded cookie sessions
 with matching Origin and per-session CSRF on POSTs. Mixed credentials are refused.
-There is no query-key login, and the selected `/admin#key=...` page is not yet
-served by this backend-only slice.
+There is no query-key login. The HTTPS [desktop panel](workspace-browser-session.md)
+serves `/admin` and exchanges a reusable `#key` fragment in the browser.
 
 ## JSON and pagination
 
@@ -141,6 +141,52 @@ Names and UUIDs form a stable order within a page. Client SQL candidates follow
 its credential bindings; a workspace key cannot borrow global discovery.
 Oversized metadata or responses can refuse service instead of returning a
 misleading partial listing. Finer resource fairness remains future work.
+
+### Inspect invitation inventory
+
+POST `/api/v1/admin/invitations/list` with a workspace owner/admin key or its
+current browser session. It uses the same scoped security authority as inspecting
+one invitation; instance keys, client credentials and foreign workspace keys
+cannot list it. Metadata remains accessible while archived. Example request:
+
+```json
+{"workspace_id":"WORKSPACE_UUID","after":null,"limit":100}
+```
+
+Replace the illustrative workspace UUID. The strict body rejects unknown and
+duplicate fields. `limit` defaults to 100 and must be 1–500. Pass the returned
+`data.next_cursor` UUID as `after` for another page; `null` means no next page.
+The response contains `data.invitations` and `data.next_cursor`. Each item has:
+
+- `kind`: `initial_group` or `individual`;
+- `role`: the requested `read` or `read_write` grant role;
+- `status`: the same metadata returned by `/invitations/status`, with
+  `invitation_id`, `uses`, nullable `max_uses`/`expires_at`, `revoked`, `expired`,
+  `initial_closed`, `issuer_authorized` and nullable `target_client_id`.
+
+Readmission invitations have kind `individual` and their explicit client target.
+No secret, verifier, certificate, issuer identity or credential is returned.
+Secrets remain creation-only. The list can help investigate a lost creation
+response or find an invitation to revoke, but is not a causal operation receipt
+and cannot recover its secret. Do not assume a newly seen row proves which
+request created it. Requested roles do not grant access until admission.
+
+Pages are ordered by invitation UUID and are separate current snapshots, each
+with current caller authorization and status checks. Cursors confer no access;
+concurrent inserts can sort before an earlier cursor. Historical revoked, spent
+and expired invitations remain visible. A list is not a redemption permission
+lease; redemption rechecks all current workspace, issuer, target and credential
+conditions. `initial_closed` describes that row’s initial-group closure, not an
+overall enrollment-window state. An empty list does not establish eligibility to
+open a new initial group; a window can have been closed without an invitation.
+
+Like individual status inspection, listing persists observed expiry/initial-group
+closure under the existing terminal rules, so moving the clock backward does not
+reopen observed invitations. A page’s authorization, metadata and closure updates
+commit together; failures roll them back. Only requested rows get individual
+expiry observations, excluding the next-page lookahead; the existing workspace
+initial-window refresh still applies when inspecting a returned row. Listing does
+not create invitations, admit clients, reopen a window or run entry cleanup.
 
 The initial invitation body contains `workspace_id`, `role` (`read` or
 `read_write`), `max_clients` and `expires_at` (Unix seconds). At least a positive

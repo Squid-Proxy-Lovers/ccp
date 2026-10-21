@@ -165,6 +165,26 @@ pub struct InvitationStatus {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InvitationKind {
+    InitialGroup,
+    Individual,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InvitationSummary {
+    pub kind: InvitationKind,
+    pub role: Role,
+    pub status: InvitationStatus,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Invitations {
+    pub invitations: Vec<InvitationSummary>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct RecoveryStatus {
     pub client_id: String,
     pub scope: RecoveryScope,

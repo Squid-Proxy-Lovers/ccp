@@ -4,6 +4,8 @@
 
 use rusqlite::OptionalExtension;
 
+mod pages;
+
 use super::*;
 use crate::foundation::admin::key_hash;
 use crate::foundation::{
@@ -147,54 +149,55 @@ impl AccessStore<'_> {
     ) -> anyhow::Result<InvitationStatus> {
         self.mutate(|tx| {
             authorize(tx, actor, Action::RevokeGrant, Some(workspace), now)?;
-            refresh_invitation_expiry(tx, workspace, invitation, now)?;
-            let row = tx.query_row(
-                "SELECT uses, max_uses, expires_at, revoked_at, issuer_kind, issuer_id,
-                 EXISTS(SELECT 1 FROM ccp_initial_enrollment w WHERE w.workspace_id = i.workspace_id
-                 AND w.invitation_id = i.id AND w.closed_at IS NOT NULL),
-                 EXISTS(SELECT 1 FROM ccp_invitation_closures e WHERE e.invitation_id = i.id)
-                 FROM ccp_invitations i WHERE id = ?1 AND workspace_id = ?2",
-                params![invitation.to_string(), workspace.to_string()],
-                |row| {
-                    Ok((
-                        row.get::<_, u64>(0)?,
-                        row.get::<_, Option<u64>>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                        row.get::<_, Option<i64>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, String>(5)?,
-                        row.get::<_, bool>(6)?,
-                        row.get::<_, bool>(7)?,
-                    ))
-                },
-            )?;
-            let issuer = parse_id(row.5)?;
-            let issuer = match row.4.as_str() {
-                "admin" => Actor::Admin(issuer),
-                "admin_key" => Actor::AdminKey(issuer),
-                _ => bail!("invalid persisted invitation issuer"),
-            };
-            Ok(InvitationStatus {
-                id: invitation,
-                uses: row.0,
-                max_uses: row.1,
-                expires_at: row.2,
-                revoked: row.3.is_some(),
-                expired: row.7,
-                initial_closed: row.6,
-                target_client_id: super::readmission::readmission_target(
-                    tx, invitation, workspace,
-                )?,
-                issuer_authorized: permitted(
-                    tx,
-                    issuer,
-                    Action::AdmitClient,
-                    Some(workspace),
-                    now,
-                )?,
-            })
+            status(tx, workspace, invitation, now)
         })
     }
+}
+
+fn status(
+    tx: &Connection,
+    workspace: Uuid,
+    invitation: Uuid,
+    now: i64,
+) -> anyhow::Result<InvitationStatus> {
+    refresh_invitation_expiry(tx, workspace, invitation, now)?;
+    let row = tx.query_row(
+        "SELECT uses, max_uses, expires_at, revoked_at, issuer_kind, issuer_id,
+     EXISTS(SELECT 1 FROM ccp_initial_enrollment w WHERE w.workspace_id = i.workspace_id
+     AND w.invitation_id = i.id AND w.closed_at IS NOT NULL),
+     EXISTS(SELECT 1 FROM ccp_invitation_closures e WHERE e.invitation_id = i.id)
+     FROM ccp_invitations i WHERE id = ?1 AND workspace_id = ?2",
+        params![invitation.to_string(), workspace.to_string()],
+        |row| {
+            Ok((
+                row.get::<_, u64>(0)?,
+                row.get::<_, Option<u64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, bool>(6)?,
+                row.get::<_, bool>(7)?,
+            ))
+        },
+    )?;
+    let issuer = parse_id(row.5)?;
+    let issuer = match row.4.as_str() {
+        "admin" => Actor::Admin(issuer),
+        "admin_key" => Actor::AdminKey(issuer),
+        _ => bail!("invalid persisted invitation issuer"),
+    };
+    Ok(InvitationStatus {
+        id: invitation,
+        uses: row.0,
+        max_uses: row.1,
+        expires_at: row.2,
+        revoked: row.3.is_some(),
+        expired: row.7,
+        initial_closed: row.6,
+        target_client_id: super::readmission::readmission_target(tx, invitation, workspace)?,
+        issuer_authorized: permitted(tx, issuer, Action::AdmitClient, Some(workspace), now)?,
+    })
 }
 
 fn validate_bounds(max_uses: Option<u64>, expires_at: Option<i64>, now: i64) -> anyhow::Result<()> {

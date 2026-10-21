@@ -289,3 +289,8 @@ Owner-transfer browser-session tests cover all former-owner cookie invalidation,
 recipient role refresh on an existing session, scoped/archived refusal and global
 role preservation. Panel Node tests bind one-shot transfer intent to exact recipient,
 explicit delivery confirmation and the original browser session.
+
+Invitation inventory tests cover scoped UUID pagination, status parity, current
+issuer/key authority, no secret-bearing response fields, strict cookie/TLS request
+handling, terminal expiry under clock rollback, lookahead exclusion and atomic
+rollback of page observations. They add no browser-engine workflow claim.

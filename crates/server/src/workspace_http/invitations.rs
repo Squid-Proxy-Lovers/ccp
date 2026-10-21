@@ -11,13 +11,16 @@ use crate::foundation::{
     AccessStore, Actor, IndividualInvitationRequest, InitialInvitationRequest,
     ReadmissionInvitationRequest, RecoveryInvitationRequest, RecoveryScope,
 };
+mod listing;
+
 use hyper::Method;
 use protocol::workspace as api;
 
 pub(super) fn handles(path: &str) -> bool {
     matches!(
         path,
-        "/api/v1/admin/invitations/initial"
+        "/api/v1/admin/invitations/list"
+            | "/api/v1/admin/invitations/initial"
             | "/api/v1/admin/invitations/individual"
             | "/api/v1/admin/invitations/readmission"
             | "/api/v1/admin/invitations/status"
@@ -39,6 +42,7 @@ pub(super) fn dispatch(
         return Err(Error::Method);
     }
     match input.path.as_str() {
+        "/api/v1/admin/invitations/list" => listing::list(store, actor, input, now),
         "/api/v1/admin/invitations/initial" => {
             let body: api::InitialInvitation = decode(&input.body)?;
             let issued = store
@@ -127,7 +131,11 @@ fn invitation(
     let status = store
         .invitation_status(actor, workspace, invitation, now)
         .map_err(operation)?;
-    response::success(api::InvitationStatus {
+    response::success(status_view(status))
+}
+
+fn status_view(status: crate::foundation::InvitationStatus) -> api::InvitationStatus {
+    api::InvitationStatus {
         invitation_id: status.id.to_string(),
         uses: status.uses,
         max_uses: status.max_uses,
@@ -137,7 +145,7 @@ fn invitation(
         initial_closed: status.initial_closed,
         issuer_authorized: status.issuer_authorized,
         target_client_id: status.target_client_id.map(|id| id.to_string()),
-    })
+    }
 }
 
 fn recovery(
