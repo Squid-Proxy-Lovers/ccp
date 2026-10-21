@@ -1,7 +1,10 @@
 # Explicit workspace status messages (unreleased)
 
-The workspace API and desktop panel expose explicit status messages. Dedicated
-client/MCP status commands are not implemented yet. The native interface is unchanged.
+The workspace API, client CLI, MCP tools and desktop panel expose explicit status
+messages. The native interface is unchanged.
+
+[Documentation index](README.md) · [Workspace client](workspace-client.md) ·
+[Workspace MCP](workspace-mcp.md)
 
 A status message is a short, self-reported work description from a registered
 client. It is not a task assignment, reservation, completion record or proof that
@@ -46,7 +49,7 @@ Clearing an owned message requires its current revision. It removes the current
 message and label, leaving an ownership/revision tombstone. Clearing is explicit;
 expiry alone never does this. A cleared slot can be deliberately republished by
 its owning client using the tombstone’s current revision. Previous message text
-is not stored as full revision history. Administrative moderation remains unimplemented pending its policy decision.
+is not stored as full revision history. Scoped owner/admin moderation is planned but not implemented yet.
 The current human panel is a read-only status viewer.
 
 ## Exact operations and storage
@@ -129,3 +132,70 @@ Reported work is separate from recorded entry revisions in **Context & history**
 Labels and messages render as literal text. Workspace, key and tab changes retain
 the existing dirty-draft guard and current-session checks. The browser stores no
 status messages, identities or drafts in persistent browser storage.
+
+
+## Send a status from the client
+
+Use an enrolled private workspace profile. Create a mode-0600 regular request file
+and save this JSON, replacing the illustrative UUIDs with the intended workspace
+and fresh non-nil status/operation UUIDs:
+
+```json
+{
+  "workspace_id": "11111111-1111-4111-8111-111111111111",
+  "status_id": "22222222-2222-4222-8222-222222222222",
+  "operation_id": "33333333-3333-4333-8333-333333333333",
+  "expected_revision": 0,
+  "change": {"action": "set", "message": "Checking the parser", "agent": "reviewer"}
+}
+```
+
+```bash
+ccp-client workspace status --profile ./my-profile mutate --request-file ./status.json
+ccp-client workspace status --profile ./my-profile list --workspace-id "$WORKSPACE_ID" --limit 32
+ccp-client workspace status --profile ./my-profile get --workspace-id "$WORKSPACE_ID" --status-id "$STATUS_ID"
+ccp-client workspace status --profile ./my-profile pending
+```
+
+For a later update or clear, use a fresh operation UUID and the current revision.
+A clear request replaces `change` with `{"action":"clear"}`. Request files must be
+private regular files, not symlinks, and fit the 64 KiB encoded limit. Work text
+never travels in argv. Mutation output contains the body-free receipt plus local
+`operation` metadata; it does not return the message.
+
+Before its first POST, the client saves the complete original request and its
+instance, client and credential binding in the private profile. Normal preflight
+reads may renew a due credential before that binding is captured. Once pending,
+status/entry writes and credential lifecycle changes are blocked. Current reads
+remain available under the original credential, with automatic renewal suppressed.
+An error preserves pending state, including when the server committed but saving
+the local result failed. No background or automatic retry chooses a new UUID,
+revision or credential.
+
+Inspect `pending` or the body-free `pending_status` field in `workspace info`.
+Retain all five target fields: workspace, status, operation, credential UUIDs and
+`request_hash`. The hash fingerprints the client's serialized original request;
+it is a local resume guard, not a transferable server authorization token.
+Deliberately resend that exact saved intent with:
+
+```bash
+ccp-client workspace status --profile ./my-profile resume \
+  --workspace-id "$WORKSPACE_ID" --status-id "$STATUS_ID" \
+  --operation-id "$OPERATION_ID" --credential-id "$CREDENTIAL_ID" \
+  --request-hash "$REQUEST_HASH"
+```
+
+A mismatched or partial target is refused. Resume sends the saved request once;
+current server authority still applies, including archive and revocation. A
+committed `last_status` receipt is historical, and is not a pending resume target.
+Expired/revoked keys cannot be silently substituted with a recovery profile.
+
+If you deliberately choose to discard the local pending text, use the same five
+flags with `forget` instead of `resume`, adding `--confirm-local-forget`. This
+sends no server request and works independently of current server access. It
+records `locally_forgotten: true`, `cancelled: false` and body-free last metadata.
+**The original server request is not cancelled and may still complete.** Forgetting
+is not proof that a replacement intent is safe. Server UUID/CAS checks continue
+to apply. Logical removal does not erase SQLite free pages, snapshots or backups.
+See [profile format 5](workspace-client.md#profile-storage-and-recovery-limits)
+for migration and rollback limits.

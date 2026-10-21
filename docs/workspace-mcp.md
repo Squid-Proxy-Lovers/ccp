@@ -5,7 +5,8 @@ client profiles. It exposes current workspace metadata and explicit caller
 selections, shelves, books, entries and revision history, plus shelf/book creation.
 It also exposes durable entry mutations and guarded outcome controls.
 Relevant guidance is returned automatically with successful addressed tool calls
-and can also be refreshed explicitly. Status remains later work. A separate
+and can also be refreshed explicitly. Explicit client-owned status tools are
+available below. A separate
 [desktop panel](workspace-browser-session.md#use-the-desktop-panel) supports
 human administration and context editing. The supported native
 `ccp-mcp-server` entry point stays available.
@@ -184,9 +185,9 @@ unknown handle beside an explicit workspace does not acquire emission state.
 
 | Successful operation | Guidance scope |
 | --- | --- |
-| Profile info, workspace discovery, pending entry metadata | Global only |
+| Profile info, workspace discovery, pending entry/status metadata | Global only |
 | Selection inspection/replacement/resolution | Global and the returned selected targets |
-| Target resolution, content reads, container/entry writes and outcome controls | Global and the operation's captured workspace |
+| Target resolution, content reads, container/entry/status writes and outcome controls | Global and the operation's captured workspace |
 | Recovery-based outcome resolution | Captured workspace through `via_profile`, when supplied |
 | Profile-alias listing or opening a handle | No addressed instance; no guidance fetch |
 | Explicit `workspace_guidance` | Its own current read; no extra fetch or emission update |
@@ -441,7 +442,48 @@ use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-The bridge exposes 24 tools: eight metadata/selection tools, one guidance reader,
+The bridge exposes 31 tools: eight metadata/selection tools, one guidance reader,
 nine content reads,
-two container creations and four entry-intent/outcome tools. It does not publish
+two container creations, four entry-intent/outcome tools and seven status tools. It does not publish
 guidance, manage tasks or start a server.
+
+
+## Read and update status messages
+
+Status tools share the configured profile aliases and explicit read `scope`
+used by content tools. Reads return `workspace_id` and `data`; they do not select
+workspaces. Stale messages keep their text/time. A cleared slot is omitted from
+lists and has a null message in a direct read. Age does not imply liveness,
+completion or task ownership. See the [status contract](workspace-status.md).
+
+| Tool | Other arguments |
+| --- | --- |
+| `workspace_status_messages` | `scope`; optional `query` with `after` and `limit` (1–32) |
+| `workspace_status_message` | `scope`, `status_id` |
+| `workspace_update_status` | `request`: `workspace_id`, `status_id`, `operation_id`, `expected_revision`, `message`, optional `agent` |
+| `workspace_clear_status` | `request`: the same four target/revision fields, without message/agent |
+| `workspace_status_pending` | No other arguments; body-free pending/last metadata and a target only when pending |
+| `workspace_status_resume` | `target`: exact workspace/status/operation/credential UUIDs and `request_hash` returned for pending state |
+| `workspace_status_forget` | The same `target`, plus literal `confirm_local_forget: true` |
+
+All seven take `profile`. Writes require explicit caller-chosen UUIDs and current
+CAS revision; there is no mutable default resolution during publication. They
+use private payload files and the Rust client's durable original request. The
+message is 1–4096 UTF-8 bytes and the optional label 1–128 bytes, with NUL and
+blank text refused by the Rust client/server. Unicode text otherwise stays exact.
+Client identity comes from mTLS; the label cannot grant authority.
+
+An unconfirmed write retains its original pending intent. Inspect its body-free
+target before deliberate resume; no tool automatically replaces its UUID, CAS or
+credential. Verified results contain a historical body-free receipt and original
+operation metadata. Read the latest slot separately to inspect current state.
+
+Local forgetting removes only the client's pending intent. It returns
+`locally_forgotten: true`, `cancelled: false`; **the original server request may
+still complete**. It sends no primary server request and does not prove that a
+replacement write is safe. If current guidance cannot be read afterward, the
+successful local result remains successful with an unavailable-guidance warning.
+Pending metadata receives global guidance only; status reads, writes, resume and
+forget use their captured workspace. Guidance collection never retries a primary
+mutation. Administrative clear and status publication as another client are not
+exposed by this bridge.

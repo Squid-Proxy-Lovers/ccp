@@ -85,6 +85,15 @@ class WorkspaceRuntime:
             *arguments,
         )
 
+    async def status(self, alias: str, action: str, arguments: tuple[str, ...]) -> Any:
+        return await self.process.run(
+            "status", "--profile", str(self.profile(alias)), action, *arguments
+        )
+
+    async def status_submit(self, alias: str, payload: bytes) -> Any:
+        arguments = ("status", "--profile", str(self.profile(alias)), "mutate")
+        return await self.process.run_input(self.root, payload, arguments)
+
     async def explicit_target(self, alias: str, workspace: str) -> Any:
         return await self.process.run(
             "selection",

@@ -131,6 +131,11 @@ impl WorkspaceProfile {
     }
 
     pub(crate) fn require_no_content_pending(&self) -> anyhow::Result<()> {
+        if self.status_state.is_pending() {
+            bail!(
+                "finish or explicitly forget the original status operation before another write or credential rotation"
+            );
+        }
         if self.content_state.is_pending() {
             bail!(
                 "resolve the original pending entry operation before rotating credentials or starting another lifecycle operation"
@@ -156,6 +161,7 @@ impl WorkspaceProfile {
             }
             return self.resume_entry_operation().await;
         }
+        self.require_no_content_pending()?;
         if let Some(last) = self.content_state.last.as_ref().filter(|last| {
             last.binding.workspace_id == request.workspace_id
                 && last.binding.operation_id == request.operation_id

@@ -12,8 +12,13 @@ use std::{fs, path::Path, time::Duration};
 use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x4343_5043;
-pub(super) const PROFILE_FORMAT: u32 = 4;
+pub(super) const PROFILE_FORMAT: u32 = 5;
 const CONTENT_SCHEMA: &str = "CREATE TABLE content_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),pending TEXT CHECK(pending IS NULL OR length(CAST(pending AS BLOB))<=2101248),last TEXT CHECK(last IS NULL OR length(CAST(last AS BLOB))<=4096)); INSERT INTO content_state(singleton) VALUES(1);";
+const STATUS_SCHEMA: &str = r"CREATE TABLE status_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),pending TEXT CHECK(pending IS NULL OR length(CAST(pending AS BLOB))<=69632),last TEXT CHECK(last IS NULL OR length(CAST(last AS BLOB))<=4096)); INSERT INTO status_state(singleton) VALUES(1);
+CREATE TRIGGER status_pending_excludes_other BEFORE UPDATE OF pending ON status_state WHEN NEW.pending IS NOT NULL AND (EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL) OR EXISTS(SELECT 1 FROM profile WHERE pending IS NOT NULL)) BEGIN SELECT RAISE(ABORT,'pending status conflicts with another operation'); END;
+CREATE TRIGGER content_pending_excludes_status BEFORE UPDATE OF pending ON content_state WHEN NEW.pending IS NOT NULL AND EXISTS(SELECT 1 FROM status_state WHERE pending IS NOT NULL) BEGIN SELECT RAISE(ABORT,'pending entry conflicts with status'); END;
+CREATE TRIGGER lifecycle_pending_excludes_status BEFORE UPDATE OF pending,credential ON profile WHEN EXISTS(SELECT 1 FROM status_state WHERE pending IS NOT NULL) BEGIN SELECT RAISE(ABORT,'credential cannot change while status is pending'); END;
+";
 const PROFILE: &str = "workspace-profile.sqlite3";
 const HISTORY_SCHEMA: &str = "CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY, operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission','recovery')))";
 
@@ -59,6 +64,7 @@ fn initialize(path: &Path, trust: &WorkspaceTrust) -> anyhow::Result<()> {
     tx.execute_batch("CREATE TABLE profile(singleton INTEGER PRIMARY KEY CHECK(singleton=1),trust TEXT NOT NULL,pending TEXT,credential TEXT)")?;
     tx.execute_batch(HISTORY_SCHEMA)?;
     tx.execute_batch(CONTENT_SCHEMA)?;
+    tx.execute_batch(STATUS_SCHEMA)?;
     tx.execute(
         "INSERT INTO profile(singleton,trust) VALUES (1,?1)",
         [serde_json::to_string(trust)?],
@@ -84,7 +90,7 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
         .execute_batch("BEGIN EXCLUSIVE; COMMIT;")
         .context("workspace profile is busy or unavailable")?;
     let version = format(&connection)?;
-    if version < PROFILE_FORMAT {
+    if version < 4 {
         private_file(&directory.join(PROFILE))?;
     }
     let (trust, pending, credential) = connection.query_row(
@@ -117,6 +123,12 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
     crypto::validate_state(pending.as_ref(), credential.as_ref())?;
     let content_state = super::content::mutation::State::load(&connection, version)?;
     content_state.validate(&trust, credential.as_ref(), pending.is_some())?;
+    let status_state = super::work_status::State::load(&connection, version)?;
+    status_state.validate(
+        &trust,
+        credential.as_ref(),
+        pending.is_some() || content_state.is_pending(),
+    )?;
     let mut profile = WorkspaceProfile {
         connection,
         trust,
@@ -125,6 +137,7 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
         pending_record: saved_pending,
         credential_record: saved_credential,
         content_state,
+        status_state,
     };
     profile.info()?;
     if version < PROFILE_FORMAT {
@@ -224,7 +237,7 @@ impl WorkspaceProfile {
     fn persist_pending(&mut self, pending: Pending) -> anyhow::Result<()> {
         crypto::validate_state(Some(&pending), self.credential.as_ref())?;
         let record = serde_json::to_string(&pending)?;
-        let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS ?2 AND NOT EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL)",
+        let changed=self.connection.execute("UPDATE profile SET pending=?1 WHERE singleton=1 AND pending IS NULL AND credential IS ?2 AND NOT EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM status_state WHERE pending IS NOT NULL)",
             params![record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot persist pending operation; no request was sent"))?;
         if changed != 1 {
             bail!("workspace profile state changed");
@@ -247,7 +260,7 @@ impl WorkspaceProfile {
         crypto::credential(&self.trust, &credential, crypto::now()?)?;
         let record = serde_json::to_string(&credential)?;
         let tx = self.connection.transaction()?;
-        let changed=tx.execute("UPDATE profile SET credential=?1,pending=NULL WHERE singleton=1 AND pending IS ?2 AND credential IS ?3 AND NOT EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL)",
+        let changed=tx.execute("UPDATE profile SET credential=?1,pending=NULL WHERE singleton=1 AND pending IS ?2 AND credential IS ?3 AND NOT EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM status_state WHERE pending IS NOT NULL)",
             params![record,self.pending_record,self.credential_record])
             .map_err(|_write|anyhow::anyhow!("cannot activate credential; pending operation retained for retry"))?;
         if changed != 1 {

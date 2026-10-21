@@ -178,7 +178,7 @@ for resumption; it does not silently enroll another identity. See
 [client lifecycle and recovery](workspace-client.md).
 
 Caller-selection format 1 and native command behavior are unchanged. The client
-uses [profile format 4](workspace-client.md#profile-storage-and-recovery-limits).
+uses [profile format 5](workspace-client.md#profile-storage-and-recovery-limits).
 Pending content mutations pause automatic renewal while authorized reads remain
 usable. Reads do not cache content or merge authority across recovery profiles.
 Use the profile that still has access to the explicit target workspace. Command

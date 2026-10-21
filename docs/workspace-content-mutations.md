@@ -148,8 +148,9 @@ global disable. A different client or trust pin fails. See [client recovery](wor
 
 ## Local retention and library use
 
-Profile format 4 stores one pending full request and one most recent terminal
-binding/result. It is not a cumulative operation archive. An exact retry of the
+Profile format 5 stores one pending full entry request and one most recent
+terminal entry binding/result, with separate status metadata. Pending entry,
+status and credential lifecycle operations exclude one another. It is not a cumulative operation archive. An exact retry of the
 most recent request resolves its saved original binding even after renewal.
 An older operation UUID that has fallen out of this local cache can conflict
 after credential rotation; the client never silently gives it a fresh UUID.
@@ -159,7 +160,7 @@ SQLite free pages, request files and backups may retain text. No secure-erasure
 claim is made. The profile file limit is 16 MiB, each saved pending record is
 bounded to 2 MiB plus 4 KiB of metadata, and the last result to 4 KiB.
 [Profile upgrades and backups](workspace-client.md#profile-storage-and-recovery-limits)
-explain migration of formats 1–3 and refusal by older clients.
+explain migration of formats 1–4 and refusal by older clients.
 
 Rust callers use `WorkspaceProfile::mutate_entry(EntryMutation)`,
 `resume_entry_operation`, `resolve_entry_operation` and

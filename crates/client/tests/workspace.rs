@@ -8,6 +8,7 @@ mod tests {
     mod content;
     mod recovery;
     mod selection;
+    mod status;
     use anyhow::Context;
     use client::workspace::{WorkspaceProfile, WorkspaceTrust};
     use rusqlite::Connection;
@@ -271,7 +272,7 @@ mod tests {
         let token = f.invitation();
         f.token_file(&token);
         let trusted = value(f.trust_cli().await);
-        assert_eq!(trusted["format"], 4);
+        assert_eq!(trusted["format"], 5);
         assert_eq!(trusted["instance_id"], f.trust.instance_id);
         let enrolled = value(f.enroll_cli().await);
         assert!(enrolled["client_id"].as_str().is_some());

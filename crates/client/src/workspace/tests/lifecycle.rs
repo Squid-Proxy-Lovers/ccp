@@ -18,6 +18,7 @@ fn legacy(dir: &Path) {
     });
     db.execute("UPDATE profile SET pending=?1", [pending])
         .unwrap();
+    without_status_state(&db);
     db.execute_batch("DROP TABLE completed_invitations; DROP TABLE content_state")
         .unwrap();
     db.pragma_update(None, "user_version", 1).unwrap();

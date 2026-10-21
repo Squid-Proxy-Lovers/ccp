@@ -27,6 +27,7 @@ impl WorkspaceProfile {
         if allow_renewal
             && self.pending.is_none()
             && !self.content_state.is_pending()
+            && !self.status_state.is_pending()
             && self.renewal_due(crypto::now()?)?
         {
             self.renew().await?;

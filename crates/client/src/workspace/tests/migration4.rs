@@ -51,13 +51,14 @@ fn format3_upgrade_preserves_raw_identity_history_and_pending_operations_with_ex
             .unwrap();
         let pending = p.pending_record.clone();
         let credential = p.credential_record.clone();
+        without_status_state(&p.connection);
         p.connection
             .execute_batch("DROP TABLE content_state; PRAGMA user_version=3;")
             .unwrap();
         drop(p);
         let bytes = fs::read(dir.join("workspace-profile.sqlite3")).unwrap();
         let p = WorkspaceProfile::open(&dir).unwrap();
-        assert_eq!(p.info().unwrap().format, 4);
+        assert_eq!(p.info().unwrap().format, store::PROFILE_FORMAT);
         assert_eq!(p.pending_record, pending);
         assert_eq!(p.credential_record, credential);
         assert!(p.info().unwrap().pending_content.is_none());
@@ -95,6 +96,7 @@ fn format3_failed_upgrade_keeps_version_and_state_and_old_file_limit_still_appli
     let dir = directory();
     store::create(&dir, &trust(&ca)).unwrap();
     let db = rusqlite::Connection::open(dir.join("workspace-profile.sqlite3")).unwrap();
+    without_status_state(&db);
     // A conflicting schema object prevents CREATE TABLE inside the upgrade transaction.
     db.execute_batch(
         "DROP TABLE content_state; CREATE VIEW content_state AS SELECT 1; PRAGMA user_version=3;",

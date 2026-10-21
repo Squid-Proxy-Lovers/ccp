@@ -19,6 +19,7 @@ from .workspace_delivery import WorkspaceDeliveryMiddleware
 from .workspace_entry import WorkspaceEntryTools
 from .workspace_guidance import WorkspaceGuidanceTools
 from .workspace_runtime import WorkspaceRuntime
+from .workspace_status import WorkspaceStatusTools
 from .workspace_validation import WorkspaceValidationMiddleware
 from .workspace_values import canonical_uuid, object_result
 from .workspace_write import WorkspaceWriteTools
@@ -164,6 +165,14 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp.tool(entries.workspace_entry_pending)
     mcp.tool(entries.workspace_entry_resume)
     mcp.tool(entries.workspace_entry_resolve)
+    statuses = WorkspaceStatusTools(runtime)
+    mcp.tool(statuses.workspace_status_messages)
+    mcp.tool(statuses.workspace_status_message)
+    mcp.tool(statuses.workspace_update_status)
+    mcp.tool(statuses.workspace_clear_status)
+    mcp.tool(statuses.workspace_status_pending)
+    mcp.tool(statuses.workspace_status_resume)
+    mcp.tool(statuses.workspace_status_forget)
     return mcp
 
 

@@ -27,6 +27,10 @@ enum Command {
         #[arg(long)]
         delivery_context: bool,
     },
+    Status {
+        #[command(flatten)]
+        args: super::work_status::cli::StatusArgs,
+    },
     Content {
         #[command(flatten)]
         args: super::content::cli::ContentArgs,
@@ -98,6 +102,7 @@ pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
                 output(&profile.guidance(workspace_id.as_deref()).await?)
             }
         }
+        Command::Status { args } => super::work_status::cli::run(args).await,
         Command::Content { args } => super::content::cli::run(args).await,
         Command::Selection { args } => selection::cli::run(args).await,
         Command::Trust {

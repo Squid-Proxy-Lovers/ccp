@@ -55,7 +55,7 @@ pub struct Page {
     pub observed_at: i64,
     pub stale_after_seconds: i64,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Receipt {
     pub workspace_id: String,
     pub status_id: String,

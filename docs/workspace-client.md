@@ -9,7 +9,7 @@ The [workspace MCP bridge](workspace-mcp.md) connects discovery and caller choic
 the [normal client content commands](workspace-content-client.md) now support
 reads, shelf/book creation and [entry mutations](workspace-content-mutations.md).
 The workspace MCP bridge exposes content reads, shelf/book creation and guarded
-entry mutations. Existing
+entry mutations and [explicit status messages](workspace-status.md). Existing
 native commands and their saved session files keep their current behavior.
 
 [Documentation index](README.md) · [Server HTTPS setup](workspace-http-api.md) ·
@@ -205,7 +205,7 @@ local descriptions and HTTP status, without echoing an untrusted server body.
 
 ## Profile storage and recovery limits
 
-Workspace profile format 4 uses `workspace-profile.sqlite3` with a separate
+Workspace profile format 5 uses `workspace-profile.sqlite3` with a separate
 application ID, DELETE journaling and FULL synchronization. Open profiles hold
 an exclusive SQLite lease across commits and network calls. Another invocation
 can fail busy after 2s; close the first profile before retrying. This serializes
@@ -221,25 +221,32 @@ Host operators remain trusted against path/file replacement races. Unix
 publication syncs the directory; Windows directory-sync and ACL behavior have
 not been independently verified locally.
 
-Format 1, 2 and 3 profiles upgrade when opened with this client. Before migration,
+Format 1, 2, 3 and 4 profiles upgrade when opened with this client. Before migration,
 the exclusive lease protects a complete owner-only, content-addressed snapshot
 named `workspace-profile-vVERSION-HASH.sqlite3`, with its original format number.
 Publication is durable on supported Unix local file systems and never
 overwrites another snapshot.
 The transaction then preserves the key, CSR, nonce, invitation hash and identity
 and existing completed-invitation history while adding a bounded pending-entry
-request and most recent terminal result. Format 1/2 also gain the recovery state
+request and most recent terminal result, plus independent pending/last status metadata.
+Format 4 gains only an empty status table and its exclusion guards; its existing
+identity, invitation history and pending-entry records remain byte-exact.
+Format 1/2 also gain the recovery state
 introduced in format 3. Existing format-3 profile/history records stay byte-exact.
 A failure leaves the previous format and its snapshot intact. Snapshots are
-retained without automatic cleanup. Older format-1/2/3 clients refuse format 4;
+retained without automatic cleanup. Older format-1/2/3/4 clients refuse format 5;
 restore a deliberately chosen snapshot into a separate private directory for a
 controlled rollback. Restoring a local snapshot never restores revoked or
 superseded server authority. No backup is selected automatically if the main
 profile is missing or corrupt.
 
-Format 4 permits a profile file up to 16 MiB to hold escaped pending text; old
-formats keep their 4 MiB input limit. Per-record limits and pending-content
-renewal controls are described in [entry mutations](workspace-content-mutations.md).
+Formats 4 and 5 permit a profile file up to 16 MiB to hold escaped pending text;
+formats 1–3 keep their 4 MiB input limit. Per-record limits and pending-content
+renewal controls are described in [entry mutations](workspace-content-mutations.md)
+and [status messages](workspace-status.md#send-a-status-from-the-client).
+Only one entry, status or credential lifecycle operation can be pending at once.
+Status pending/last metadata is body-free; its private pending record retains the
+original text until a verified receipt or explicit local forget.
 
 A client whose certificate has expired or been revoked cannot use that old
 certificate to regain access. Fresh administrative recovery authority is required.
@@ -288,7 +295,7 @@ publisher kinds remain closed typed values and reject unknown forms.
 An authorized, validated workspace response may trigger one due renewal and
 reread. A global-only response proves identity without proving a usable workspace
 grant, so it does not initiate renewal, including after all grants are revoked.
-Already pending renewal resumes first. Pending admission and uncertain entry
+Already pending renewal resumes first. Pending admission and uncertain entry/status
 intents stay intact and suppress new renewal; reads do not replay an entry write.
 Scoped recovery profiles read only their captured still-authorized workspaces.
 

@@ -83,6 +83,7 @@ fn recovery_checks_expected_identity_and_rejects_active_or_malformed_state() {
 
 fn version2(dir: &Path) {
     let db = rusqlite::Connection::open(dir.join("workspace-profile.sqlite3")).unwrap();
+    without_status_state(&db);
     db.execute_batch("DROP TABLE content_state; ALTER TABLE completed_invitations RENAME TO history3; CREATE TABLE completed_invitations(invitation_hash TEXT PRIMARY KEY,operation TEXT NOT NULL CHECK(operation IN ('enrollment','admission'))); INSERT INTO completed_invitations SELECT * FROM history3; DROP TABLE history3; PRAGMA user_version=2;").unwrap();
 }
 

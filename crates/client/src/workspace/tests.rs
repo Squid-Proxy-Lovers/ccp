@@ -351,3 +351,7 @@ async fn expired_profile_metadata_remains_inspectable_but_cannot_be_used_online(
     drop(profile);
     fs::remove_dir_all(dir).unwrap();
 }
+
+fn without_status_state(db: &rusqlite::Connection) {
+    db.execute_batch("DROP TRIGGER status_pending_excludes_other; DROP TRIGGER content_pending_excludes_status; DROP TRIGGER lifecycle_pending_excludes_status; DROP TABLE status_state;").unwrap();
+}

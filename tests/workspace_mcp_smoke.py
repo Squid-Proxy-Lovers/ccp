@@ -18,6 +18,7 @@ from workspace_mcp_delivery import check as check_delivery
 from workspace_mcp_entry_smoke import check as check_entries
 from workspace_mcp_fixture import WorkspaceFixture
 from workspace_mcp_guidance import check_guidance
+from workspace_mcp_status_smoke import check as check_status
 from workspace_mcp_write_smoke import check as check_writes
 
 
@@ -181,6 +182,7 @@ async def permission_changes(fixture, one, two, provisioned):
 
 
 async def check():
+    await check_status()
     await check_delivery()
     await check_entries()
     await check_writes()

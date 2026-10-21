@@ -36,6 +36,7 @@ from fastmcp.exceptions import ToolError, ValidationError
 from workspace_delivery_tests import WorkspaceDeliveryTests as WorkspaceDeliveryTests
 from workspace_entry_tests import WorkspaceEntryTests as WorkspaceEntryTests
 from workspace_guidance_tests import WorkspaceGuidanceTests as WorkspaceGuidanceTests
+from workspace_status_tests import WorkspaceStatusTests as WorkspaceStatusTests
 
 
 class WorkspaceConfigurationTests(unittest.TestCase):
@@ -268,7 +269,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 24)
+                self.assertEqual(len(tools), 31)
                 self.assertTrue(
                     {
                         "workspace_profiles",
@@ -280,6 +281,13 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
                         "workspace_resolve",
                         "workspace_target",
                         "workspace_guidance",
+                        "workspace_status_messages",
+                        "workspace_status_message",
+                        "workspace_update_status",
+                        "workspace_clear_status",
+                        "workspace_status_pending",
+                        "workspace_status_resume",
+                        "workspace_status_forget",
                     }
                     <= {tool.name for tool in tools}
                 )

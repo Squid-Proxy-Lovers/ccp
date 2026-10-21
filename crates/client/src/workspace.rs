@@ -13,6 +13,7 @@ mod read;
 mod recovery;
 mod selection;
 mod store;
+pub mod work_status;
 
 pub use selection::{Selection, SelectionUpdate, Target};
 
@@ -78,6 +79,8 @@ pub struct ProfileInfo {
     pub renewal_due: bool,
     pub pending_content: Option<content::ContentOperationInfo>,
     pub last_content: Option<content::ContentOperationInfo>,
+    pub pending_status: Option<work_status::WorkStatusOperationInfo>,
+    pub last_status: Option<work_status::WorkStatusOperationInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -131,6 +134,7 @@ pub struct WorkspaceProfile {
     pending_record: Option<String>,
     credential_record: Option<String>,
     content_state: content::mutation::State,
+    status_state: work_status::State,
 }
 
 impl WorkspaceProfile {
@@ -175,6 +179,8 @@ impl WorkspaceProfile {
             renewal_due: self.renewal_due(now)?,
             pending_content: self.content_state.pending_info(),
             last_content: self.content_state.last_info(),
+            pending_status: self.status_state.pending_info(),
+            last_status: self.status_state.last_info(),
         })
     }
 
@@ -226,6 +232,7 @@ impl WorkspaceProfile {
         let page = self.fetch_workspaces(after, limit).await?;
         if self.pending.is_none()
             && !self.content_state.is_pending()
+            && !self.status_state.is_pending()
             && !page.workspaces.is_empty()
             && self.renewal_due(crypto::now()?)?
         {

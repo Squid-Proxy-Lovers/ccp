@@ -48,7 +48,12 @@ def targets(name: str, result: dict[str, Any]) -> list[str]:
         values = [object_result(object_result(row).get("workspace")).get("id") for row in rows]
     elif name == "workspace_target":
         values = [object_result(result.get("workspace")).get("id")]
-    elif name in {"workspace_profile", "workspace_list", "workspace_entry_pending"}:
+    elif name in {
+        "workspace_profile",
+        "workspace_list",
+        "workspace_entry_pending",
+        "workspace_status_pending",
+    }:
         values = []
     else:
         values = [result.get("workspace_id")]

@@ -11,9 +11,12 @@ pub(super) fn upgrade(
     version: u32,
 ) -> anyhow::Result<()> {
     snapshot(directory, version)?;
-    if version == 3 {
+    if version >= 3 {
         let tx = profile.connection.transaction()?;
-        tx.execute_batch(CONTENT_SCHEMA)?;
+        if version == 3 {
+            tx.execute_batch(CONTENT_SCHEMA)?;
+        }
+        tx.execute_batch(STATUS_SCHEMA)?;
         tx.pragma_update(None, "user_version", PROFILE_FORMAT)?;
         tx.commit()?;
         return Ok(());
@@ -44,6 +47,7 @@ pub(super) fn upgrade(
         bail!("profile changed before format upgrade");
     }
     tx.execute_batch(CONTENT_SCHEMA)?;
+    tx.execute_batch(STATUS_SCHEMA)?;
     tx.pragma_update(None, "user_version", PROFILE_FORMAT)?;
     tx.commit()?;
     profile.pending_record = pending;
@@ -53,14 +57,14 @@ pub(super) fn upgrade(
 
 fn snapshot(directory: &Path, version: u32) -> anyhow::Result<()> {
     let path = directory.join(PROFILE);
-    private_file(&path)?;
+    profile_file(&path, version)?;
     let bytes = fs::read(path)?;
     let target = directory.join(format!(
         "workspace-profile-v{version}-{}.sqlite3",
         crypto::hash(&bytes)
     ));
     if target.try_exists()? {
-        private_file(&target)?;
+        profile_file(&target, version)?;
         if fs::read(target)? != bytes {
             bail!("profile upgrade snapshot does not match");
         }
@@ -83,4 +87,12 @@ fn snapshot(directory: &Path, version: u32) -> anyhow::Result<()> {
     fs::remove_file(&temporary)?;
     result?;
     sync_directory(directory)
+}
+
+fn profile_file(path: &Path, version: u32) -> anyhow::Result<()> {
+    if version >= 4 {
+        private_file_limit(path, 16 * 1024 * 1024)
+    } else {
+        private_file(path)
+    }
 }

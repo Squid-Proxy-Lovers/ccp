@@ -103,7 +103,7 @@ IDs, a default and a revision, with no credentials, tokens, server roles or
 profile paths. Private atomic publication, DELETE journaling, FULL synchronization,
 exclusive leases, revision checks and no-create opens protect local updates.
 Selections keep format 1 independently of the credential profile, now
-[format 4](workspace-client.md#profile-storage-and-recovery-limits).
+[format 5](workspace-client.md#profile-storage-and-recovery-limits).
 Missing, foreign, future, corrupt, symlinked or loosely permissioned final state
 is refused under the same host/Unix/Windows limits as the
 [profile storage contract](workspace-client.md#profile-storage-and-recovery-limits).

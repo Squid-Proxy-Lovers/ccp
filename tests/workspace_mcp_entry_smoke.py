@@ -303,7 +303,7 @@ async def check():
         )
         async with Client(transport) as client:
             tools = await client.list_tools()
-            assert len(tools) == 24
+            assert len(tools) == 31
             assert {
                 "workspace_mutate_entry",
                 "workspace_entry_pending",

@@ -96,7 +96,7 @@ impl WorkspaceProfile {
         if record.len() > MAX_PENDING {
             bail!("saved entry request exceeds its size limit; no mutation was sent");
         }
-        let changed=self.connection.execute("UPDATE content_state SET pending=?1 WHERE singleton=1 AND pending IS NULL AND last IS ?2 AND EXISTS(SELECT 1 FROM profile WHERE singleton=1 AND pending IS NULL AND credential IS ?3)",params![record,self.content_state.last_record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot persist original entry request; no mutation was sent"))?;
+        let changed=self.connection.execute("UPDATE content_state SET pending=?1 WHERE singleton=1 AND pending IS NULL AND last IS ?2 AND EXISTS(SELECT 1 FROM profile WHERE singleton=1 AND pending IS NULL AND credential IS ?3) AND NOT EXISTS(SELECT 1 FROM status_state WHERE pending IS NOT NULL)",params![record,self.content_state.last_record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot persist original entry request; no mutation was sent"))?;
         if changed != 1 {
             bail!("private entry state changed; no mutation was sent");
         }
@@ -116,7 +116,7 @@ impl WorkspaceProfile {
             outcome,
         };
         let record = serde_json::to_string(&last)?;
-        let changed=self.connection.execute("UPDATE content_state SET pending=NULL,last=?1 WHERE singleton=1 AND pending IS ?2 AND last IS ?3 AND EXISTS(SELECT 1 FROM profile WHERE singleton=1 AND pending IS NULL AND credential IS ?4)",params![record,self.content_state.pending_record,self.content_state.last_record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot save entry outcome; original pending request retained"))?;
+        let changed=self.connection.execute("UPDATE content_state SET pending=NULL,last=?1 WHERE singleton=1 AND pending IS ?2 AND last IS ?3 AND EXISTS(SELECT 1 FROM profile WHERE singleton=1 AND pending IS NULL AND credential IS ?4) AND NOT EXISTS(SELECT 1 FROM status_state WHERE pending IS NOT NULL)",params![record,self.content_state.pending_record,self.content_state.last_record,self.credential_record]).map_err(|_write|anyhow::anyhow!("cannot save entry outcome; original pending request retained"))?;
         if changed != 1 {
             bail!("private entry state changed; preserve the pending request");
         }
