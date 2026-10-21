@@ -1,7 +1,7 @@
 # Native provenance storage
 
-Unreleased server schema25. This storage contract supports the forthcoming native
-converter. Migration creates empty tables and starts no conversion, changes no
+Unreleased server schema25. This storage contract supports the explicit
+[native converter](native-conversion.md). Migration creates empty tables and starts no conversion, changes no
 permissions and does not remove the legacy-content gate. The existing
 [inventory command](native-conversion-inventory.md) remains observation-only.
 There is no new HTTP, client, MCP or panel reader in this storage phase.
@@ -25,19 +25,19 @@ Entry and append rows belong in `ccp_native_entry_rows`, bound to their exact
 workspace and entry. Session, shelf, book, certificate, token and transfer rows
 belong in `ccp_native_workspace_rows`; entry payload must not be placed there.
 Native security records are retained provenance, not usable workspace credentials.
-The future converter must validate ordinary source tables and assign every source
-row to the correct deletion scope before publishing any output.
+The converter validates ordinary source tables and assigns authoritative source
+rows to their deletion scopes before publishing any output.
 
 A source JSON row is limited to 2 MiB, its source key to 8192 bytes and its
 column count to 256. These are support bounds, not historical native storage
 limits. Conversion must refuse values it cannot preserve, leaving the source
-intact, rather than truncating them. The converter will also need to enforce
-normal workspace field bounds and verify complete source accounting.
+intact, rather than truncating them. The converter also enforces normal workspace
+field bounds and verifies complete authoritative source-row accounting.
 
 ## Visibility and sealing
 
-An import starts unsealed; the future converter must record its rows and seal it
-in the same transaction as adopting the content. Sealing is a one-way transition.
+An import starts unsealed; the converter records its rows and seals it in the
+same transaction as adopting the content. Sealing is a one-way transition.
 Rows cannot be updated or replaced, and a sealed import accepts no additional
 rows. These guards protect recorded provenance; they are not remote authorization
 or proof that the source producer stopped.
@@ -73,5 +73,5 @@ migration preserves existing records and pending deletion jobs, and updates
 cleanup guards atomically. No imports, policies or cleanup jobs are seeded.
 Schema24 binaries refuse25; rollback requires the complete matching old backup
 and its producing binary. Never lower the schema marker or copy selected tables
-to force a downgrade. Verified conversion and external access adapters remain
-separate work.
+to force a downgrade. Conversion is an explicit offline operation; external
+provenance access adapters remain separate work.

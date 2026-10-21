@@ -12,6 +12,7 @@ pub mod journal;
 pub mod legacy_inspection;
 pub mod local_admin;
 pub mod message;
+pub mod native_conversion;
 pub mod state;
 pub mod workspace_http;
 

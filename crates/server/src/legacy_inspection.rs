@@ -5,8 +5,8 @@
 use serde::Serialize;
 use std::path::Path;
 
-mod query;
-mod snapshot;
+pub(crate) mod query;
+pub(crate) mod snapshot;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InspectionError {

@@ -20,6 +20,7 @@ const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server workspace-tls-info --data-dir <DIR>
   server workspace-tls-renew --data-dir <DIR> [--name <DNS_OR_IP>...]
   server legacy-inspect --data-dir <DIR>
+  server legacy-convert --data-dir <DIR> --destination <NEW_DIR> --expect-source-sha256 <HEX> --operator <NAME> --confirm-offline
   server admin-info --data-dir <DIR>
   server reset-instance-key --data-dir <DIR> --principal <UUID> [--ttl-seconds <SECONDS>]
   server reset-owner-key --data-dir <DIR> --workspace <UUID> [--ttl-seconds <SECONDS>]"#;
@@ -42,6 +43,8 @@ enum Command {
     AdminInfo(LocalDataArgs),
     /// Observe a stopped native database; never converts or modifies its source.
     LegacyInspect(LocalDataArgs),
+    /// Convert an offline native schema-2 source into a new workspace instance.
+    LegacyConvert(LegacyConvertArgs),
     WorkspaceTlsInit(WorkspaceTlsArgs),
     WorkspaceTlsInfo(LocalDataArgs),
     WorkspaceTlsRenew(WorkspaceTlsRenewArgs),
@@ -69,6 +72,27 @@ struct IssueTokenArgs {
 struct LocalDataArgs {
     #[arg(long, value_name = "DIR")]
     data_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct LegacyConvertArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "NEW_DIR")]
+    destination: PathBuf,
+    #[arg(long, value_name = "HEX")]
+    expect_source_sha256: String,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Create this new global administrator as the initial owner of every imported workspace"
+    )]
+    operator: String,
+    #[arg(
+        long,
+        help = "Confirm that the producing server and tools are stopped; retain the complete source and matching binary"
+    )]
+    confirm_offline: bool,
 }
 
 #[derive(Args)]
@@ -205,6 +229,15 @@ async fn execute_command(command: Command) -> anyhow::Result<()> {
         Command::LegacyInspect(args) => {
             print_json(&server::legacy_inspection::inspect(&args.data_dir)?)
         }
+        Command::LegacyConvert(args) => print_conversion(server::native_conversion::convert(
+            &server::native_conversion::ConversionOptions {
+                data_dir: args.data.data_dir,
+                destination: args.destination,
+                expected_source_sha256: args.expect_source_sha256,
+                operator: args.operator,
+                confirm_offline: args.confirm_offline,
+            },
+        )?),
         Command::AdminInfo(args) => print_json(&server::local_admin::info(&args.data_dir)?),
         Command::ResetInstanceKey(args) => print_reset(server::local_admin::reset_key(
             &args.data.data_dir,
@@ -248,6 +281,17 @@ fn print_reset(result: server::foundation::LocalKeyReset) -> anyhow::Result<()> 
         "key_id": result.key.id.to_string(), "secret": result.key.secret(),
         "expires_at": result.expires_at, "revoked_keys": result.revoked_keys
     }))
+}
+
+fn print_conversion(result: server::native_conversion::ConversionResult) -> anyhow::Result<()> {
+    let workspaces=result.workspaces.iter().map(|w|serde_json::json!({
+        "workspace_id":w.id.to_string(),"name":w.name,"owner_key_id":w.owner_key.id.to_string(),"owner_key":w.owner_key.secret()
+    })).collect::<Vec<_>>();
+    print_json(&serde_json::json!({"receipt":result.receipt,
+        "principal_id":result.instance_key.principal_id.to_string(),
+        "instance_admin_key":{"id":result.instance_key.id.to_string(),"secret":result.instance_key.secret()},
+        "workspaces":workspaces
+    })).map_err(|_error|server::native_conversion::ConversionError::PublicationUnconfirmed.into())
 }
 
 fn print_json(value: &impl serde::Serialize) -> anyhow::Result<()> {

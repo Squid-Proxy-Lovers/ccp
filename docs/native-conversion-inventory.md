@@ -70,10 +70,13 @@ full required native layout must also exist. No migration fills missing columns,
 so older layouts can be refused. This does not establish tested conversion support
 for every admitted schema, validate every value against workspace field bounds,
 parse historical timestamp strings or reconstruct missing creation history.
+The separate [explicit converter](native-conversion.md) supports native schema2
+with its documented target-field and resource bounds; inspection alone does not
+establish that conversion will accept a source.
 
 Native creator identities were not recorded as registered workspace clients.
 Owner/CN/agent labels must not become owners or grants merely because they match
-names. The later converter must preserve raw history, archives and provenance
-without inventing ownership or earlier full snapshots. Actual conversion remains
-unimplemented; existing legacy-linked workspace content remains guarded. See the
+names. The explicit native2 converter preserves raw history, archives and provenance
+without inventing ownership or earlier full snapshots. Existing legacy-linked
+workspace content in mixed databases remains guarded. See the
 [workspace content boundary](workspace-content.md#schema-and-legacy-data).

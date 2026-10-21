@@ -22,6 +22,7 @@ the other guides describe the supported native interface.
 | --- | --- |
 | Deploy, issue tokens, inspect health, and manage persistence | [Server guide](server.md) |
 | Understand native source provenance, visibility and deletion scope | [Native provenance storage](native-provenance.md) |
+| Convert an offline native schema-2 instance into a fresh workspace instance | [Native conversion](native-conversion.md) |
 | Install or pin a main nightly | [Nightly builds](nightly-builds.md) |
 | Set up unreleased workspace administration or replace lost admin keys locally | [Local administration](local-workspace-administration.md) |
 | Provision unreleased instance certificates and export public trust | [Instance TLS identity](instance-tls-identity.md) |

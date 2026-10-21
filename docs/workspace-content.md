@@ -233,10 +233,11 @@ Native wire protocol 1 and workspace JSON API 1 are unchanged.
 The internal hierarchy API refuses a workspace mapped from a legacy native
 session until its content conversion is verified. It does not report an empty
 workspace, copy unreplayed native SQLite, or infer ownership from legacy text.
-Conversion must account for the journal under exclusive activation before those
-contents can be exposed through the new path. Continue using the supported native
-interface with its original data until that transition is implemented.
-Do not activate workspace mode for legacy content yet: activation blocks native
+For supported native schema2, the [explicit offline converter](native-conversion.md)
+preserves authoritative raw rows and creates a fresh workspace instance at a new
+destination. It retains the original native directory for rollback. Databases
+already mixing native and workspace state remain guarded and are refused by that
+converter. Workspace activation alone never converts content; it blocks native
 access and has no in-place deactivation. See the
 [activation and backup boundary](workspace-runtime-mode.md#explicit-workspace-activation).
 

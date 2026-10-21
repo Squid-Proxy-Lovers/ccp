@@ -150,7 +150,7 @@ const TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 
-pub(super) fn inventory(
+pub(crate) fn inventory(
     db: &Connection,
 ) -> Result<(u32, &'static str, NativeCounts, WorkspaceCounts)> {
     let schema = schema(db)?;

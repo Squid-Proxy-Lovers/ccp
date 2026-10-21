@@ -262,8 +262,8 @@ until a separately confirmed whole-workspace job retires that namespace.
 The local [native inventory command](native-conversion-inventory.md) observes a
 stopped source through a private copy, returning aggregate counts and a source
 fingerprint without initialization or conversion. It grants no ownership or
-access and does not remove the legacy-content gate. Actual conversion remains
-subsequent work.
+access and does not remove the legacy-content gate. Conversion is a separate
+explicit operation, described below.
 
 ## Native provenance storage
 
@@ -271,5 +271,6 @@ Schema25 adds empty [native provenance tables](native-provenance.md) and a scope
 internal history reader. Typed source rows retain original values without claiming
 historical creators or granting access. Entry provenance follows entry purges;
 workspace provenance follows confirmed whole-workspace cleanup. Migration starts
-no import and leaves the legacy-content gate in place. The converter and external
-read adapters remain subsequent work.
+no import and leaves the legacy-content gate in place. The explicit
+[native converter](native-conversion.md) builds an independent new instance from
+supported native2 sources. External provenance read adapters remain subsequent work.

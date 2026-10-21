@@ -10,19 +10,19 @@ use std::path::{Path, PathBuf};
 pub(super) const MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Fingerprint {
+pub(crate) struct Fingerprint {
     pub bytes: u64,
     pub sha256: String,
 }
 
-pub(super) struct Snapshot {
+pub(crate) struct Snapshot {
     source: PathBuf,
     database: PathBuf,
     pub fingerprint: Fingerprint,
     _scratch: Scratch,
 }
 impl Snapshot {
-    pub(super) fn capture(directory: &Path) -> Result<Self> {
+    pub(crate) fn capture(directory: &Path) -> Result<Self> {
         if !directory.is_absolute() {
             return Err(Error::SourceUnavailable);
         }
@@ -62,10 +62,10 @@ impl Snapshot {
             _scratch: scratch,
         })
     }
-    pub(super) fn database(&self) -> &Path {
+    pub(crate) fn database(&self) -> &Path {
         &self.database
     }
-    pub(super) fn verify(&self) -> Result<()> {
+    pub(crate) fn verify(&self) -> Result<()> {
         clean(&self.source)?;
         let mut file = source_file(&self.source.join("ccp.sqlite3"))?;
         if stream(&mut file, None)? != self.fingerprint {
