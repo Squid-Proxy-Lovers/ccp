@@ -26,7 +26,35 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
     if input.method != Method::GET {
         return Err(Error::Method);
     }
-    let (mime, bytes): (&str, &'static [u8]) = match input.path.as_str() {
+    let (mime, bytes) = asset(&input.path)?;
+    let mut reply = Response::new(Full::new(Bytes::from_static(bytes)));
+    let headers = reply.headers_mut();
+    headers.insert(
+        "content-type",
+        HeaderValue::from_str(mime).map_err(|_mime| Error::Unavailable)?,
+    );
+    for (name, value) in [
+        ("cache-control", "no-store"),
+        ("x-content-type-options", "nosniff"),
+        ("referrer-policy", "no-referrer"),
+        ("x-frame-options", "DENY"),
+        (
+            "content-security-policy",
+            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+        ),
+        ("cross-origin-opener-policy", "same-origin"),
+        (
+            "permissions-policy",
+            "camera=(), microphone=(), geolocation=()",
+        ),
+    ] {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    Ok(reply)
+}
+
+fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
+    let value: (&'static str, &'static [u8]) = match path {
         "/admin" | "/admin/" => (
             "text/html; charset=utf-8",
             include_bytes!("panel/index.html"),
@@ -55,6 +83,10 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
         "/admin/guidance.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("panel/guidance.js"),
+        ),
+        "/admin/deletion.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("panel/deletion.js"),
         ),
         "/admin/settings.js" => (
             "text/javascript; charset=utf-8",
@@ -90,28 +122,5 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
         ),
         _ => return Err(Error::NotFound),
     };
-    let mut reply = Response::new(Full::new(Bytes::from_static(bytes)));
-    let headers = reply.headers_mut();
-    headers.insert(
-        "content-type",
-        HeaderValue::from_str(mime).map_err(|_mime| Error::Unavailable)?,
-    );
-    for (name, value) in [
-        ("cache-control", "no-store"),
-        ("x-content-type-options", "nosniff"),
-        ("referrer-policy", "no-referrer"),
-        ("x-frame-options", "DENY"),
-        (
-            "content-security-policy",
-            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
-        ),
-        ("cross-origin-opener-policy", "same-origin"),
-        (
-            "permissions-policy",
-            "camera=(), microphone=(), geolocation=()",
-        ),
-    ] {
-        headers.insert(name, HeaderValue::from_static(value));
-    }
-    Ok(reply)
+    Ok(value)
 }

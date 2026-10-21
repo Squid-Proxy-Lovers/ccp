@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -624,4 +624,76 @@ test('separate status observations preserve stale Unicode and cleared tombstones
   assert.throws(() => reportedWorkStatus(cleared, workspace.id, false));
   assert.throws(() => reportedWorkStatus({...cleared, stale: false}, workspace.id));
   assert.throws(() => reportedWorkStatus({...cleared, agent: 'not cleared'}, workspace.id));
+});
+
+
+const deletionWs = '12345678-1111-2222-3333-123456789abc';
+const deletionOp = '12345678-1111-2222-3333-123456789def';
+const deletionSession = () => {
+  const s = session(); s.identity.scope.workspace_id = deletionWs; return s;
+};
+const deletedWorkspace = () => ({id: deletionWs, name: 'archived context', archived: true});
+const deletionBase = () => ({workspace_id: deletionWs, name: 'archived context', lifecycle_revision: 2});
+const deletionResult = () => ({workspace_id: deletionWs, operation_id: deletionOp, lifecycle_revision: 3, started_at: 1000, completed_at: null});
+
+test('workspace deletion requires archived owner/global role, exact UUID confirmation and a verified lifecycle preview', () => {
+  const s = deletionSession(), w = deletedWorkspace(), p = deletionBase();
+  assert.equal(canDeleteWorkspace(s, w), true);
+  for (const alter of [x => {x.identity.scope.role = 'admin';}, x => {x.identity.scope.workspace_id = 'foreign';}]) {
+    const other = deletionSession(); alter(other);
+    assert.equal(canDeleteWorkspace(other, w), false);
+    assert.throws(() => new WorkspaceDeletionIntent(other, w, p, deletionWs, true, deletionOp));
+  }
+  const global = deletionSession(); global.identity.scope = {kind: 'instance'};
+  assert.equal(canDeleteWorkspace(global, w), true);
+  assert.equal(canDeleteWorkspace(s, {...w, archived: false}), false);
+  for (const value of [false, 'true', null]) assert.throws(() => new WorkspaceDeletionIntent(s, w, p, deletionWs, value, deletionOp));
+  for (const value of ['wrong', deletionWs.toUpperCase(), '', ' '+deletionWs]) assert.throws(() => new WorkspaceDeletionIntent(s, w, p, value, true, deletionOp));
+  for (const value of [0, -1, 1.5, '2', Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER+1]) assert.throws(() => deletionPreview({...p, lifecycle_revision: value}, w));
+  for (const value of [{...p, workspace_id: deletionOp}, {...p, name: 'renamed'}]) assert.throws(() => deletionPreview(value, w));
+  assert.throws(() => new WorkspaceDeletionIntent(s, w, p, deletionWs, true, '00000000-0000-0000-0000-000000000000'));
+});
+
+test('deletion intent freezes original proof/body and cannot cross any session even for the same key', () => {
+  const s = deletionSession(), p = deletionBase();
+  const intent = new WorkspaceDeletionIntent(s, deletedWorkspace(), p, deletionWs, true, deletionOp);
+  const first = intent.request(s); p.lifecycle_revision = 9;
+  assert.deepEqual(JSON.parse(first.body), {workspace_id: deletionWs, operation_id: deletionOp, expected_revision: 2, confirm_workspace_id: deletionWs});
+  assert.deepEqual(intent.request(structuredClone(s)), first);
+  for (const alter of [x => {x.csrf_token = 'new proof';}, x => {x.instance_id = 'other';}, x => {x.identity.key_id = 'other';}, x => {x.identity.principal_id = 'other';}, x => {x.identity.scope = {kind: 'instance'};}]) {
+    const changed = deletionSession(); alter(changed); assert.throws(() => intent.request(changed), /session changed/);
+  }
+  assert.throws(() => {intent.body = '{}';}, TypeError);
+});
+
+test('deletion receipt distinguishes pending from complete and never replaces a known receipt with stale or foreign data', () => {
+  const intent = new WorkspaceDeletionIntent(deletionSession(), deletedWorkspace(), deletionBase(), deletionWs, true, deletionOp);
+  const pending = deletionReceipt({...deletionResult(), text: 'PRIVATE'}, intent);
+  assert.equal(pending.completed_at, null); assert.equal('text' in pending, false);
+  const complete = deletionReceipt({...deletionResult(), completed_at: 1001}, intent, pending);
+  assert.equal(complete.completed_at, 1001);
+  for (const bad of [{...deletionResult(), workspace_id: deletionOp}, {...deletionResult(), operation_id: deletionWs},
+    {...deletionResult(), lifecycle_revision: 4}, {...deletionResult(), started_at: -1}, {...deletionResult(), started_at: '1000'},
+    {...deletionResult(), started_at: Number.MAX_SAFE_INTEGER+1}, {...deletionResult(), completed_at: undefined},
+    {...deletionResult(), completed_at: 999}, {...deletionResult(), completed_at: '1001'}]) assert.throws(() => deletionReceipt(bad, intent));
+  for (const bad of [deletionResult(), {...complete, completed_at: 1002}, {...complete, started_at: 999}]) assert.throws(() => deletionReceipt(bad, intent, complete));
+  assert.deepEqual(deletionReceipt(complete, intent, complete), complete);
+});
+
+test('new global session may inspect same-instance body-free tracking but cannot resend the original owner intent', () => {
+  const owner = deletionSession(), intent = new WorkspaceDeletionIntent(owner, deletedWorkspace(), deletionBase(), deletionWs, true, deletionOp);
+  const global = deletionSession(); global.csrf_token = 'global proof'; global.identity.scope = {kind: 'instance'};
+  assert.throws(() => intent.request(global));
+  assert.deepEqual(deletionStatusRequest(global, intent), {workspace_id: deletionWs, operation_id: deletionOp});
+  assert.throws(() => deletionStatusRequest(owner, intent));
+  assert.throws(() => deletionStatusRequest({...global, instance_id: 'other instance'}, intent));
+  const lookup = deletionLookup(global, deletionWs, deletionOp);
+  assert.equal(deletionReceipt(deletionResult(), lookup).lifecycle_revision, 3);
+  for (const value of ['bad', deletionWs.toUpperCase(), '', '00000000-0000-0000-0000-000000000000']) assert.throws(() => deletionLookup(global, value, deletionOp));
+  assert.throws(() => deletionLookup(owner, deletionWs, deletionOp));
+  const exported = JSON.parse(deletionTracking(intent, deletionReceipt(deletionResult(), intent)));
+  assert.equal(exported.instance_id, owner.instance_id); assert.equal(exported.request.expected_revision, 2);
+  for (const value of ['proof', 'session', 'key_id', 'principal_id']) assert.equal(value in exported, false);
+  assert.equal(JSON.stringify(exported).includes('global proof'), false);
+  assert.equal('request' in JSON.parse(deletionTracking(lookup, null)), false);
 });

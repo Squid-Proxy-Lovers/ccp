@@ -528,3 +528,74 @@ export class StatusClearIntent {
     return value;
   }
 }
+
+const deletionUuid = value => typeof value === 'string'
+  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+  && value !== '00000000-0000-0000-0000-000000000000';
+
+export function canDeleteWorkspace(session, workspace) {
+  return workspace?.archived === true && canChangeLifecycle(session, workspace);
+}
+
+export function deletionPreview(value, workspace) {
+  if (workspace?.archived !== true || !deletionUuid(workspace.id) || value?.workspace_id !== workspace.id
+    || value.name !== workspace.name || !Number.isSafeInteger(value.lifecycle_revision)
+    || value.lifecycle_revision < 1 || value.lifecycle_revision >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('The archived workspace confirmation could not be verified. Read current settings again.');
+  }
+  return Object.freeze({workspace_id: value.workspace_id, name: value.name, lifecycle_revision: value.lifecycle_revision});
+}
+
+export function deletionLookup(session, workspace, operation) {
+  if (session.identity.scope.kind !== 'instance' || !deletionUuid(workspace) || !deletionUuid(operation)) {
+    throw new Error('Use an instance key and the exact workspace and operation UUIDs from the original request.');
+  }
+  return Object.freeze({instance_id: session.instance_id, workspace_id: workspace, operation_id: operation});
+}
+
+export function deletionStatusRequest(session, reference) {
+  if (session.instance_id !== reference.instance_id || session.identity.scope.kind !== 'instance') {
+    throw new Error('A current instance-admin key on the original instance is required to inspect this deletion.');
+  }
+  return {workspace_id: reference.workspace_id, operation_id: reference.operation_id};
+}
+
+export function deletionReceipt(value, reference, previous = null) {
+  if (value?.workspace_id !== reference.workspace_id || value.operation_id !== reference.operation_id
+    || !Number.isSafeInteger(value.lifecycle_revision) || value.lifecycle_revision < 2
+    || reference.expected_revision !== undefined && value.lifecycle_revision !== reference.expected_revision + 1
+    || !Number.isSafeInteger(value.started_at) || value.started_at < 0
+    || value.completed_at !== null && (!Number.isSafeInteger(value.completed_at) || value.completed_at < value.started_at)
+    || previous && (value.lifecycle_revision !== previous.lifecycle_revision || value.started_at !== previous.started_at
+      || previous.completed_at !== null && value.completed_at !== previous.completed_at)) {
+    throw new Error('The deletion receipt could not be verified. Keep the original tracking details and last confirmed receipt.');
+  }
+  return Object.freeze({workspace_id: value.workspace_id, operation_id: value.operation_id,
+    lifecycle_revision: value.lifecycle_revision, started_at: value.started_at, completed_at: value.completed_at});
+}
+
+export class WorkspaceDeletionIntent {
+  constructor(session, workspace, preview, confirmedId, confirmed, operation = crypto.randomUUID()) {
+    const target = deletionPreview(preview, workspace);
+    if (!canDeleteWorkspace(session, workspace) || confirmedId !== target.workspace_id || confirmed !== true || !deletionUuid(operation)) {
+      throw new Error('Use the owner or instance key, type this archived workspace’s exact UUID, and confirm irreversible deletion.');
+    }
+    this.kind = 'workspace_deletion'; this.instance_id = session.instance_id;
+    this.workspace_id = target.workspace_id; this.operation_id = operation;
+    this.expected_revision = target.lifecycle_revision;
+    this.session = signature(session); this.proof = session.csrf_token;
+    this.body = JSON.stringify({workspace_id: this.workspace_id, operation_id: operation,
+      expected_revision: target.lifecycle_revision, confirm_workspace_id: confirmedId});
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. This deletion cannot be sent under the new session.');
+    return {body: this.body, proof: this.proof};
+  }
+}
+
+export function deletionTracking(reference, receipt) {
+  // Deliberately project only body-free IDs/receipt; no key, CSRF proof or session signature.
+  return JSON.stringify({instance_id: reference.instance_id, workspace_id: reference.workspace_id,
+    operation_id: reference.operation_id, ...(reference.body ? {request: JSON.parse(reference.body)} : {}), receipt}, null, 2);
+}

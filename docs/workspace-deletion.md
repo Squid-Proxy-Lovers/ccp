@@ -1,10 +1,47 @@
 # Permanently delete an archived workspace
 
-Unreleased workspace API1, server schema24. The desktop deletion flow is not yet
-implemented. [Archive/reactivate](workspace-http-api.md) preserves context for
+Unreleased workspace API1, server schema24. The desktop panel exposes the same confirmation and tracking flow. [Archive/reactivate](workspace-http-api.md) preserves context for
 reading; permanent deletion is a separate, irreversible action available only to
 that workspace's owner or an instance administrator. Workspace admins and clients
 cannot delete a workspace.
+
+## Delete through the desktop panel
+
+Open an already archived workspace’s **Settings → Permanent workspace deletion**
+with its owner key or an instance-admin key. Choose **Prepare permanent deletion**
+to read the current name, UUID and lifecycle revision. Type that exact workspace
+UUID and check the separate irreversible-deletion confirmation, then choose
+**Permanently delete workspace**. Other settings stay disabled while preparing;
+**Cancel deletion preparation** sends no deletion request.
+
+A valid start receipt is recorded before checking the session again. Workspace
+keys lose their role immediately, so an owner returns through the sign-in screen
+with the receipt still visible. Choose **Return to sign in; keep deletion tracking**
+and use a current instance-admin key to check completion. Instance admins can
+continue managing other workspaces after a confirmed start.
+
+**Workspace deletion started** means access has ended and cleanup is pending.
+Large cleanups can take hours. **Check deletion completion** makes a deliberate
+status read; the panel does not poll or retry deletion automatically. A failed or
+mismatched status response keeps the last confirmed receipt. Only an actual
+completion receipt changes the heading to **Workspace cleanup complete**.
+
+If a response is lost, **Workspace deletion outcome unconfirmed** retains the
+original request UUID, target and revision. **Change key to inspect deletion**
+opens the normal session lock/sign-in path without cancelling or resending it.
+A current instance key on the original instance may read status after a deliberate
+key change. It cannot resend the original owner’s mutation under its new session.
+Permission loss or a missing status never proves the original request failed.
+
+Tracking is kept only in this page’s memory across key changes. **Copy deletion
+tracking** exports the instance/workspace/operation IDs, the original request when
+available, and the last receipt. It contains no admin key or CSRF proof. Copy it
+before closing or reloading the page; the browser warns while tracking remains.
+After reload, an instance admin can choose **Inspect workspace deletion** and enter
+the original workspace and operation UUIDs. That lookup only reads status.
+**Forget local deletion tracking** removes local tracking after confirmation; it
+never cancels server cleanup or a delayed request. One deletion is tracked at a
+time; explicitly copy/forget it before preparing another.
 
 ## Prepare and confirm
 

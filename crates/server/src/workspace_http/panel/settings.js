@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, wire} from './model.js';
 import {showTeam} from './team.js';
+import {showDeletionSettings} from './deletion.js';
 import {canManageTeam} from './model.js';
 import {byId, el, button, field, select, actions, notice, stamp, copy} from './view.js';
 
@@ -17,6 +18,7 @@ export async function showSettings(api) {
   })));
   const section = el('section', undefined, 'retention-settings');
   section.append(el('h3', 'Archived entry retention'), el('p', 'Loading current policy…', 'muted')); root.append(section);
+  showDeletionSettings(api, root);
   try {
     const policy = retentionPolicy(await api.request(GET, {workspace_id: api.state.workspace.id}), api.state.workspace.id);
     retention(api, section, policy);

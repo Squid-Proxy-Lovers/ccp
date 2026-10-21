@@ -26,8 +26,9 @@
       <p class="muted">A reusable link contains your key. Anyone with it has that key’s access. Save it privately; revoke the key to invalidate it.</p>
     </section>
     <section id="locked" hidden></section>
+    <section id="deletion-tracker" class="deletion-tracker" aria-label="Workspace deletion tracking" hidden></section>
     <section id="workspace-app" hidden>
-      <div class="toolbar"><h1>Workspaces</h1><button id="global-guidance" type="button">Global guidance</button><button id="refresh" type="button">Refresh</button><button id="signout" type="button">Sign out / change key</button></div>
+      <div class="toolbar"><h1>Workspaces</h1><button id="deletion-lookup" type="button" hidden>Inspect workspace deletion</button><button id="global-guidance" type="button">Global guidance</button><button id="refresh" type="button">Refresh</button><button id="signout" type="button">Sign out / change key</button></div>
       <div class="workspace-layout"><nav id="workspaces" aria-label="Workspaces"></nav><div class="workspace-body">
         <div id="workspace-heading"><p>Select a workspace to manage access or read shared context.</p></div>
         <nav id="workspace-tabs" class="tabs" aria-label="Workspace views" hidden><button id="access-tab" type="button">Clients &amp; access</button><button id="context-tab" type="button">Context &amp; history</button><button id="reported-tab" type="button">Reported work</button><button id="guidance-tab" type="button">Guidance</button><button id="settings-tab" type="button">Settings</button></nav>

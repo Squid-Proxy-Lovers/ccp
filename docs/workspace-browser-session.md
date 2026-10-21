@@ -255,7 +255,11 @@ Open a workspace’s **Settings** tab. Its owner or an authorized instance key c
 A workspace admin key can manage active retention but cannot change workspace
 lifecycle. Archived context remains readable; content writes and new admission
 stop, and timed cleanup pauses. Reactivation resumes the saved remaining time.
-Permanent whole-workspace deletion is not exposed by this panel or its current API.
+For separate irreversible removal, the owner or an instance admin can use
+**Settings → Permanent workspace deletion** after archival. The
+[deletion flow and receipt tracker](workspace-deletion.md#delete-through-the-desktop-panel)
+keep confirmed starts distinct from cleanup completion and preserve body-free
+tracking through the expected loss of the deleting owner’s key role.
 
 Retention is manual by default. Current policy metadata is available to scoped
 owners/admins and instance keys; only an active workspace’s owner/admin key can

@@ -6,10 +6,11 @@ import {showContext} from './context.js';
 import {showGuidance} from './guidance.js';
 import {showSettings} from './settings.js';
 import {showReported} from './reported.js';
+import {renderDeletionTracker, lookupDeletion} from './deletion.js';
 
 let fragmentKey = takeFragment(location, history);
 const state = {session: null, workspace: null, generation: 0, dirty: false, pending: null,
-  draft: '', locked: false, busy: false, tab: 'access', cursor: null};
+  draft: '', locked: false, busy: false, tab: 'access', cursor: null, deletion: null};
 
 function mayLeave() {
   if (state.dirty || state.pending) {
@@ -40,10 +41,13 @@ function lock(message) {
       ? 'This action has no operation ID. Discarding locally does not cancel execution. Copy the original endpoint and target, then read the current metadata before another action.'
       : 'A pending write may already have completed. Discarding here does not cancel it on the server. Keep the original request details to investigate.'));
   }
-  actions(panel, button('Discard local work and return to sign in', () => {
-    if (!confirm('Discard local work? Any uncertain server write remains uncertain.')) return;
+  const deletionOnly = state.deletion && (!state.pending || state.pending === state.deletion.reference);
+  actions(panel, button(deletionOnly ? 'Return to sign in; keep deletion tracking' : 'Discard local work and return to sign in', () => {
+    if (!confirm(deletionOnly ? 'Return to sign in? Deletion tracking stays on this page. Any server request remains uncancelled.'
+      : 'Discard local work? Any uncertain server write remains uncertain.')) return;
     reset();
   }));
+  renderDeletionTracker(api);
   notice(message);
 }
 
@@ -64,6 +68,7 @@ function reset() {
   byId('identity').removeAttribute('title');
   byId('login').hidden = false;
   byId('key').focus();
+  renderDeletionTracker(api);
 }
 
 async function verify() {
@@ -125,6 +130,7 @@ async function run(action) {
 const api = {
   state, request, verify, run, mayLeave, lock,
   reloadWorkspace: renderWorkspace,
+  refreshWorkspaces: workspaces,
   workspaceAcknowledged(archived) {
     state.workspace = {...state.workspace, archived};
     const label = byId('workspace-state');
@@ -245,6 +251,8 @@ async function activate(session) {
   byId('workspace-app').hidden = false;
   byId('locked').hidden = true;
   const scope = session.identity.scope;
+  byId('deletion-lookup').hidden = scope.kind !== 'instance';
+  renderDeletionTracker(api);
   byId('identity').textContent = `${session.identity.principal_name} · ${session.identity.key_name} · ${scope.kind === 'instance' ? 'Instance admin' : 'Workspace ' + scope.role} · Session ends ${stamp(session.expires_at)}`;
   byId('identity').title = `Key ${session.identity.key_id} · Instance ${session.instance_id}. Key/principal labels do not identify the individual using a shared key.`;
   byId('workspace-heading').replaceChildren(el('p', 'Select a workspace to manage access or read shared context.'));
@@ -273,6 +281,9 @@ byId('copy-link').addEventListener('click', async () => {
     input.focus(); input.select();
   }
 });
+byId('deletion-lookup').addEventListener('click', () => run(() => {
+  if (mayLeave()) lookupDeletion(api);
+}));
 byId('refresh').addEventListener('click', () => run(async () => {
   if (!mayLeave()) return;
   if (state.tab === 'global-guidance') await globalGuidance();
@@ -298,7 +309,7 @@ byId('signout').addEventListener('click', () => run(async () => {
   notice('Signed out of this browser session. Your underlying key remains valid until revoked or expired.');
 }));
 window.addEventListener('beforeunload', event => {
-  if (state.dirty || state.pending) { event.preventDefault(); event.returnValue = ''; }
+  if (state.dirty || state.pending || state.deletion) { event.preventDefault(); event.returnValue = ''; }
 });
 window.addEventListener('focus', () => {
   if (state.session && !state.locked && !state.busy) run(verify);

@@ -6,3 +6,5 @@
 @media(max-width:800px){.workspace-layout,.context-layout{grid-template-columns:1fr}#workspaces,.browser{border-right:0;border-bottom:1px solid var(--line);padding:0 0 1rem}#workspaces{display:flex;gap:.5rem;flex-wrap:wrap}#workspaces button{width:auto}header{flex-wrap:wrap;gap:.75rem}#identity{margin-left:0;text-align:left;width:100%}.entry-list{max-height:16rem;overflow:auto}#login{margin:2rem auto}textarea.body{min-height:16rem}}
 
 .reported-table{table-layout:fixed}.reported-table th:nth-child(1){width:28%}.reported-table th:nth-child(2){width:45%}.reported-table th:nth-child(3){width:27%}.reported-table td{overflow-wrap:anywhere}.reported-table pre{font:inherit;white-space:pre-wrap;max-width:none;margin:0}
+
+.deletion-settings{margin-top:2rem;padding-top:1rem;border-top:1px solid var(--line)}.deletion-tracker{margin:1.5rem 0;padding:1.5rem;border:1px solid var(--line);background:var(--surface)}.deletion-tracker textarea{max-width:80ch;min-height:10rem;font-family:ui-monospace,monospace;font-size:.85rem}.deletion-settings form{max-width:72ch}
