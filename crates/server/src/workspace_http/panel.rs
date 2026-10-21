@@ -76,6 +76,10 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
             "text/javascript; charset=utf-8",
             include_bytes!("panel/enrollment.js"),
         ),
+        "/admin/archives.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("panel/archives.js"),
+        ),
         "/admin/client_access.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("panel/client_access.js"),

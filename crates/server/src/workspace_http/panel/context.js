@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {Intent, wire, exactRevision} from './model.js';
+import {showArchivedShelves, showShelf, purgeForm} from './archives.js';
 import {byId, el, button, field, select, actions, notice, stamp, copy} from './view.js';
 
 const path = name => '/api/v1/content/' + name;
@@ -20,6 +21,7 @@ export async function showContext(api) {
 async function shelves(api, root, after = null) {
   const page = await api.request(path('shelves/list'), {...target(api), after, limit: 32});
   root.replaceChildren(el('h2', 'Shared context'));
+  actions(root, button('Browse archived shelves', () => api.run(() => showArchivedShelves(api, byId('editor'), () => showContext(api)))));
   const shelf = select(root, 'Shelf', page.items, id => api.run(async () => {
     if (!api.mayLeave()) { shelf.value = shelf.dataset.previous || ''; return; }
     shelf.dataset.previous = id;
@@ -38,6 +40,7 @@ async function shelves(api, root, after = null) {
 async function books(api, root, shelfId, after = null) {
   const page = await api.request(path('books/list'), {...target(api), shelf_id: shelfId, after, limit: 32});
   root.replaceChildren();
+  actions(root, button('Inspect shelf archive state', () => api.run(async () => { if (api.mayLeave()) await showShelf(api, byId('editor'), shelfId, () => showContext(api)); })));
   const book = select(root, 'Book', page.items, id => api.run(async () => {
     if (!api.mayLeave()) { book.value = book.dataset.previous || ''; return; }
     book.dataset.previous = id;
@@ -111,8 +114,9 @@ function archivedEntry(api, entry, context) {
   const root = byId('editor');
   root.replaceChildren(el('h2', entry.name)); metadata(root, entry);
   root.append(el('p', 'Archived entry. Body and history are unavailable until restoration.'));
+  purgeForm(api, root, entry, () => showContext(api));
   if (api.writable()) actions(root, button('Restore entry', () => api.run(async () => {
-    if (!confirm('Restore this entry? A name collision will be refused.')) return;
+    if (!api.mayLeave() || !confirm('Restore this entry? A name collision will be refused.')) return;
     await mutate(api, root, {action: 'restore', entry_id: entry.id, expected_revision: exactRevision(entry.revision)}, context);
   }), 'primary'));
 }

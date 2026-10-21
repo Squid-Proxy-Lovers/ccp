@@ -425,3 +425,49 @@ export class ClientAccessAttempt {
     this.#sent = true; return {body: this.requestBody, proof: this.proof};
   }
 }
+
+export function shelfState(value, workspaceId, shelfId) {
+  if (value?.workspace_id !== workspaceId || value.shelf_id !== shelfId || typeof value.archived !== 'boolean') throw new Error('The shelf state did not match the requested target.');
+  exactRevision(value.revision); return value;
+}
+export function archivedShelfPage(value, workspaceId) {
+  if (!Array.isArray(value?.items) || value.items.length > 32 || value.next_cursor !== null && typeof value.next_cursor !== 'string') throw new Error('The archived shelf page could not be verified.');
+  const ids = new Set();
+  for (const item of value.items) {
+    if (item?.workspace_id !== workspaceId || typeof item.id !== 'string' || !item.id || ids.has(item.id) || typeof item.name !== 'string') throw new Error('The archived shelf metadata did not match this workspace.');
+    exactRevision(item.revision); ids.add(item.id);
+  }
+  if (value.next_cursor !== null && (!value.items.length || value.next_cursor !== value.items.at(-1).id)) throw new Error('The archived shelf cursor could not be verified.');
+  return value;
+}
+export class ContentAdminIntent {
+  constructor(session, workspace, target, action, confirmation = '', operation = crypto.randomUUID()) {
+    if (!canManageInvitations(session, workspace)) throw new Error('Use this workspace’s current owner/admin key.');
+    const purge = action === 'purge';
+    if (!purge && action !== 'shelf') throw new Error('Choose an explicit archive management action.');
+    const revision = exactRevision(target.revision);
+    if (target.workspace_id !== workspace.id || typeof target.archived !== 'boolean') throw new Error('Archive metadata did not match this workspace.');
+    if (purge && (!target.archived || typeof target.id !== 'string' || !target.id || typeof target.book_id !== 'string' || !target.book_id || confirmation !== target.id)) throw new Error('Purge requires an individually archived entry and its exact typed ID.');
+    if (!purge && (workspace.archived || revision === Number.MAX_SAFE_INTEGER || typeof target.shelf_id !== 'string' || !target.shelf_id)) throw new Error('Shelf transitions need an active workspace and exact next revision.');
+    this.kind = 'content_admin'; this.action = action; this.workspace_id = workspace.id; this.book_id = purge ? target.book_id : null;
+    this.target_id = purge ? target.id : target.shelf_id;
+    this.path = '/api/v1/admin/content/' + (purge ? 'entries/purge' : 'shelves/transition');
+    this.body = JSON.stringify({workspace_id: workspace.id, operation_id: operation, expected_revision: revision,
+      ...(purge ? {entry_id: target.id, confirm_purge: true} : {shelf_id: target.shelf_id, archived: !target.archived})});
+    this.session = signature(session); this.proof = session.csrf_token; Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. This archive operation cannot be retried under the new session.');
+    return {body: this.body, proof: this.proof};
+  }
+  receipt(value) {
+    const original = JSON.parse(this.body);
+    if (value?.operation_id !== original.operation_id) throw new Error('The archive operation receipt could not be verified. Keep the original request.');
+    if (this.action === 'shelf') {
+      const state = shelfState(value.result, this.workspace_id, this.target_id);
+      if (state.revision !== original.expected_revision + 1 || state.archived !== original.archived) throw new Error('The shelf receipt did not match the original transition.');
+    } else if (value.workspace_id !== this.workspace_id || value.entry_id !== this.target_id || value.revision !== original.expected_revision
+      || !Number.isSafeInteger(value.purged_at) || value.purged_at < 0) throw new Error('The purge receipt did not match the original entry/revision.');
+    return value;
+  }
+}

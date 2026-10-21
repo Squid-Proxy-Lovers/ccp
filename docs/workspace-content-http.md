@@ -280,7 +280,9 @@ Use the independently trusted CA and protected owner-header file from the
 [HTTPS setup guide](workspace-http-api.md#try-a-protected-request). Confirmation
 is required and must be boolean true. Unknown fields, claimed identities and
 malformed IDs or revisions are rejected. The confirmation flag records caller
-intent; no human confirmation screen is implemented yet.
+intent. The [desktop panel](workspace-browser-session.md#manage-shelf-archives-and-permanently-purge-entries)
+adds a typed entry-ID check, irreversible-removal consent and final confirmation;
+the API still enforces its own current authority and expected revision.
 
 The response is body-free historical proof:
 

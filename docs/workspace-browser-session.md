@@ -175,7 +175,12 @@ and record the actual admin key. Agent labels are self-reported attribution.
 All text displays literally, including markup; the panel runs no entry HTML.
 Archived entries expose summaries only. Restore before reading their bodies or
 history. Archived workspaces remain readable but cannot receive content writes.
-Archived shelves are not included in this first active hierarchy browser.
+Use **Browse archived shelves** for separately paged, body-free summaries.
+Select **Inspect shelf archive state** from an active shelf, or inspect an archived
+shelf summary. Workspace owners/admins can archive or restore shelves while the
+workspace is active. Archiving hides descendants without deleting them; restoration
+preserves individual entry archives. Same-name collisions are refused. Global keys
+can inspect this metadata but cannot perform shelf transitions.
 
 Unsaved entry edits block navigation. Save or deliberately discard/reload before
 leaving; entry edits and separate append notes cannot silently replace each
@@ -485,3 +490,42 @@ cancellation; direct discard clears copied/stale form DOM even if reads fail.
 Acknowledgement clears pending work before any postcheck; a failed session check
 reports confirmed invitation/client/scope IDs and concrete inspect/revoke recovery
 without a secret or false creation failure. No automatic refresh discards a secret.
+
+## Manage shelf archives and permanently purge entries
+
+Shelf inspection displays the immutable shelf/workspace IDs and the last-read
+lifecycle revision. **Archive shelf** and **Restore shelf** require a current
+workspace owner/admin key and active workspace. Their final confirmation names
+that exact target and revision. This changes visibility, preserving descendant
+IDs, ownership, revisions and individual archive states. It neither purges shelf
+payloads nor enables timed entry cleanup.
+
+For an individually archived entry summary, expand **Permanently purge archived
+entry**. Type the exact entry ID, check the irreversible-removal consent, then
+choose **Permanently purge entry** and confirm the named workspace and revision.
+A current workspace owner/admin can perform this explicit action even while the
+workspace is archived. Instance keys cannot borrow that power. An active entry
+hidden only by a shelf archive is not eligible. Body/history remain unavailable
+throughout this workflow.
+
+Purge removes all entry payload and revision rows from live storage. It cannot
+be restored through CCP. Retained operation proofs and audit remain; SQLite free
+pages, journals and separate backups are not securely erased by this action.
+See [the purge contract](workspace-content-http.md#permanently-purge-an-archived-entry).
+
+Both shelf transitions and purge freeze the original operation UUID, target,
+expected revision, JSON and session proof. After a lost response, **Check / retry
+exact archive operation** deliberately resends those exact bytes in the same
+session. No automatic mutation retry, replacement UUID or revision adjustment
+occurs. A returned receipt describes the original historical action; separately
+read current metadata before deciding what to do next. A current observation
+does not attribute an uncertain action. Entry observations show only one page.
+Conflicts require a new decision after explicitly discarding the old local intent.
+
+A confirmed receipt remains confirmed if the next session check or metadata read
+fails. Copy the original request before changing keys; pending operations cannot
+be replayed under another browser session. **Forget archive operation locally**
+does not cancel it. Explicitly discarding the retained local copy clears its DOM
+without requiring a successful metadata read. Purge drafts also block navigation
+until submitted or explicitly discarded. Nothing is stored persistently in the
+browser.

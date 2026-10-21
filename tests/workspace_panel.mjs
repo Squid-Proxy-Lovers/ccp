@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -464,4 +464,67 @@ test('client access actions keep exact one-shot identity/scope/deadline and cann
     const changed = structuredClone(current); mutate(changed); assert.throws(() => t.request(changed), /session changed/);
     assert.equal(JSON.parse(t.request(current).body).client_id, 'client');
   }
+});
+
+test('archive management freezes exact target, CAS, operation and session across deliberate retries', () => {
+  const current = session(), workspace = {id: 'workspace', archived: false};
+  const state = {workspace_id: 'workspace', shelf_id: 'shelf', revision: 5, archived: false};
+  const intent = new ContentAdminIntent(current, workspace, state, 'shelf', '', 'operation');
+  state.shelf_id = 'changed'; state.revision = 9; workspace.id = 'elsewhere';
+  const request = intent.request(current);
+  assert.deepEqual(JSON.parse(request.body), {workspace_id: 'workspace', operation_id: 'operation', expected_revision: 5, shelf_id: 'shelf', archived: true});
+  assert.equal(intent.path, '/api/v1/admin/content/shelves/transition');
+  assert.deepEqual(intent.request(structuredClone(current)), request);
+  for (const alter of [s => {s.csrf_token = 'other';}, s => {s.identity.key_id = 'other';}, s => {s.instance_id = 'other';},
+    s => {s.identity.principal_id = 'other';}, s => {s.identity.scope.role = 'admin';}, s => {s.identity.scope.workspace_id = 'other';}]) {
+    const changed = session(); alter(changed); assert.throws(() => intent.request(changed), /session changed/);
+  }
+  assert.throws(() => {intent.body = '{}';}, TypeError);
+});
+
+test('shelf lifecycle cannot borrow global authority or archived workspace write access', () => {
+  const current = session(), workspace = {id: 'workspace', archived: false};
+  const target = {workspace_id: 'workspace', shelf_id: 'shelf', revision: 1, archived: true};
+  assert.equal(JSON.parse(new ContentAdminIntent(current, workspace, target, 'shelf', '', 'op').body).archived, false);
+  assert.throws(() => new ContentAdminIntent(current, {...workspace, archived: true}, target, 'shelf'), /active workspace/);
+  for (const scope of [{kind: 'instance'}, {kind: 'workspace', workspace_id: 'foreign', role: 'owner'}, {kind: 'workspace', workspace_id: 'workspace', role: 'reader'}]) {
+    const other = session(); other.identity.scope = scope;
+    assert.throws(() => new ContentAdminIntent(other, workspace, target, 'shelf'), /owner\/admin/);
+  }
+  for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '1']) assert.throws(() => shelfState({...target, revision}, 'workspace', 'shelf'), /exact numeric/);
+  assert.throws(() => new ContentAdminIntent(current, workspace, {...target, revision: Number.MAX_SAFE_INTEGER}, 'shelf'), /exact next revision/);
+  assert.throws(() => shelfState(target, 'workspace', 'foreign'), /requested target/);
+});
+
+test('shelf receipts bind historical operation and result without claiming current state', () => {
+  const target = {workspace_id: 'workspace', shelf_id: 'shelf', revision: 4, archived: false};
+  const intent = new ContentAdminIntent(session(), {id: 'workspace', archived: false}, target, 'shelf', '', 'operation');
+  const receipt = {operation_id: 'operation', result: {...target, revision: 5, archived: true}};
+  assert.equal(intent.receipt(receipt), receipt);
+  for (const bad of [{...receipt, operation_id: 'other'}, {...receipt, result: {...receipt.result, revision: 6}},
+    {...receipt, result: {...receipt.result, archived: false}}, {...receipt, result: {...receipt.result, shelf_id: 'foreign'}},
+    {...receipt, result: {...receipt.result, workspace_id: 'foreign'}}]) assert.throws(() => intent.receipt(bad), /receipt|target/);
+});
+
+test('purge requires exact archived entry confirmation, permits archived workspace and verifies body-free proof', () => {
+  const workspace = {id: 'workspace', archived: true};
+  const entry = {workspace_id: 'workspace', id: 'entry', book_id: 'book', revision: 8, archived: true};
+  const intent = new ContentAdminIntent(session(), workspace, entry, 'purge', 'entry', 'operation');
+  assert.equal(intent.path, '/api/v1/admin/content/entries/purge'); assert.equal(intent.book_id, 'book');
+  assert.deepEqual(JSON.parse(intent.body), {workspace_id: 'workspace', operation_id: 'operation', expected_revision: 8, entry_id: 'entry', confirm_purge: true});
+  assert.throws(() => new ContentAdminIntent(session(), workspace, entry, 'purge', 'wrong'), /exact typed ID/);
+  assert.throws(() => new ContentAdminIntent(session(), workspace, {...entry, archived: false}, 'purge', 'entry'), /individually archived/);
+  assert.throws(() => new ContentAdminIntent(session(), workspace, {...entry, workspace_id: 'foreign'}, 'purge', 'entry'), /this workspace/);
+  const receipt = {workspace_id: 'workspace', entry_id: 'entry', operation_id: 'operation', revision: 8, purged_at: 100};
+  assert.equal(intent.receipt(receipt), receipt);
+  for (const field of ['workspace_id', 'entry_id', 'operation_id', 'revision', 'purged_at']) assert.throws(() => intent.receipt({...receipt, [field]: 'wrong'}), /receipt/);
+  assert.throws(() => intent.receipt({...receipt, purged_at: -1}), /receipt/);
+});
+
+test('archived shelf pages reject foreign, duplicate, unsafe or unbound cursor metadata', () => {
+  const item = {id: 'shelf', workspace_id: 'workspace', name: '<script>', revision: 3};
+  assert.equal(archivedShelfPage({items: [item], next_cursor: 'shelf'}, 'workspace').items[0].name, '<script>');
+  for (const value of [{items: [item, item], next_cursor: null}, {items: [{...item, workspace_id: 'foreign'}], next_cursor: null},
+    {items: [{...item, revision: Number.MAX_SAFE_INTEGER + 1}], next_cursor: null}, {items: [], next_cursor: 'shelf'},
+    {items: [item], next_cursor: 'other'}, {items: Array(33).fill(item), next_cursor: null}]) assert.throws(() => archivedShelfPage(value, 'workspace'), /metadata|numeric|page|cursor/);
 });

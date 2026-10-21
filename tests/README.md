@@ -308,3 +308,7 @@ Recovery inventory tests cover exact client and nullable scope paging, authority
 ceilings, status parity, terminal expiry, lookahead exclusion and page rollback.
 Client-access model tests distinguish credential recovery from fresh readmission,
 including archive/disable boundaries, frozen scope/body and session binding.
+
+The desktop archive tests cover immutable shelf/purge operations, exact receipt
+binding, unsafe revisions, scoped authority, archived-workspace manual purge and
+body-free shelf pagination. The bundled-asset TLS test includes the archive UI.
