@@ -7,7 +7,9 @@ use http_body_util::{BodyExt, Limited};
 use hyper::{
     Method, Request, Version,
     body::{Body, Incoming},
-    header::{AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, HOST, ORIGIN, TRANSFER_ENCODING},
+    header::{
+        AUTHORIZATION, CONTENT_ENCODING, CONTENT_TYPE, COOKIE, HOST, ORIGIN, TRANSFER_ENCODING,
+    },
 };
 use std::time::Duration;
 use tokio::time::timeout;
@@ -18,6 +20,10 @@ pub(super) struct Input {
     pub query: Option<String>,
     pub authorization: Option<String>,
     pub body: Vec<u8>,
+    pub target_origin: String,
+    pub origin_present: bool,
+    pub cookie: Option<String>,
+    pub csrf: Option<String>,
 }
 const MAX_BODY: usize = 64 * 1024;
 
@@ -29,7 +35,7 @@ pub(super) async fn read(request: Request<Incoming>) -> Result<Input, Error> {
     {
         return Err(Error::BadRequest);
     }
-    validate_headers(&parts.headers)?;
+    let target_origin = validate_headers(&parts.headers)?;
     let max_body = if parts.uri.path() == super::content::MUTATION_PATH {
         2 * 1024 * 1024
     } else {
@@ -79,10 +85,18 @@ pub(super) async fn read(request: Request<Incoming>) -> Result<Input, Error> {
         query: parts.uri.query().map(str::to_string),
         authorization,
         body: bytes.to_vec(),
+        target_origin,
+        origin_present: parts.headers.contains_key(ORIGIN),
+        cookie: single(&parts.headers, COOKIE)?.map(str::to_string),
+        csrf: single(
+            &parts.headers,
+            hyper::header::HeaderName::from_static("x-ccp-csrf"),
+        )?
+        .map(str::to_string),
     })
 }
 
-fn validate_headers(headers: &hyper::HeaderMap) -> Result<(), Error> {
+fn validate_headers(headers: &hyper::HeaderMap) -> Result<String, Error> {
     let host = single(headers, HOST)?.ok_or(Error::BadRequest)?;
     let target =
         url::Url::parse(&format!("https://{host}")).map_err(|_invalid_host| Error::BadRequest)?;
@@ -118,7 +132,7 @@ fn validate_headers(headers: &hyper::HeaderMap) -> Result<(), Error> {
     {
         return Err(Error::Media);
     }
-    Ok(())
+    Ok(target.origin().ascii_serialization())
 }
 
 fn single(

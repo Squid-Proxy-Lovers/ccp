@@ -15,7 +15,7 @@ use protocol::workspace::{API_VERSION, ApiError as WireError, Failure, Success};
 use serde::Serialize;
 
 pub(super) type Reply = Response<Full<Bytes>>;
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(super) enum Error {
     BadRequest,
     Unauthorized,

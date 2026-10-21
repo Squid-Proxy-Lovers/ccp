@@ -5,6 +5,7 @@
 //! Versioned JSON workspace API, separate from the native binary wire protocol.
 use serde::{Deserialize, Serialize};
 
+pub mod browser;
 pub mod content;
 pub mod guidance;
 pub mod retention;

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use super::{
-    State, Surface, content, guidance, invitations, management,
+    State, Surface, browser, content, guidance, invitations, management,
     request::Input,
     response::{self, Error, Reply},
     retention,
@@ -60,6 +60,9 @@ fn https(
     input: Input,
     now: i64,
 ) -> Result<Reply, Error> {
+    if browser::handles(&input.path) {
+        return browser::dispatch(state, store, &input, now);
+    }
     if matches!(input.path.as_str(), "/api/v1/enroll" | "/api/v1/recover") {
         return public_certificate(state, store, &input, now);
     }
@@ -73,7 +76,7 @@ fn https(
     {
         return Err(Error::NotFound);
     }
-    let actor = admin(store, input.authorization.as_deref(), now)?;
+    let actor = browser::authenticate(state, store, &input, now)?;
     if retention::handles(&input.path) {
         return retention::dispatch(store, actor, &input, now);
     }
@@ -237,7 +240,11 @@ fn client(
     }
 }
 
-fn admin(store: &mut AccessStore<'_>, header: Option<&str>, now: i64) -> Result<Actor, Error> {
+pub(super) fn admin(
+    store: &mut AccessStore<'_>,
+    header: Option<&str>,
+    now: i64,
+) -> Result<Actor, Error> {
     let (scheme, secret) = header
         .and_then(|header| header.split_once(' '))
         .ok_or(Error::Unauthorized)?;

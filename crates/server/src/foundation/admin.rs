@@ -17,6 +17,16 @@ pub enum AdminKeyScope {
     Workspace(Uuid),
 }
 
+/// Current browser-session metadata, never a remote actor claim.
+pub(crate) struct AdminKeyIdentity {
+    pub key_id: Uuid,
+    pub principal_id: Uuid,
+    pub principal_name: String,
+    pub key_name: String,
+    pub scope: AdminKeyScope,
+    pub is_owner: bool,
+}
+
 impl AdminKeyScope {
     pub(super) fn workspace(self) -> Option<Uuid> {
         match self {

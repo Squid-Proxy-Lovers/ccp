@@ -13,8 +13,9 @@ listeners, plus shelf transitions on admin HTTPS.
 The normal client now
 supports [content reads](workspace-content-client.md) and
 [entry mutations](workspace-content-mutations.md). The [workspace MCP bridge](workspace-mcp.md)
-exposes content reads, shelf/book creation and guarded entry mutations. Browser login
-and the human panel remain subsequent work. A
+exposes content reads, shelf/book creation and guarded entry mutations. The
+[browser-session API](workspace-browser-session.md) now supports scoped cookie
+authentication; the actual login page and human panel remain subsequent work. A
 [client operation resolution fence](workspace-operation-resolution.md) supports
 body-free outcome recovery without replaying a write under new credentials. Keep this
 draft implementation separate from a production rollout.
@@ -80,6 +81,9 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
 | HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |
 | HTTPS | `POST /api/v1/admin/content/entries/purge` | Current scoped owner/admin key; explicitly confirmed, revision-bound purge of an individually archived entry, including in archived workspaces |
+| HTTPS | `POST /api/v1/admin/session/login` | Existing admin key in strict JSON, matching Origin and initial CSRF marker; ephemeral cookie issued |
+| HTTPS | `GET /api/v1/admin/session` | Current cookie session and live admin key; metadata and per-session CSRF token |
+| HTTPS | `POST /api/v1/admin/session/logout` | Session cookie, matching Origin and CSRF; removes only this session |
 | HTTPS | `POST /api/v1/admin/content/retention/get` | Current administrative workspace read access; current policy metadata |
 | HTTPS | `POST /api/v1/admin/content/retention/change` | Current scoped workspace owner/admin; explicit confirmed timed enable or manual disable with nonce/revision |
 | HTTPS | `POST /api/v1/admin/content/shelves/transition` | Current scoped workspace owner/admin key; exact revision-bound shelf archive/restore |
@@ -109,10 +113,12 @@ separate owner/admin key for that workspace. Client routes accept only the TLS
 identity and refuse an Authorization header. Request bodies and proxy headers
 cannot select an actor, client UUID or existing credential UUID.
 
-There are no browser cookies or CORS grants. Supplied Origin must be the same
-HTTPS origin as Host. JSON requests from another origin are refused. Admin
-keys are supplied in the Authorization header, with no query-key login. The
-selected `/admin#key=...` browser workflow is not served by this batch.
+CORS is not enabled. Supplied Origin must match the HTTPS origin in Host.
+Bearer admin requests retain their existing behavior; the
+[browser-session API](workspace-browser-session.md) adds bounded cookie sessions
+with matching Origin and per-session CSRF on POSTs. Mixed credentials are refused.
+There is no query-key login, and the selected `/admin#key=...` page is not yet
+served by this backend-only slice.
 
 ## JSON and pagination
 

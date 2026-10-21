@@ -241,3 +241,13 @@ restore/rearchive and injected purge failure/retry. Runtime unit cases verify
 single-job budgeting, blocked-SQL shutdown/directory exclusion, per-workspace
 failure isolation and bounded cursor pagination. Scheduling metadata is not
 authority; the core still rechecks every deletion transaction.
+
+
+Browser-session tests cover per-session HMAC CSRF, origin binding, absolute expiry,
+replacement/logout isolation, table/key/workspace limits, reserved instance slots,
+expired pruning and poisoned-state failure. Eight actual TLS cases exercise
+key exchange/cookie attributes/no secret JSON, current owner/admin/instance scope,
+existing cookie-authenticated content/guidance/retention routes, CSRF/Origin denial,
+strict shapes/limits, mixed or duplicate credentials, old Bearer/mTLS separation,
+key expiry/revocation/demotion, logout and process restart with reusable keys.
+The login page and bookmark fragment exchange are not yet browser-tested or built.

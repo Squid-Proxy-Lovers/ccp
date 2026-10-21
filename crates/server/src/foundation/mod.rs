@@ -25,6 +25,7 @@ mod store;
 mod team;
 
 pub use access::authorize;
+pub(crate) use admin::AdminKeyIdentity;
 pub use admin::{
     AdminKeyRequest, AdminKeyScope, BootstrappedInstance, IssuedAdminKey, LocalKeyReset,
     LocalKeyTarget,

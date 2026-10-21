@@ -6,9 +6,41 @@ use rusqlite::OptionalExtension;
 
 use super::*;
 use crate::foundation::admin::{has_key_role, key_hash, live_admin_key, validate_secret};
-use crate::foundation::{AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
+use crate::foundation::{AdminKeyIdentity, AdminKeyRequest, AdminKeyScope, IssuedAdminKey};
 
 impl AccessStore<'_> {
+    /// Only a server-issued session may use this trusted key-ID lookup.
+    pub(crate) fn browser_admin_key(
+        &mut self,
+        key: Uuid,
+        now: i64,
+    ) -> anyhow::Result<Option<AdminKeyIdentity>> {
+        let tx = self.connection.transaction()?;
+        let Some((principal, workspace)) = live_admin_key(&tx, key, now)? else {
+            tx.commit()?;
+            return Ok(None);
+        };
+        let (principal_name,key_name) = tx.query_row("SELECT p.name,k.name FROM ccp_admin_keys k JOIN ccp_admin_principals p ON p.id=k.admin_id WHERE k.id=?1",[key.to_string()],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?;
+        let is_owner = if let Some(workspace) = workspace {
+            tx.query_row(
+                "SELECT owner_admin_id IS ?2 FROM ccp_workspaces WHERE id=?1",
+                params![workspace.to_string(), principal.to_string()],
+                |r| r.get(0),
+            )?
+        } else {
+            false
+        };
+        let result = AdminKeyIdentity {
+            key_id: key,
+            principal_id: principal,
+            principal_name,
+            key_name,
+            scope: workspace.map_or(AdminKeyScope::Instance, AdminKeyScope::Workspace),
+            is_owner,
+        };
+        tx.commit()?;
+        Ok(Some(result))
+    }
     /// Local operator only, with the same OS boundary as bootstrap_admin. The
     /// principal, initial key verifier and audit records commit together.
     pub fn bootstrap_admin_key(&mut self, name: &str, now: i64) -> anyhow::Result<IssuedAdminKey> {

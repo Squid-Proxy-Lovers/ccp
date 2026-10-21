@@ -53,7 +53,9 @@ No admin/invitation secret belongs in logs, discovery or audit payloads.
 through authorization and mutations. Converting it into an unrestricted
 `Actor::Admin` would discard the key's scope and revocation checks. The latter
 variant is for trusted internal/local operations, not a caller-supplied UUID.
-Authentication does not create an authority lease or a browser session.
+This verifier does not create an authority lease or a browser session itself.
+The [browser-session adapter](workspace-browser-session.md) can exchange a valid
+key for an opaque cookie and retains the original key ID for current checks.
 
 Key creation/revocation and their audit records commit atomically. Actions made
 with a key record both its principal and key ID, including self-revocation.
@@ -93,4 +95,5 @@ The [owner administration guide](workspace-owner-administration.md) documents
 atomic appointment with a first key, owner-only metadata and scoped key
 issue/revoke. Admin revocation terminally revokes its workspace keys. Ownership
 transfer revokes the former owner's workspace keys while preserving unrelated
-roles and keys. Browser fragment login and session handling remain later work.
+roles and keys. The [browser-session API](workspace-browser-session.md) now
+provides cookie/CSRF handling. The fragment-login page remains later work.

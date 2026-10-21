@@ -2,8 +2,9 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! Direct TLS-only workspace HTTP runtime. There is no proxy/header identity,
-//! browser cookie authentication or native transport fallback.
+//! Direct TLS-only workspace HTTP with current scoped admin keys, ephemeral
+//! browser sessions, and verified mTLS client identity. Native mode is separate.
+mod browser;
 mod content;
 mod dispatch;
 mod guidance;
@@ -65,6 +66,7 @@ pub struct WorkspaceServer {
 struct State {
     identity: InstanceTls,
     database: PathBuf,
+    browser_sessions: browser::Sessions,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +87,8 @@ impl WorkspaceServer {
             .await
             .context("cannot bind workspace mTLS listener")?;
         crate::instance_tls::info(&config.data_dir)?;
+        let browser_sessions = browser::Sessions::new()
+            .map_err(|_entropy| anyhow::anyhow!("cannot initialize browser sessions"))?;
         let lease = if config.activate_workspace {
             DirectoryLease::activate_workspace(&config.data_dir)?
         } else {
@@ -96,6 +100,7 @@ impl WorkspaceServer {
         let state = Arc::new(State {
             identity,
             database: lease.directory().join("ccp.sqlite3"),
+            browser_sessions,
         });
         Ok(Self {
             https,

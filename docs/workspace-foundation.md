@@ -22,8 +22,9 @@ with retained proof; migration itself deletes no content.
 See [instance TLS setup](instance-tls-identity.md) for its separate private
 bundle. The existing native mTLS client protocol and CLI remain in service in
 native mode. The separate [workspace HTTPS API](workspace-http-api.md)
-now exposes a limited TLS-only invitation/enrollment/discovery surface; browser
-login and the workspace panel remain later work.
+now exposes TLS-only invitation/enrollment/discovery and scoped admin surfaces.
+The [browser-session API](workspace-browser-session.md) provides the authentication
+boundary; its login page and workspace panel remain later work.
 [Content endpoints](workspace-content-http.md) expose hierarchy and entry actions;
 [Shelf archive/restore](workspace-content-http.md#archive-or-restore-a-shelf) is
 also exposed through scoped admin HTTPS, with state/archive summaries available
@@ -220,3 +221,15 @@ server now exposes scoped configuration and schedules current due cleanup with
 bounded jobs, retained leases and shutdown draining. See the
 [retention contract](workspace-retention.md) for confirmation, policy changes,
 clock limits, audit and backup/rollback requirements.
+
+
+## Ephemeral browser sessions
+
+The HTTPS browser-session adapter exchanges the same existing admin key for an
+opaque bounded in-memory session. Trusted key-ID metadata lookup rechecks current
+live key scope/roles; the protected operation still checks its actor inside its
+transaction. Cookie authority never comes from request IDs or display labels.
+Session scope stays separate from registered clients and entry ownership. No
+schema or underlying key lifetime changes. See the
+[browser-session API](workspace-browser-session.md) for Origin/CSRF, expiry,
+resource bounds, logout and current backend/frontend limits.

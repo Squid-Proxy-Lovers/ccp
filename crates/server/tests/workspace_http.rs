@@ -5,6 +5,8 @@
 #[cfg(test)]
 #[path = "."]
 mod tests {
+    #[path = "workspace_browser/mod.rs"]
+    mod browser;
     #[path = "workspace_content/mod.rs"]
     mod content;
     use anyhow::Context;

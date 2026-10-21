@@ -45,6 +45,7 @@ the other guides describe the supported native interface.
 | Work with wire types and compatibility | [Protocol crate](../crates/protocol/README.md) |
 | Permanently purge an archived entry through scoped admin HTTPS | [Confirmed purge request](workspace-content-http.md#permanently-purge-an-archived-entry) |
 | Understand explicit archived-entry purge and retained proof | [Entry purge core](workspace-content.md#permanently-purge-an-archived-entry) |
+| Use scoped browser-session login, cookies and CSRF | [Browser-session API](workspace-browser-session.md) |
 | Configure optional timed entry cleanup and understand paused clocks | [Entry retention](workspace-retention.md) |
 | Inspect authenticated guidance-delivery context | [Client context output](workspace-client.md#retrieve-a-guidance-delivery-context) |
 | Read automatic guidance beside MCP results | [MCP guidance sidebands](workspace-mcp.md#read-automatic-guidance-alongside-results) |
