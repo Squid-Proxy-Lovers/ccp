@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -303,5 +303,50 @@ test('ownership transfer cannot cross session credentials, instance, principal o
     const s = session(), t = new TransferAttempt(s, {id: 'workspace', archived: false}, {id: 'next', enabled: true, is_owner: false}, true, 'next');
     const changed = structuredClone(s);mutate(changed);assert.throws(() => t.request(changed), /session changed/);
     assert.equal(JSON.parse(t.request(s).body).new_owner_id, 'next');
+  }
+});
+
+
+test('invitation security scope allows matching owner/admin including archive, creation requires active', () => {
+  const s = session(), w = {id: 'workspace', archived: true};
+  for (const role of ['owner', 'admin']) {s.identity.scope.role=role;assert.equal(canManageInvitations(s,w),true);assert.throws(()=>new AdmissionAttempt(s,w,'individual',{workspace_id:'workspace',role:'read',expires_at:2000}));}
+  assert.equal(canManageInvitations(s,{id:'other'}),false);
+  s.identity.scope.role='unknown';assert.equal(canManageInvitations(s,w),false);
+  s.identity.scope={kind:'instance'};assert.equal(canManageInvitations(s,w),false);
+});
+
+test('invitation deadlines and metadata reject unsafe or unknown values instead of defaulting', () => {
+  assert.equal(invitationDeadline('24',1000000),87400);
+  for(const hours of ['',0,-1,1.5,169,'x',Infinity])assert.throws(()=>invitationDeadline(hours,1000000));
+  const status={invitation_id:'invite',uses:0,max_uses:1,expires_at:2000,revoked:false,expired:false,initial_closed:false,issuer_authorized:false,target_client_id:null};
+  assert.deepEqual(invitationStatus(status,'invite'),status);
+  for(const alter of [s=>{s.uses=Number.MAX_SAFE_INTEGER+1;},s=>{s.uses=-1;},s=>{s.max_uses=0;},s=>{s.uses=2;},s=>{s.expired=null;},s=>{delete s.issuer_authorized;},s=>{s.expires_at=-1;},s=>{s.target_client_id='';}]){const changed=structuredClone(status);alter(changed);assert.throws(()=>invitationStatus(changed));}
+  assert.throws(()=>invitationStatus(status,'other'));
+  assert.throws(()=>invitationPage({invitations:[],next_cursor:'unknown'}));
+  const item={kind:'individual',role:'read',status};
+  assert.deepEqual(invitationPage({invitations:[item],next_cursor:'invite'}).invitations,[item]);
+  assert.throws(()=>invitationPage({invitations:[item,item],next_cursor:null}));
+  assert.throws(()=>invitationPage({invitations:[{...item,role:'owner'}],next_cursor:null}));
+  assert.throws(()=>invitationPage({invitations:[{...item,kind:'recovery'}],next_cursor:null}));
+});
+
+test('admission actions are one-shot with frozen original deadline/ID and no invented replay ID', () => {
+  const s=session(),w={id:'workspace',archived:false};
+  for(const [action,body] of [['individual',{workspace_id:'workspace',role:'read',expires_at:2000}],['revoke',{workspace_id:'workspace',invitation_id:'invite'}]]){
+    const t=new AdmissionAttempt(s,w,action,body);body.expires_at=9999;body.invitation_id='changed';
+    const first=t.request(s);assert.equal(first.proof,'proof');assert.equal(t.path,'/api/v1/admin/invitations/'+action);
+    const original=JSON.parse(first.body);assert.equal(action==='individual'?original.expires_at:original.invitation_id,action==='individual'?2000:'invite');
+    assert.ok(!t.body.includes('operation_id')&&!t.body.includes('proof'));
+    assert.throws(()=>t.request(s),/Do not retry/);assert.throws(()=>{t.body='{}';},TypeError);
+  }
+  assert.throws(()=>new AdmissionAttempt(s,w,'initial',{workspace_id:'workspace'}));
+  assert.throws(()=>new AdmissionAttempt(s,w,'individual',{workspace_id:'workspace',role:'owner',expires_at:2000}));
+});
+
+test('admission original cannot cross any session binding, while archived revocation remains permitted', () => {
+  for(const mutate of [s=>{s.csrf_token='new';},s=>{s.identity.key_id='other';},s=>{s.instance_id='other';},s=>{s.identity.principal_id='other';},s=>{s.identity.scope.role='admin';},s=>{s.identity.scope.workspace_id='other';}]){
+    const s=session(),t=new AdmissionAttempt(s,{id:'workspace',archived:true},'revoke',{workspace_id:'workspace',invitation_id:'invite'});
+    const changed=structuredClone(s);mutate(changed);assert.throws(()=>t.request(changed),/session changed/);
+    assert.equal(JSON.parse(t.request(s).body).invitation_id,'invite');
   }
 });

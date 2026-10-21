@@ -361,3 +361,43 @@ an instance admin’s owner-metadata read, or the host operator’s local inspec
 and recovery. Do not retry under a different key. Forgetting or discarding the
 local copy does not cancel a delayed transfer. Explicit local discard removes
 private form/copy DOM and permits navigation even if metadata is unavailable.
+
+
+## Inspect and manage invitations
+
+**Clients & access** shows a separate, paginated invitation inventory to a current
+workspace owner/admin key, including while archived. Instance read access does
+not expose this security inventory. Rows show the full ID, kind, requested data
+role, uses/capacity, deadline, observed expiry, revocation and current issuer
+authority separately. Readmission rows also show their target client UUID.
+**Next invitations** advances only that inventory. A failed metadata read does
+not imply an empty list; an earlier table remains labelled as a prior observation.
+
+Issuer authority is a current check. It is false while archived or after issuer
+permission/key loss, separately from permanent invitation revocation. Metadata
+is not a redemption lease or a causal operation receipt. No secret can be
+retrieved. An empty list does not establish initial-group eligibility; opening
+or closing initial group enrollment still uses the existing API.
+
+In an active workspace, choose the requested data access and a 1–168 hour lifetime,
+then **Create invitation**. Copy its one-time secret privately before navigating
+away. Creation does not select the workspace for the client. **Revoke invitation**
+is available to scoped owners/admins while archived too; it preserves existing
+client grants/content. Revoking an initial-group invitation closes its window.
+
+These creation/revocation endpoints have no operation ID or safe retry. An
+unconfirmed response freezes the original endpoint/body/deadline and offers a
+separate current observation. Creation observations show the first page only;
+a new row does not prove which request created it. After investigating and
+explicitly discarding locally, use the full pager. A known revocation target
+can be inspected directly. There is no retry button. Forget/discard does not
+cancel delayed execution. Local-only discard clears both copied request and
+stale private form DOM, even if metadata is unavailable.
+
+Acknowledgement clears the pending draft before any further read. A creation
+secret is shown only after checking the same browser session; if that check
+fails, the lock reports confirmed workspace/invitation IDs and directs you to
+inspect/revoke the undelivered invitation before deliberately issuing another.
+It never describes confirmed creation as failed. Drafts and unknown requests
+remain in tab memory only. Client paging and workspace-grant revocation also
+respect invitation drafts before redrawing this shared view.

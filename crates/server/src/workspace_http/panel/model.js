@@ -267,3 +267,64 @@ export class TransferAttempt {
     return {body: this.requestBody, proof: this.proof};
   }
 }
+
+export function canManageInvitations(session, workspace) {
+  const scope = session.identity.scope;
+  return !!workspace && scope.kind === 'workspace' && scope.workspace_id === workspace.id && ['owner', 'admin'].includes(scope.role);
+}
+
+export function invitationDeadline(value, now = Date.now()) {
+  const hours = Number(value), deadline = Math.floor(now / 1000) + hours * 3600;
+  if (!Number.isInteger(hours) || hours < 1 || hours > 168 || !Number.isSafeInteger(deadline)) throw new Error('Choose 1–168 whole hours.');
+  return deadline;
+}
+
+export function invitationStatus(value, id = value?.invitation_id) {
+  if (typeof id !== 'string' || !id || value?.invitation_id !== id
+    || !Number.isSafeInteger(value.uses) || value.uses < 0
+    || value.max_uses !== null && (!Number.isSafeInteger(value.max_uses) || value.max_uses < 1 || value.uses > value.max_uses)
+    || value.expires_at !== null && (!Number.isSafeInteger(value.expires_at) || value.expires_at < 0)
+    || !['revoked', 'expired', 'initial_closed', 'issuer_authorized'].every(key => typeof value[key] === 'boolean')
+    || value.target_client_id !== null && (typeof value.target_client_id !== 'string' || !value.target_client_id)) {
+    throw new Error('Invitation metadata could not be verified within the browser’s exact numeric range. No status was assumed.');
+  }
+  return value;
+}
+
+export function invitationPage(value) {
+  if (!Array.isArray(value?.invitations) || value.invitations.length > 16
+    || value.next_cursor !== null && typeof value.next_cursor !== 'string') throw new Error('The invitation page could not be verified.');
+  const ids = new Set();
+  for (const item of value.invitations) {
+    if (!['initial_group', 'individual'].includes(item?.kind) || !['read', 'read_write'].includes(item.role)) throw new Error('The invitation kind or role could not be verified.');
+    const status = invitationStatus(item.status);
+    if (ids.has(status.invitation_id)) throw new Error('Duplicate invitation metadata. Refresh before continuing.');
+    ids.add(status.invitation_id);
+  }
+  if (value.next_cursor !== null && (!value.invitations.length || value.next_cursor !== value.invitations.at(-1).status.invitation_id)) throw new Error('The invitation cursor could not be verified.');
+  return value;
+}
+
+export class AdmissionAttempt {
+  #sent = false;
+  constructor(session, workspace, action, body) {
+    if (!canManageInvitations(session, workspace) || body.workspace_id !== workspace.id
+      || !['individual', 'revoke'].includes(action) || action === 'individual' && (workspace.archived
+        || !['read', 'read_write'].includes(body.role) || !Number.isSafeInteger(body.expires_at) || body.expires_at <= 0)
+      || action === 'revoke' && (typeof body.invitation_id !== 'string' || !body.invitation_id)) throw new Error('Use the matching workspace key and an explicit valid invitation action.');
+    this.kind = 'admission'; this.workspace_id = workspace.id;
+    this.path = '/api/v1/admin/invitations/' + action;
+    this.requestBody = JSON.stringify(action === 'individual'
+      ? {workspace_id: workspace.id, role: body.role, expires_at: body.expires_at}
+      : {workspace_id: workspace.id, invitation_id: body.invitation_id});
+    this.body = JSON.stringify({path: this.path, request: JSON.parse(this.requestBody)});
+    this.session = signature(session); this.proof = session.csrf_token;
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. Do not send this invitation action under the new session.');
+    if (this.#sent) throw new Error('Do not retry this invitation action. Inspect current metadata first.');
+    this.#sent = true;
+    return {body: this.requestBody, proof: this.proof};
+  }
+}

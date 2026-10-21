@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import {byId, el, button, field, select, actions, notice, secret} from './view.js';
+import {byId, el, button, actions, notice} from './view.js';
+
+import {showInvitations} from './invitations.js';
 
 export async function showAccess(api, after = null) {
   const workspace = api.state.workspace;
@@ -21,6 +23,7 @@ export async function showAccess(api, after = null) {
     const controls = el('td');
     if (!grant.revoked_at && api.state.session.identity.scope.kind === 'workspace') {
       controls.append(button('Revoke workspace access', () => api.run(async () => {
+        if (!api.mayLeave()) return;
         if (!confirm(`Revoke ${grant.client_name} in ${workspace.name}? Stored entries and other workspaces are preserved.`)) return;
         await api.request('/api/v1/admin/grants/revoke', {grant_id: grant.id});
         await showAccess(api, after);
@@ -39,36 +42,7 @@ export async function showAccess(api, after = null) {
   }
   const scroll = el('div', undefined, 'table-scroll'); scroll.append(table); root.append(scroll);
   if (!page.grants.length) root.append(el('p', 'No client grants on this page.', 'empty'));
-  if (page.next_cursor) actions(root, button('Next clients', () => api.run(() => showAccess(api, page.next_cursor))));
-  if (after) actions(root, button('First clients', () => api.run(() => showAccess(api))));
-  if (api.writable()) invitation(root, api);
-  else root.append(el('p', workspace.archived ? 'New client admission is paused while archived.' : 'Use a workspace admin key to invite clients.', 'muted'));
-}
-
-function invitation(root, api) {
-  const form = el('form');
-  form.append(el('h3', 'Invite a client'), el('p', 'One invitation for this workspace. An existing registered client reuses its identity when redeeming it. This does not select the workspace for that client.'));
-  const role = select(form, 'Workspace data access', [
-    {id: 'read', name: 'Read only'}, {id: 'read_write', name: 'Read / write'},
-  ], () => {});
-  role.value = 'read';
-  const hours = field(form, 'Invitation lifetime (hours)', {value: '24'});
-  hours.type = 'number'; hours.min = '1'; hours.max = '168'; hours.required = true;
-  const submit = el('button', 'Create invitation', 'primary'); submit.type = 'submit';
-  actions(form, submit);
-  form.addEventListener('submit', event => {
-    event.preventDefault();
-    api.run(async () => {
-      const lifetime = Number(hours.value);
-      if (!Number.isInteger(lifetime) || lifetime < 1 || lifetime > 168) throw new Error('Choose 1–168 hours.');
-      notice('Creating invitation. If the response is lost, do not assume creation failed.');
-      const result = await api.request('/api/v1/admin/invitations/individual', {
-        workspace_id: api.state.workspace.id, role: role.value,
-        expires_at: Math.floor(Date.now() / 1000) + lifetime * 3600,
-      });
-      secret(root, 'Client invitation · ' + result.invitation_id, result.secret);
-      notice('Invitation created. Copy it privately before leaving.');
-    });
-  });
-  root.append(form);
+  if (page.next_cursor) actions(root, button('Next clients', () => api.run(async () => { if (api.mayLeave()) await showAccess(api, page.next_cursor); })));
+  if (after) actions(root, button('First clients', () => api.run(async () => { if (api.mayLeave()) await showAccess(api); })));
+  await showInvitations(api, root);
 }

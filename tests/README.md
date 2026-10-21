@@ -294,3 +294,7 @@ Invitation inventory tests cover scoped UUID pagination, status parity, current
 issuer/key authority, no secret-bearing response fields, strict cookie/TLS request
 handling, terminal expiry under clock rollback, lookahead exclusion and atomic
 rollback of page observations. They add no browser-engine workflow claim.
+
+Panel invitation model checks cover exact-range metadata, scoped archive security,
+immutable one-shot deadlines/targets and session binding. The existing asset TLS
+test also verifies the bundled invitation module.

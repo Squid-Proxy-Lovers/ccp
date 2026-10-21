@@ -164,6 +164,11 @@ The response contains `data.invitations` and `data.next_cursor`. Each item has:
   `invitation_id`, `uses`, nullable `max_uses`/`expires_at`, `revoked`, `expired`,
   `initial_closed`, `issuer_authorized` and nullable `target_client_id`.
 
+`issuer_authorized` is a current check, including workspace state and issuer
+key/role authority. It becomes false while archived without implying permanent
+invitation revocation. The desktop [invitation panel](workspace-browser-session.md#inspect-and-manage-invitations)
+shows these states separately.
+
 Readmission invitations have kind `individual` and their explicit client target.
 No secret, verifier, certificate, issuer identity or credential is returned.
 Secrets remain creation-only. The list can help investigate a lost creation
