@@ -161,16 +161,18 @@ class Store:
             path = self.root / "bundles" / generation_id
             path.mkdir(mode=0o700)
             fs.directory(path)
-            ready = False
-            try:
-                result = self._prepare(source, path, channel, tag)
-                ready = True
-                return result
-            finally:
-                if not ready:
-                    shutil.rmtree(path)
+        try:
+            row = self._prepare(source, path, channel, tag)
+            with fs.locked(self.root):
+                fs.atomic(path / "ready.json", row)
+                fs.sync(self.root / "bundles")
+                return self.generation(path.name)
+        finally:
+            # A visible ready marker may already have been selected after a lost sync.
+            if not (path / "ready.json").exists() and not (path / "ready.json").is_symlink():
+                shutil.rmtree(path)
 
-    def _prepare(self, source: Path, path: Path, channel: str, tag: str) -> Generation:
+    def _prepare(self, source: Path, path: Path, channel: str, tag: str) -> dict[str, object]:
         platform = build.host_platform()
         release = path / "release"
         fs.directory(release, create=True)
@@ -212,9 +214,7 @@ class Store:
             "manifest_sha256": hashlib.sha256(verified_manifest).hexdigest(),
         }
         fs.sync_tree(path)
-        fs.atomic(path / "ready.json", row)
-        fs.sync(self.root / "bundles")
-        return self.generation(path.name)
+        return row
 
     def activate(self, generation_id: str, expected_revision: int) -> Pointer:
         with fs.locked(self.root):

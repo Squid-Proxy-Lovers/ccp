@@ -46,8 +46,10 @@ Missing or busy profiles and unsupported or malformed compatibility metadata are
 refused. WAL profiles and
 existing journal sidecars are refused before SQLite opens them, without repair or
 cleanup. An older server without the software endpoint, unavailable metadata or a
-TLS/instance/contract mismatch also refuses inspection. Automatic discovery and
-opt-in activation remain subsequent work; this command never updates the server.
+TLS/instance/contract mismatch also refuses inspection. The
+[managed updater](managed-client.md#configure-official-updates) uses this check for
+all explicitly configured profiles before selecting different software. This
+command itself never activates software or updates the server.
 
 ## Establish server trust first
 

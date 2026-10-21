@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 
+from . import managed_commands, managed_worker
 from .managed_store import Store
 
 
@@ -28,6 +29,7 @@ def parser() -> argparse.ArgumentParser:
     client = commands.add_parser("client")
     client.add_argument("arguments", nargs=argparse.REMAINDER)
     commands.add_parser("mcp")
+    managed_commands.add(commands)
     return result
 
 
@@ -41,10 +43,13 @@ def run(args: argparse.Namespace) -> object:
         return store.rollback(args.expected_revision).value()
     if args.command == "status":
         return store.status()
+    if args.command not in {"client", "mcp"}:
+        return managed_commands.run(store, args)
     arguments = tuple(args.arguments) if args.command == "client" else ()
     if arguments[:1] == ("--",):
         arguments = arguments[1:]
     executable, argv, environment = store.launch(args.command, arguments)
+    managed_worker.schedule(store)
     # Only paths captured from a private ready generation are executed; no shell.
     os.execve(executable, argv, environment)  # noqa: S606
     return None

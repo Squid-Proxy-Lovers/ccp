@@ -15,6 +15,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from managed_bundle_tests import ManagedBundleTests as ManagedBundleTests
+from managed_update_tests import ManagedNetworkTests as ManagedNetworkTests
+from managed_update_tests import ManagedUpdateTests as ManagedUpdateTests
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))

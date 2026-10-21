@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -432,3 +433,72 @@ class ManagedBundleTests(unittest.TestCase):
         archive(path, [("ccp-mcp/pyproject.toml", "file", b"x" * 16384)])
         with patch.object(archive_module, "MAX_EXPANDED", 8192), self.assertRaises(ValueError):
             archive_module.expand(path, self.root / "large")
+
+    def test_slow_build_allows_real_child_readers_and_cannot_select_an_unready_generation(self):
+        first = self.stage()
+        self.store.activate(first.generation_id, 0)
+        started, release = threading.Event(), threading.Event()
+        candidates, results, errors = [], [], []
+
+        def waiting(path, manifest):
+            candidates.append(path)
+            started.set()
+            self.assertTrue(release.wait(10))
+            fake_build(path, manifest)
+
+        def stage():
+            try:
+                results.append(self.store.stage(self.inputs, "stable", "v0.1.0"))
+            except (OSError, ValueError, AssertionError) as error:
+                errors.append(str(error))
+
+        with (
+            patch.object(contract, "verify_provenance"),
+            patch.object(build_module, "build", side_effect=waiting),
+        ):
+            job = threading.Thread(target=stage)
+            job.start()
+            try:
+                self.assertTrue(started.wait(10))
+                script = "import sys,json;sys.path.insert(0,sys.argv[1]);from pathlib import Path;from ccp_mcp_server.managed_store import Store;s=Store(Path(sys.argv[2]));print(json.dumps({'status':s.status(),'client':str(s.launch('client',())[0])}))"
+                # This real child only inspects the owned temporary store while build is paused.
+                child = subprocess.run(  # noqa: S603
+                    [sys.executable, "-c", script, str(ROOT / "mcp/src"), str(self.store.root)],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(child.returncode, 0, child.stderr)
+                result = json.loads(child.stdout)
+                self.assertEqual(result["status"]["pointer"]["current"], first.generation_id)
+                self.assertEqual(result["client"], str(first.path / "client"))
+                self.assertFalse((candidates[0] / "ready.json").exists())
+                with self.assertRaises((ValueError, OSError)):
+                    self.store.activate(candidates[0].name, 1)
+            finally:
+                release.set()
+                job.join(timeout=20)
+        self.assertFalse(job.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 1)
+        self.assertTrue((results[0].path / "ready.json").exists())
+        self.assertEqual(self.store.pointer().current, first.generation_id)
+
+    def test_visible_ready_marker_survives_an_unknown_publication_outcome(self):
+        first = self.stage()
+        self.store.activate(first.generation_id, 0)
+        atomic = fs.atomic
+
+        def uncertain(path, value):
+            atomic(path, value)
+            if path.name == "ready.json":
+                raise OSError("owned loss after ready marker publication")
+
+        with patch.object(fs, "atomic", side_effect=uncertain), self.assertRaises(OSError):
+            self.stage()
+        self.assertEqual(self.store.pointer().current, first.generation_id)
+        retained = [p for p in (self.store.root / "bundles").iterdir() if p != first.path]
+        self.assertEqual(len(retained), 1)
+        self.assertTrue((retained[0] / "ready.json").exists())
+        self.assertEqual(self.store.activate(retained[0].name, 1).current, retained[0].name)

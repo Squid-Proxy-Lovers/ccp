@@ -1,9 +1,10 @@
 # Verify a matching client/MCP release bundle
 
 This unreleased distribution contract identifies matching official client/MCP
-bytes and their build provenance. The [managed bundle commands](managed-client.md) now support manual staging,
-activation and pinned launch. Opt-in automatic checks/activation remain subsequent work. Existing manual installation and GHCR
-server deployment keep their current behavior.
+bytes and their build provenance. The [managed bundle commands](managed-client.md)
+support manual staging, pinned launch and updates, plus local opt-in automatic
+checks and guarded activation. Existing manual installation and GHCR server
+deployment keep their current behavior.
 
 [Documentation index](README.md) · [Nightly builds](nightly-builds.md) ·
 [Workspace client](workspace-client.md)
