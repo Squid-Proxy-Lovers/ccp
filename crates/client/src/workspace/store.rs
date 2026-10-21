@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x4343_5043;
 pub(super) const PROFILE_FORMAT: u32 = 5;
+pub(super) const PROFILE_MIN_FORMAT: u32 = 1;
 const CONTENT_SCHEMA: &str = "CREATE TABLE content_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),pending TEXT CHECK(pending IS NULL OR length(CAST(pending AS BLOB))<=2101248),last TEXT CHECK(last IS NULL OR length(CAST(last AS BLOB))<=4096)); INSERT INTO content_state(singleton) VALUES(1);";
 const STATUS_SCHEMA: &str = r"CREATE TABLE status_state(singleton INTEGER PRIMARY KEY CHECK(singleton=1),pending TEXT CHECK(pending IS NULL OR length(CAST(pending AS BLOB))<=69632),last TEXT CHECK(last IS NULL OR length(CAST(last AS BLOB))<=4096)); INSERT INTO status_state(singleton) VALUES(1);
 CREATE TRIGGER status_pending_excludes_other BEFORE UPDATE OF pending ON status_state WHEN NEW.pending IS NOT NULL AND (EXISTS(SELECT 1 FROM content_state WHERE pending IS NOT NULL) OR EXISTS(SELECT 1 FROM profile WHERE pending IS NOT NULL)) BEGIN SELECT RAISE(ABORT,'pending status conflicts with another operation'); END;
@@ -149,7 +150,9 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
 fn format(connection: &Connection) -> anyhow::Result<u32> {
     let app: i64 = connection.pragma_query_value(None, "application_id", |r| r.get(0))?;
     let version: i64 = connection.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    if app != APPLICATION_ID || !(1..=i64::from(PROFILE_FORMAT)).contains(&version) {
+    if app != APPLICATION_ID
+        || !(i64::from(PROFILE_MIN_FORMAT)..=i64::from(PROFILE_FORMAT)).contains(&version)
+    {
         bail!("unrecognized or unsupported workspace profile format");
     }
     Ok(u32::try_from(version)?)

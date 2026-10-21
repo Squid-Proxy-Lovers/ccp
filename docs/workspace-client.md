@@ -15,6 +15,10 @@ native commands and their saved session files keep their current behavior.
 [Documentation index](README.md) · [Server HTTPS setup](workspace-http-api.md) ·
 [Enrollment contract](workspace-enrollment.md)
 
+Use `workspace software-info` to read package/wire/API/profile software contracts
+without opening a profile or contacting a server. The
+[managed launcher](managed-client.md) uses this check before activation.
+
 ## Establish server trust first
 
 Obtain the instance UUID and public CA certificate from the host operator through

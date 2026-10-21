@@ -178,6 +178,23 @@ mod tests {
         serde_json::from_slice(&output.stdout).unwrap()
     }
 
+    #[tokio::test]
+    async fn software_info_reads_exact_contracts_without_creating_or_opening_client_state() {
+        let root = std::env::temp_dir().join(format!("ccp-software-info-{}", Uuid::new_v4()));
+        let result = tokio::process::Command::new(env!("CARGO_BIN_EXE_client"))
+            .args(["workspace", "software-info"])
+            .env("CCP_CLIENT_HOME", &root)
+            .output()
+            .await
+            .unwrap();
+        let info = value(result);
+        assert_eq!(
+            info,
+            json!({"format":1,"package_version":env!("CARGO_PKG_VERSION"),"native_wire":1,"workspace_api":1,"client_profile_read_min":1,"client_profile_write":5})
+        );
+        assert!(!root.exists());
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn library_trust_enrollment_and_mtls_discovery_use_one_persistent_registration() {
         let f = Fixture::new().await;

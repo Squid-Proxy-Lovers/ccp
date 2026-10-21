@@ -17,6 +17,8 @@ pub(crate) struct WorkspaceArgs {
 }
 #[derive(Subcommand)]
 enum Command {
+    /// Read software compatibility metadata without opening any profile.
+    SoftwareInfo,
     /// Read current global guidance and an optional explicit workspace board.
     Guidance {
         #[arg(long)]
@@ -90,6 +92,13 @@ enum Command {
 }
 pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
     match args.command {
+        Command::SoftwareInfo => output(&serde_json::json!({
+            "format":1,"package_version":env!("CARGO_PKG_VERSION"),
+            "native_wire":protocol::PROTOCOL_VERSION,
+            "workspace_api":protocol::workspace::API_VERSION,
+            "client_profile_read_min":store::PROFILE_MIN_FORMAT,
+            "client_profile_write":store::PROFILE_FORMAT,
+        })),
         Command::Guidance {
             profile,
             workspace_id,

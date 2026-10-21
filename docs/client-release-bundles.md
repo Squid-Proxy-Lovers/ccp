@@ -1,8 +1,8 @@
 # Verify a matching client/MCP release bundle
 
 This unreleased distribution contract identifies matching official client/MCP
-bytes and their build provenance. Managed installation and opt-in automatic
-activation remain a subsequent phase. Existing manual installation and GHCR
+bytes and their build provenance. The [managed bundle commands](managed-client.md) now support manual staging,
+activation and pinned launch. Opt-in automatic checks/activation remain subsequent work. Existing manual installation and GHCR
 server deployment keep their current behavior.
 
 [Documentation index](README.md) · [Nightly builds](nightly-builds.md) ·
@@ -80,7 +80,7 @@ contracts require a manual decision.
 Packaging produces the manifest beside the existing binaries, matching MCP
 archive, build metadata and checksums. A separate provenance job runs only for
 the official repository's version-tag pushes or approved main nightly triggers.
-PR packaging retains read-only permissions; only the protected provenance job
+PR packaging retains read-only permissions; only the event/ref-gated provenance job
 receives OIDC/attestation write permissions. The pinned official attestation
 action signs the manifest, and the job verifies publisher policy before making
 the bundle available to the publishers. Stable and nightly publication both wait
