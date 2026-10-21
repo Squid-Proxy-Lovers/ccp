@@ -56,6 +56,7 @@ the other guides describe the supported native interface.
 | Manage verified client/MCP bundles and optional automatic updates | [Managed client bundles](managed-client.md) |
 | Verify matching official client/MCP bytes and publisher provenance | [Release bundle verification](client-release-bundles.md) |
 | Read reported work and use explicit client status messages | [Work-status storage](workspace-status.md) |
+| Inspect a stopped native database without conversion or source changes | [Native conversion inventory](native-conversion-inventory.md) |
 | Understand the unreleased workspace migration, permissions and guidance foundation | [Workspace access foundation](workspace-foundation.md) |
 | Create shelves/books and read workspace context and shelf lifecycle metadata through the normal client | [Workspace content client](workspace-content-client.md) |
 | Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |

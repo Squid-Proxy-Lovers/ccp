@@ -256,3 +256,11 @@ using a lifecycle revision, terminal UUID fence and bounded resumable cleanup.
 Only the workspace owner or an instance admin can start it. Shared identities and
 other workspace grants survive. Existing entry-purge retry protections remain
 until a separately confirmed whole-workspace job retires that namespace.
+
+## Native conversion inventory
+
+The local [native inventory command](native-conversion-inventory.md) observes a
+stopped source through a private copy, returning aggregate counts and a source
+fingerprint without initialization or conversion. It grants no ownership or
+access and does not remove the legacy-content gate. Actual conversion remains
+subsequent work.

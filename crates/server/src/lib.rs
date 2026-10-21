@@ -9,6 +9,7 @@ pub mod identity;
 pub mod init;
 pub mod instance_tls;
 pub mod journal;
+pub mod legacy_inspection;
 pub mod local_admin;
 pub mod message;
 pub mod state;
