@@ -151,8 +151,8 @@ Workspace keys can issue individual client invitations and revoke that
 workspace’s grants. Creation secrets appear only in that result view; copy them
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
-these actions do not have a browser retry mechanism. Readmission/recovery and
-reported work are not yet exposed in this first panel.
+these actions do not have a browser retry mechanism. Reported work is not yet
+exposed in this first panel.
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
 
@@ -434,3 +434,54 @@ clears the request and stale form even if reads are unavailable. An acknowledged
 creation is recorded before the next session check; if that check fails, the lock
 reports confirmed IDs with close/revoke and individual-invitation recovery directions,
 without showing the unavailable secret or describing creation as failed.
+
+
+## Recover or explicitly readmit a registered client
+
+Choose **Manage client access** on the exact grant row in **Clients & access**.
+The detail shows the registered client UUID and the current key’s recovery scope.
+An instance key recovers across all of that client’s still-authorized workspaces;
+a workspace key recovers this workspace only, including readable archived context.
+The history list contains invitations in that exact scope, not a union of global
+and workspace records. Use its independent pager and current status facts; those
+facts do not prove fresh recovery is currently possible.
+
+**Issue workspace recovery invitation** requires a current grant row. For a
+historical revoked row, choose a current grant row if one exists. An instance key
+can request global recovery even from a historical row, but the server rejects an
+empty current capture. Globally disabled clients get no fresh recovery/readmission
+action; their security history can still be revoked.
+
+Recovery preserves the client UUID and entry ownership. Issuance captures existing
+still-authorized grants; later grants are never added and revoked grants are excluded
+at redemption. Issuance alone does not rotate credentials. Redeeming the secret with
+a fresh key replaces older bindings for captured grants only. Keep the original
+profile for unrelated workspaces and use a separate empty recovery profile; do not
+merge aliases or permissions. Issuing another invitation does not revoke older
+ones. See [client recovery](workspace-client.md#recover-into-a-separate-profile).
+
+**Explicitly readmit client** is a different action: an active workspace owner/admin
+chooses a new data role and issues targeted admission for the same client UUID.
+Every prior grant there must be revoked; the server rechecks the complete history.
+Old grant revocations remain terminal. An active initial group must close first;
+issuing a targeted readmission invitation permanently closes an unused initial
+group phase, even if it is never redeemed or is later revoked. A later admission
+makes a pending ticket stale even if that later grant is revoked. The client redeems using a fresh
+key in an otherwise unenrolled profile; unrelated access and context selection do
+not change. Instance keys cannot borrow this workspace admission power.
+
+Both forms name the target client/scope, use a 1–168 hour lifetime, and show the
+consequences before issuance. Copy the one-time secret privately before leaving.
+**Revoke recovery invitation** blocks redemption and receipt retrieval, including
+after redemption; it does not remove already-issued credentials or membership.
+Use workspace-grant revocation or instance disable for those access changes.
+Readmission invitation status/revocation remains in workspace invitation inventory.
+
+Admin actions send once with frozen target/scope/body/session proof, without an
+operation ID or replay button. Unknown outcomes keep the original request and
+allow a separate first-page observation, never causal attribution. Known recovery
+revocations inspect the exact requested invitation. Forget/discard is local, not
+cancellation; direct discard clears copied/stale form DOM even if reads fail.
+Acknowledgement clears pending work before any postcheck; a failed session check
+reports confirmed invitation/client/scope IDs and concrete inspect/revoke recovery
+without a secret or false creation failure. No automatic refresh discards a secret.

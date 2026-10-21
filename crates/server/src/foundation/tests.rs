@@ -1287,6 +1287,7 @@ mod redemption;
 mod renewal;
 
 mod recovery;
+mod recovery_pages;
 
 mod readmission;
 

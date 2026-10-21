@@ -373,3 +373,55 @@ export class EnrollmentAttempt {
     this.#sent = true; return {body: this.requestBody, proof: this.proof};
   }
 }
+
+export function clientRecoveryScope(session, workspace) {
+  if (session.identity.scope.kind === 'instance') return {kind: 'instance'};
+  if (canManageInvitations(session, workspace)) return {kind: 'workspace', workspace_id: workspace.id};
+  throw new Error('Use an instance recovery key or this workspace’s owner/admin key.');
+}
+function recoveryScopeKey(scope) {
+  if (scope?.kind === 'instance') return 'instance';
+  if (scope?.kind === 'workspace' && typeof scope.workspace_id === 'string' && scope.workspace_id) return 'workspace:' + scope.workspace_id;
+  throw new Error('The recovery scope could not be verified.');
+}
+export function recoveryStatus(value, clientId, scope) {
+  if (value?.client_id !== clientId || recoveryScopeKey(value.scope) !== recoveryScopeKey(scope)
+    || !Number.isSafeInteger(value.expires_at) || value.expires_at < 0
+    || !['revoked', 'expired', 'redeemed', 'issuer_authorized'].every(key => typeof value[key] === 'boolean')) throw new Error('Recovery metadata did not match the client/scope or could not be verified.');
+  return value;
+}
+export function recoveryPage(value, clientId, scope) {
+  if (!Array.isArray(value?.invitations) || value.invitations.length > 16 || value.next_cursor !== null && typeof value.next_cursor !== 'string') throw new Error('The recovery page could not be verified.');
+  const ids = new Set();
+  for (const item of value.invitations) {
+    if (typeof item?.invitation_id !== 'string' || !item.invitation_id || ids.has(item.invitation_id)) throw new Error('Recovery invitation IDs could not be verified.');
+    ids.add(item.invitation_id); recoveryStatus(item.status, clientId, scope);
+  }
+  if (value.next_cursor !== null && (!value.invitations.length || value.next_cursor !== value.invitations.at(-1).invitation_id)) throw new Error('The recovery cursor could not be verified.');
+  return value;
+}
+export class ClientAccessAttempt {
+  #sent = false;
+  constructor(session, workspace, client, change) {
+    const scope = clientRecoveryScope(session, workspace);
+    if (typeof client.client_id !== 'string' || !client.client_id || typeof client.client_disabled !== 'boolean'
+      || client.revoked_at !== null && (!Number.isSafeInteger(client.revoked_at) || client.revoked_at < 0)
+      || !['recover', 'revoke_recovery', 'readmit'].includes(change.action)) throw new Error('Select a verified registered client and explicit access action.');
+    if (change.action !== 'revoke_recovery' && (client.client_disabled || !Number.isSafeInteger(change.expires_at) || change.expires_at < 1)) throw new Error('Disabled clients cannot be recovered or readmitted; choose a valid invitation deadline.');
+    if (change.action === 'recover' && scope.kind === 'workspace' && client.revoked_at !== null) throw new Error('Workspace recovery requires a current grant row. It never restores revoked access.');
+    if (change.action === 'readmit' && (scope.kind !== 'workspace' || workspace.archived || client.revoked_at === null || !['read', 'read_write'].includes(change.role))) throw new Error('Readmission needs an active workspace, revoked history and an explicit scoped data role.');
+    if (change.action === 'revoke_recovery' && (typeof change.invitation_id !== 'string' || !change.invitation_id)) throw new Error('Select the exact recovery invitation to revoke.');
+    this.kind = 'client_access'; this.client_id = client.client_id; this.workspace_id = workspace.id;
+    this.scope = Object.freeze(scope); this.action = change.action;
+    this.path = change.action === 'readmit' ? '/api/v1/admin/invitations/readmission' : '/api/v1/admin/recovery/' + (change.action === 'recover' ? 'issue' : 'revoke');
+    this.requestBody = JSON.stringify(change.action === 'recover' ? {client_id: client.client_id, scope, expires_at: change.expires_at}
+      : change.action === 'readmit' ? {workspace_id: workspace.id, client_id: client.client_id, role: change.role, expires_at: change.expires_at} : {invitation_id: change.invitation_id});
+    this.body = JSON.stringify({path: this.path, request: JSON.parse(this.requestBody), client_id: client.client_id, scope});
+    this.session = signature(session); this.proof = session.csrf_token; Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. Do not send this client access action under the new session.');
+    if (this.#sent) throw new Error('Do not retry this client access action. Inspect current metadata first.');
+    this.#sent = true; return {body: this.requestBody, proof: this.proof};
+  }
+}

@@ -100,7 +100,7 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `POST /api/v1/admin/invitations/list`, `/status` or `/revoke` | Scoped security authority; paged metadata, individual status or revocation |
 | HTTPS | `POST /api/v1/admin/invitations/readmission` | Current workspace owner/admin key; fresh targeted admission after revoked membership |
 | HTTPS | `POST /api/v1/admin/recovery/issue` | Current global or scoped recovery authority; captures still-authorized grants |
-| HTTPS | `POST /api/v1/admin/recovery/status` or `/revoke` | Matching current global or scoped recovery authority |
+| HTTPS | `POST /api/v1/admin/recovery/list`, `/status` or `/revoke` | Matching current global or scoped recovery authority; paged client/scope metadata or exact invitation operations |
 | HTTPS | `POST /api/v1/enroll` | Invitation secret plus signed CSR; new registration or explicit targeted readmission |
 | HTTPS | `POST /api/v1/recover` | Fresh targeted recovery secret plus signed CSR; no old certificate required |
 | Client mTLS | `GET /api/v1/workspaces` | Actual registered current peer; accessible workspace metadata only |
@@ -228,6 +228,38 @@ the existing credential from the actual peer; renewal never converts a
 superseded peer into an ordinary actor. Preserve the request UUID and CSR key
 to retry a lost enrollment/renewal response. Newly granted workspaces are
 available for discovery; no routine context selection is made by these APIs.
+
+## Inspect recovery invitations for one client and scope
+
+POST `/api/v1/admin/recovery/list` with `client_id`, explicit `scope`, optional
+`after` UUID and optional `limit` (default100, range1–500). The strict body rejects
+unknown/duplicate fields. Scope is `{"kind":"instance"}` or
+`{"kind":"workspace","workspace_id":"WORKSPACE_UUID"}`; replace the illustrative UUID.
+Current authority matches recovery issuance/status in that exact scope. Instance
+keys cannot borrow workspace recovery authority, and workspace keys cannot request
+instance or foreign-workspace records. Client credentials cannot use this route.
+
+The result contains `invitations` and nullable `next_cursor`. Each row has
+`invitation_id` and the existing recovery `status`: client UUID, scope, deadline,
+revoked/expired/redeemed flags and current issuer authority. No secret/verifier,
+issuer identity, captured grant/workspace IDs, CSR, credential or certificate is
+returned. Instance listing selects only instance-scoped invitations, not a union
+of workspace-scoped history. Workspace listing selects only its exact workspace.
+An unknown client UUID yields an empty page without disclosing other scopes.
+
+Pages are ordered by invitation UUID. Authorization, bounded candidates and existing
+terminal expiry observations commit atomically; a failure rolls back the whole page.
+The lookahead row is not observed. Pages are current snapshots, not a full-history
+snapshot or lease; concurrent inserts can sort before an earlier cursor. A newly
+seen row is not a causal receipt for an uncertain creation. Secrets cannot be
+retrieved. Security history remains manageable after client disable/revocation and
+while archived under the current matching authority, without granting fresh recovery.
+
+Issuer authority describes the issuer, not full current client/grant recoverability.
+Invitation expiry/revocation does not describe already-issued credential expiry or
+membership. Revoking a recovery invitation blocks redemption and public receipt
+retrieval; it does not revoke an issued credential or grant. See the
+[recovery contract](workspace-recovery.md).
 
 ## Manage workspaces and client access
 

@@ -35,7 +35,7 @@ function lock(message) {
     field(panel, 'Unsaved local work / original write request', {value: text, area: true, readOnly: true});
     actions(panel, button('Copy local work', () => copy(text)));
     if (state.pending?.kind === 'transfer') panel.append(el('p', 'The transfer has no operation ID or safe retry. Your former-owner keys may already be revoked. Ask the intended new owner to inspect with their key, an instance admin to read the owner metadata, or the host operator to inspect local owner recovery. Forgetting locally does not cancel a transfer.'));
-    panel.append(el('p', ['lifecycle', 'security', 'transfer', 'admission', 'enrollment'].includes(state.pending?.kind)
+    panel.append(el('p', ['lifecycle', 'security', 'transfer', 'admission', 'enrollment', 'client_access'].includes(state.pending?.kind)
       ? 'This action has no operation ID. Discarding locally does not cancel execution. Copy the original endpoint and target, then read the current metadata before another action.'
       : 'A pending write may already have completed. Discarding here does not cancel it on the server. Keep the original request details to investigate.'));
   }
@@ -86,7 +86,7 @@ async function request(path, body) {
     const data = await wire(path, body === undefined ? undefined : JSON.stringify(body), state.session.csrf_token);
     try { await verify(); }
     catch (error) {
-      const recovery = creationRecovery(path, data, body);
+      const recovery = creationRecovery(path, data);
       if (recovery) { lock(recovery); throw new Error(recovery); }
       throw error;
     }
@@ -98,12 +98,9 @@ async function request(path, body) {
   }
 }
 
-function creationRecovery(path, result, target = {}) {
+function creationRecovery(path, result) {
   if (path === '/api/v1/admin/workspaces/create') {
     return `Workspace creation confirmed: ${result.workspace_id}. The owner key is no longer displayed because this session could not be checked. Ask the CCP host operator to recover this workspace's owner key using the local reset-owner-key command. This requires host access; an instance key cannot reset it remotely. Do not create a duplicate workspace.`;
-  }
-  if (path === '/api/v1/admin/invitations/individual') {
-    return `Invitation creation confirmed: ${result.invitation_id} in workspace ${target.workspace_id}. Its secret is no longer displayed because this session could not be checked. After signing in with an authorized workspace key, revoke this invitation through /api/v1/admin/invitations/revoke before deliberately issuing another.`;
   }
   return '';
 }

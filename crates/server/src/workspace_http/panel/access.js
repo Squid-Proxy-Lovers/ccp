@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {byId, el, button, actions, notice} from './view.js';
 
+import {showClientAccess} from './client_access.js';
 import {showEnrollment} from './enrollment.js';
 import {showInvitations} from './invitations.js';
 
@@ -22,6 +23,7 @@ export async function showAccess(api, after = null) {
     const access = el('td', grant.revoked_at ? 'Revoked' : grant.role === 'read_write' ? 'Read / write' : 'Read only');
     if (grant.client_disabled) access.append(el('small', 'Disabled instance-wide'));
     const controls = el('td');
+    controls.append(button('Manage client access', () => api.run(() => showClientAccess(api, grant))));
     if (!grant.revoked_at && api.state.session.identity.scope.kind === 'workspace') {
       controls.append(button('Revoke workspace access', () => api.run(async () => {
         if (!api.mayLeave()) return;

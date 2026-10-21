@@ -9,6 +9,7 @@ mod initial_window;
 mod invitation_list;
 mod lifecycle;
 mod panel;
+mod recovery_list;
 mod settings;
 mod team;
 mod transfer;

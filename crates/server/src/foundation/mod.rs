@@ -58,7 +58,8 @@ pub use model::{
 };
 pub use provisioning::{InitialOwner, OwnerProvisioning, ProvisionedWorkspace};
 pub use recovery::{
-    IssuedRecoveryInvitation, RecoveryInvitationRequest, RecoveryInvitationStatus, RecoveryReceipt,
+    IssuedRecoveryInvitation, RecoveryInvitationPage, RecoveryInvitationRequest,
+    RecoveryInvitationStatus, RecoveryInvitationSummary, RecoveryPageRequest, RecoveryReceipt,
     RecoveryRedemptionRequest, RecoveryScope,
 };
 pub use retention::{EntryRetentionChange, EntryRetentionPolicy, TimedEntryPurge};

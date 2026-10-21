@@ -82,3 +82,23 @@ pub struct RecoveryInvitationStatus {
     pub redeemed: bool,
     pub issuer_authorized: bool,
 }
+
+#[derive(Clone, Copy, Debug)]
+pub struct RecoveryPageRequest {
+    pub client_id: Uuid,
+    pub scope: RecoveryScope,
+    pub after: Option<Uuid>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryInvitationSummary {
+    pub id: Uuid,
+    pub status: RecoveryInvitationStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RecoveryInvitationPage {
+    pub invitations: Vec<RecoveryInvitationSummary>,
+    pub next_cursor: Option<Uuid>,
+}

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -404,5 +404,64 @@ test('initial-window actions cannot cross original session, scope or principal b
     const changed = structuredClone(s); mutate(changed);
     assert.throws(() => attempt.request(changed), /session changed/);
     assert.equal(JSON.parse(attempt.request(s).body).workspace_id, 'workspace');
+  }
+});
+
+
+const liveClient = () => ({client_id: 'client', client_name: 'label', client_disabled: false, revoked_at: null});
+
+test('client recovery scope follows the actual key ceiling, never a selected workspace role union', () => {
+  const s = session(), w = {id: 'workspace', archived: true};
+  assert.deepEqual(clientRecoveryScope(s, w), {kind: 'workspace', workspace_id: 'workspace'});
+  assert.throws(() => clientRecoveryScope(s, {id: 'foreign'}));
+  s.identity.scope = {kind: 'instance', workspace_id: 'workspace', role: 'owner'};
+  assert.deepEqual(clientRecoveryScope(s, w), {kind: 'instance'});
+  const global = new ClientAccessAttempt(s, w, {...liveClient(), revoked_at: 0}, {action: 'recover', expires_at: 2000});
+  assert.equal(JSON.parse(global.request(s).body).scope.kind, 'instance');
+  assert.throws(() => new ClientAccessAttempt(s, {id: 'workspace', archived: false}, {...liveClient(), revoked_at: 0}, {action: 'readmit', role: 'read', expires_at: 2000}));
+});
+
+test('recovery metadata binds the exact client and scope without unsafe or duplicated records', () => {
+  const scope = {kind: 'workspace', workspace_id: 'workspace'};
+  const status = {client_id: 'client', scope, expires_at: 2000, revoked: false, expired: false, redeemed: false, issuer_authorized: true};
+  assert.deepEqual(recoveryStatus(status, 'client', scope), status);
+  assert.throws(() => recoveryStatus(status, 'other', scope));
+  assert.throws(() => recoveryStatus(status, 'client', {kind: 'instance'}));
+  assert.throws(() => recoveryStatus({...status, expires_at: Number.MAX_SAFE_INTEGER + 1}, 'client', scope));
+  assert.throws(() => recoveryStatus({...status, redeemed: null}, 'client', scope));
+  const row = {invitation_id: 'token', status};
+  assert.equal(recoveryPage({invitations: [row], next_cursor: 'token'}, 'client', scope).invitations.length, 1);
+  assert.throws(() => recoveryPage({invitations: [row, row], next_cursor: null}, 'client', scope));
+  assert.throws(() => recoveryPage({invitations: [], next_cursor: 'missing'}, 'client', scope));
+});
+
+test('recovery and readmission are distinct explicit requests with archive and disable boundaries', () => {
+  const s = session(), w = {id: 'workspace', archived: true}, client = liveClient();
+  const recovery = new ClientAccessAttempt(s, w, client, {action: 'recover', expires_at: 2000});
+  assert.deepEqual(JSON.parse(recovery.request(s).body), {client_id: 'client', scope: {kind: 'workspace', workspace_id: 'workspace'}, expires_at: 2000});
+  assert.throws(() => new ClientAccessAttempt(s, w, {...client, revoked_at: 0}, {action: 'recover', expires_at: 2000}));
+  assert.throws(() => new ClientAccessAttempt(s, w, {...client, revoked_at: 0}, {action: 'readmit', role: 'read', expires_at: 2000}));
+  const readmit = new ClientAccessAttempt(s, {...w, archived: false}, {...client, revoked_at: 0}, {action: 'readmit', role: 'read_write', expires_at: 2000});
+  assert.deepEqual(JSON.parse(readmit.request(s).body), {workspace_id: 'workspace', client_id: 'client', role: 'read_write', expires_at: 2000});
+  assert.throws(() => new ClientAccessAttempt(s, w, {...client, client_disabled: true}, {action: 'recover', expires_at: 2000}));
+  const revoke = new ClientAccessAttempt(s, w, {...client, client_disabled: true}, {action: 'revoke_recovery', invitation_id: 'token'});
+  assert.deepEqual(JSON.parse(revoke.request(s).body), {invitation_id: 'token'});
+});
+
+test('client access actions keep exact one-shot identity/scope/deadline and cannot cross session bindings', () => {
+  const s = session(), w = {id: 'workspace', archived: false}, client = liveClient();
+  const change = {action: 'recover', expires_at: 2000};
+  const attempt = new ClientAccessAttempt(s, w, client, change); client.client_id = 'changed'; change.expires_at = 9999;
+  assert.equal(JSON.parse(attempt.request(s).body).client_id, 'client');
+  assert.equal(JSON.parse(attempt.requestBody).expires_at, 2000);
+  assert.throws(() => attempt.request(s), /Do not retry/);
+  assert.throws(() => {attempt.scope.workspace_id = 'other';}, TypeError);
+  assert.ok(!attempt.body.includes('operation_id') && !attempt.body.includes('proof'));
+  for (const mutate of [s => {s.csrf_token = 'new';}, s => {s.identity.key_id = 'other';},
+    s => {s.instance_id = 'other';}, s => {s.identity.principal_id = 'other';},
+    s => {s.identity.scope.role = 'admin';}, s => {s.identity.scope.workspace_id = 'other';}]) {
+    const current = session(), t = new ClientAccessAttempt(current, w, liveClient(), {action: 'recover', expires_at: 2000});
+    const changed = structuredClone(current); mutate(changed); assert.throws(() => t.request(changed), /session changed/);
+    assert.equal(JSON.parse(t.request(current).body).client_id, 'client');
   }
 });

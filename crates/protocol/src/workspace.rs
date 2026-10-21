@@ -215,6 +215,27 @@ pub struct RecoveryStatus {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryPage {
+    pub client_id: String,
+    pub scope: RecoveryScope,
+    pub after: Option<String>,
+    pub limit: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RecoveryInvitationSummary {
+    pub invitation_id: String,
+    pub status: RecoveryStatus,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RecoveryInvitations {
+    pub invitations: Vec<RecoveryInvitationSummary>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum InitialOwner {
     Existing { principal_id: String },

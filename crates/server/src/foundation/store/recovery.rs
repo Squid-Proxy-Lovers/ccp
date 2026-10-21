@@ -12,6 +12,7 @@ use crate::foundation::{
     RecoveryInvitationStatus, RecoveryReceipt, RecoveryRedemptionRequest, RecoveryScope,
 };
 
+mod pages;
 mod records;
 use records::{load_recovery, recovery_retry, replace_bindings};
 
@@ -166,29 +167,37 @@ impl AccessStore<'_> {
                 invite.scope.workspace(),
                 now,
             )?;
-            let expired = observe_expiry(tx, &invite, now)?;
-            let redeemed = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM ccp_recovery_receipts WHERE invitation_id = ?1)",
-                [invitation.to_string()],
-                |row| row.get(0),
-            )?;
-            Ok(RecoveryInvitationStatus {
-                client_id: invite.client,
-                scope: invite.scope,
-                expires_at: invite.expires_at,
-                revoked: invite.revoked,
-                expired,
-                redeemed,
-                issuer_authorized: permitted(
-                    tx,
-                    invite.issuer,
-                    invite.scope.action(),
-                    invite.scope.workspace(),
-                    now,
-                )?,
-            })
+            recovery_status(tx, &invite, now)
         })
     }
+}
+
+fn recovery_status(
+    tx: &Connection,
+    invite: &RecoveryInvitation,
+    now: i64,
+) -> anyhow::Result<RecoveryInvitationStatus> {
+    let expired = observe_expiry(tx, invite, now)?;
+    let redeemed = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ccp_recovery_receipts WHERE invitation_id = ?1)",
+        [invite.id.to_string()],
+        |row| row.get(0),
+    )?;
+    Ok(RecoveryInvitationStatus {
+        client_id: invite.client,
+        scope: invite.scope,
+        expires_at: invite.expires_at,
+        revoked: invite.revoked,
+        expired,
+        redeemed,
+        issuer_authorized: permitted(
+            tx,
+            invite.issuer,
+            invite.scope.action(),
+            invite.scope.workspace(),
+            now,
+        )?,
+    })
 }
 
 fn require_recoverable_client(tx: &Connection, client: Uuid) -> anyhow::Result<()> {

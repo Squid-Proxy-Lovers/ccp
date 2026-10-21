@@ -5,8 +5,9 @@ existing registered client after its workspace grants have all been revoked.
 This unreleased API creates a new scoped grant and credential for the same
 client UUID. Old grant revocations remain terminal. The
 [workspace HTTPS API](workspace-http-api.md) exposes scoped issuance/status/revoke
-and redemption through `/api/v1/enroll`. Normal client/MCP commands and browser
-workflows remain subsequent work. See the
+and redemption through `/api/v1/enroll`. The [client enrollment workflow](workspace-client.md#redeem-an-invitation) supports a fresh
+unenrolled profile; the [desktop client-access view](workspace-browser-session.md#recover-or-explicitly-readmit-a-registered-client)
+provides explicit targeted issuance and workspace invitation inspection. See the
 [documentation index](README.md) for supported interfaces.
 
 ## Issue a fresh targeted invitation
@@ -57,8 +58,8 @@ Success creates a new grant ID with the selected data role and binds only that
 grant to a new credential for the existing client UUID. It does not change old
 grant records, attach the new grant to old credentials, copy other workspace
 grants or revoke unrelated bindings. The UUID maintains identity continuity for
-the later entry-ownership layer. Client selection and local credential activation
-remain explicit future adapter operations.
+entry ownership and retained attribution. Client profile activation and context
+selection remain explicit; readmission never selects the workspace automatically.
 
 Issuance commits the invitation, target, complete history snapshot and audit
 atomically. Redemption commits the new certificate, grant, binding, one-use
@@ -99,5 +100,4 @@ historical snapshots, intervening admission/revocation, known-key rejection,
 initial-group transitions, stale generic tokens, lifecycle, global disable,
 exact/concurrent retries, rollback and schema-10 upgrade with recovery retained.
 Actual localhost TLS tests also cover scoped keys, fresh CSR keys, exact retry,
-server-captured target/history and unrelated access. Production deployment and
-normal client/MCP and browser flows remain incomplete.
+server-captured target/history and unrelated access. Production deployment remains separate from tested client and desktop flows.

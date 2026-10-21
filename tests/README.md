@@ -303,3 +303,8 @@ Initial-window tests cover real persisted eligibility rather than inventory
 inference, revoked admission history, closure without a link, atomic rollback,
 clock rollback/capacity terminality and actual enrollment over cookie/TLS. Panel
 model tests cover explicit optional bounds, confirmation and one-shot session binding.
+
+Recovery inventory tests cover exact client and nullable scope paging, authority
+ceilings, status parity, terminal expiry, lookahead exclusion and page rollback.
+Client-access model tests distinguish credential recovery from fresh readmission,
+including archive/disable boundaries, frozen scope/body and session binding.

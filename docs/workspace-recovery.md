@@ -7,7 +7,9 @@ exposes scoped issuance, status, revocation and public certificate redemption.
 Verify the server CA and name before transmitting secrets. Normal client/MCP
 commands support recovery into a separate empty profile; see the
 [client recovery steps](workspace-client.md#recover-into-a-separate-profile).
-Workspace MCP and browser workflows remain subsequent work.
+Workspace MCP uses explicitly configured client profiles. The
+[desktop client-access view](workspace-browser-session.md#recover-or-explicitly-readmit-a-registered-client)
+provides administrative recovery issuance, scoped history and revocation.
 See the [documentation index](README.md) for supported interfaces.
 
 ## Choose the authorized scope
@@ -62,8 +64,7 @@ invitation, without accepting its expired certificate as authentication.
 
 Certificate, replacement bindings, receipt and audit commit under one immediate
 SQLite write transaction. Signing, SQL or audit failure leaves the original
-working bindings intact. The same client UUID preserves identity continuity for
-the later entry-ownership layer; this batch does not implement that content layer.
+working bindings intact. The same client UUID preserves entry ownership and retained attribution.
 
 ## Retry, inspect or revoke
 
@@ -87,7 +88,9 @@ persists closure, so rolling the clock back cannot reopen the invitation.
 recovery authority. Revoking an invitation denies redemption and receipt
 retrieval; it does not revoke an already-issued certificate or membership.
 Use grant revocation, another authorized recovery or global client disable for
-the corresponding access change.
+the corresponding access change. The [recovery inventory API](workspace-http-api.md#inspect-recovery-invitations-for-one-client-and-scope)
+lists known client/scope history when a creation response was lost; it never
+retrieves secrets or proves which request created a row.
 
 ## Storage and verification limits
 
@@ -103,7 +106,6 @@ competing requests, rollback, schema-9 upgrade and restart. Actual localhost TLS
 tests cover scope, current issuer/disable, fresh keys, retry, concurrency, audit
 rollback and unrelated bindings. Network receipts omit captured grant IDs; those
 remain internal records. Normal client recovery preserves existing profiles and
-their unrelated keys; production deployment, workspace MCP and browser flows
-remain incomplete. Explicit [targeted readmission](workspace-readmission.md) is a separate
+their unrelated keys; production deployment remains separate from the tested CLI/MCP and desktop flows. Explicit [targeted readmission](workspace-readmission.md) is a separate
 administrative action that creates a new grant; recovery never restores a
 revoked grant.

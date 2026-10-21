@@ -13,6 +13,7 @@ use crate::foundation::{
 };
 mod enrollment;
 mod listing;
+mod recovery_list;
 
 use hyper::Method;
 use protocol::workspace as api;
@@ -29,6 +30,7 @@ pub(super) fn handles(path: &str) -> bool {
             | "/api/v1/admin/enrollment/close"
             | "/api/v1/admin/enrollment/status"
             | "/api/v1/admin/recovery/issue"
+            | "/api/v1/admin/recovery/list"
             | "/api/v1/admin/recovery/status"
             | "/api/v1/admin/recovery/revoke"
     )
@@ -46,6 +48,7 @@ pub(super) fn dispatch(
     match input.path.as_str() {
         "/api/v1/admin/invitations/list" => listing::list(store, actor, input, now),
         "/api/v1/admin/enrollment/status" => enrollment::get(store, actor, input, now),
+        "/api/v1/admin/recovery/list" => recovery_list::list(store, actor, input, now),
         "/api/v1/admin/invitations/initial" => {
             let body: api::InitialInvitation = decode(&input.body)?;
             let issued = store
@@ -195,13 +198,19 @@ fn recovery(
     let status = store
         .recovery_invitation_status(actor, invitation, now)
         .map_err(operation)?;
+    response::success(recovery_status_view(status))
+}
+
+fn recovery_status_view(
+    status: crate::foundation::RecoveryInvitationStatus,
+) -> api::RecoveryStatus {
     let scope = match status.scope {
         RecoveryScope::Instance => api::RecoveryScope::Instance {},
         RecoveryScope::Workspace(workspace) => api::RecoveryScope::Workspace {
             workspace_id: workspace.to_string(),
         },
     };
-    response::success(api::RecoveryStatus {
+    api::RecoveryStatus {
         client_id: status.client_id.to_string(),
         scope,
         expires_at: status.expires_at,
@@ -209,7 +218,7 @@ fn recovery(
         expired: status.expired,
         redeemed: status.redeemed,
         issuer_authorized: status.issuer_authorized,
-    })
+    }
 }
 
 fn complete() -> Result<Reply, Error> {
