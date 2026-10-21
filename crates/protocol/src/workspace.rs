@@ -35,6 +35,16 @@ pub struct Health {
     pub instance_id: String,
 }
 
+/// Public software contracts; this metadata grants no workspace authority.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoftwareInfo {
+    pub instance_id: String,
+    pub package_version: String,
+    pub native_wire: u32,
+    pub workspace_api: u32,
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct Workspace {
     pub id: String,

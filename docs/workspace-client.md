@@ -19,6 +19,36 @@ Use `workspace software-info` to read package/wire/API/profile software contract
 without opening a profile or contacting a server. The
 [managed launcher](managed-client.md) uses this check before activation.
 
+## Inspect update compatibility without changing a profile
+
+Run this command with the candidate client executable and an existing absolute
+profile directory:
+
+```bash
+ccp-client workspace update-preflight --profile "$HOME/.ccp-client/workspaces/office"
+```
+
+The command reads the existing profile through a read-only SQLite snapshot, closes
+it, and requests software metadata over the profile's pinned HTTPS connection.
+It verifies the server instance, native wire and workspace API contracts. The
+JSON result contains `format: 1`, `profile_format`, `migration_required`, `pending`
+and public `server` metadata. It returns no credential, key or pending-request body.
+The library equivalent is `client::workspace::update_preflight(&absolute_path)`.
+
+This inspection creates no profile, backup or caller selection, performs no
+migration, and sends no enrollment, recovery or renewal request. It does not check
+workspace grants or credential validity. `migration_required: true` or `pending:
+true` reports a reason for a later updater to defer activation. A successful
+inspection alone does not approve an update or reserve the profile against other
+processes.
+
+Missing or busy profiles and unsupported or malformed compatibility metadata are
+refused. WAL profiles and
+existing journal sidecars are refused before SQLite opens them, without repair or
+cleanup. An older server without the software endpoint, unavailable metadata or a
+TLS/instance/contract mismatch also refuses inspection. Automatic discovery and
+opt-in activation remain subsequent work; this command never updates the server.
+
 ## Establish server trust first
 
 Obtain the instance UUID and public CA certificate from the host operator through

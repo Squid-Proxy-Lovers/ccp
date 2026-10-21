@@ -9,12 +9,14 @@ mod crypto;
 pub mod guidance;
 mod lifecycle;
 mod network;
+mod preflight;
 mod read;
 mod recovery;
 mod selection;
 mod store;
 pub mod work_status;
 
+pub use preflight::{UpdatePreflight, update_preflight};
 pub use selection::{Selection, SelectionUpdate, Target};
 
 use anyhow::{Context, bail};

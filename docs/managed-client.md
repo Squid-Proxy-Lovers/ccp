@@ -2,8 +2,9 @@
 
 These unreleased commands keep a client executable and its MCP environment in one
 private generation. Manual staging, activation, rollback and pinned launch are
-implemented. Download discovery, local opt-in automatic checks and automatic
-server/profile compatibility preflight remain subsequent work.
+implemented. A separate [read-only client preflight](workspace-client.md#inspect-update-compatibility-without-changing-a-profile)
+can inspect one profile and its pinned server. Download discovery, local opt-in
+automatic checks and activation policy remain subsequent work.
 
 [Documentation index](README.md) · [Release bundle verification](client-release-bundles.md) ·
 [Workspace MCP](workspace-mcp.md)
@@ -86,9 +87,12 @@ Keep both ready generations and inspect `status`; do not delete the candidate or
 restore a profile/database. A rename may already be visible even if its directory
 sync reported an error. No power-loss guarantee is established by local tests.
 
-This manual path checks the candidate's declared local contracts. It does not yet
-probe configured servers or migrate profiles. Automatic activation will require
-the later compatibility and channel/pin policy. No automatic mode is enabled here.
+This manual activation checks the candidate's declared local contracts. It does
+not invoke preflight or migrate profiles. The candidate client's explicit
+`workspace update-preflight --profile /absolute/profile` can inspect a profile
+without migration or renewal. Automatic activation will require all configured
+profiles to pass the later compatibility and channel/pin policy. No automatic mode
+is enabled here.
 
 ## Launch a fixed pair
 

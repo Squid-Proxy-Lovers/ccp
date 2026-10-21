@@ -19,6 +19,11 @@ pub(crate) struct WorkspaceArgs {
 enum Command {
     /// Read software compatibility metadata without opening any profile.
     SoftwareInfo,
+    /// Inspect profile/server compatibility without migration, renewal or writes.
+    UpdatePreflight {
+        #[arg(long)]
+        profile: PathBuf,
+    },
     /// Read current global guidance and an optional explicit workspace board.
     Guidance {
         #[arg(long)]
@@ -99,6 +104,7 @@ pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
             "client_profile_read_min":store::PROFILE_MIN_FORMAT,
             "client_profile_write":store::PROFILE_FORMAT,
         })),
+        Command::UpdatePreflight { profile } => output(&super::update_preflight(&profile).await?),
         Command::Guidance {
             profile,
             workspace_id,

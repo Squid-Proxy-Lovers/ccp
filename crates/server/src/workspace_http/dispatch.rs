@@ -39,6 +39,17 @@ pub(super) fn dispatch(context: &Context, input: Input) -> Result<Reply, Error> 
             instance_id: context.state.identity.trust().instance_id.clone(),
         });
     }
+    if input.path == "/api/v1/software-info" {
+        if input.method != Method::GET {
+            return Err(Error::Method);
+        }
+        return response::success(api::SoftwareInfo {
+            instance_id: context.state.identity.trust().instance_id.clone(),
+            package_version: env!("CARGO_PKG_VERSION").to_owned(),
+            native_wire: protocol::PROTOCOL_VERSION,
+            workspace_api: api::API_VERSION,
+        });
+    }
     let mut connection =
         Connection::open_with_flags(&context.state.database, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|_database_error| Error::Unavailable)?;

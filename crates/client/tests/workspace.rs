@@ -6,6 +6,7 @@
 #[path = "workspace"]
 mod tests {
     mod content;
+    mod preflight;
     mod recovery;
     mod selection;
     mod status;

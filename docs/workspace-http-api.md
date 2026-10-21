@@ -74,6 +74,7 @@ There is no automatic OS/browser trust installation or server update.
 | Listener | Method and path | Authority and result |
 | --- | --- | --- |
 | HTTPS or client mTLS | `GET /api/v1/health` | Public instance UUID and API version; the client listener still requires its TLS certificate |
+| HTTPS or client mTLS | `GET /api/v1/software-info` | Public instance UUID, package version, native wire and workspace API contracts; no content/admin authority or database access; client listener still requires its TLS certificate |
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
 | HTTPS | `POST /api/v1/admin/workspaces/create` or `/first-owner` | Current instance key; atomic workspace/first-owner key provisioning |
 | HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |

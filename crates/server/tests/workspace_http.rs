@@ -9,6 +9,8 @@ mod tests {
     mod browser;
     #[path = "workspace_content/mod.rs"]
     mod content;
+    #[path = "workspace_preflight/mod.rs"]
+    mod preflight;
     use anyhow::Context;
     use rcgen::{CertificateParams, KeyPair};
     use reqwest::Client;

@@ -8,7 +8,7 @@ mod migration;
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OpenFlags, params};
 use serde::de::DeserializeOwned;
-use std::{fs, path::Path, time::Duration};
+use std::{fs, io::Read, path::Path, time::Duration};
 use uuid::Uuid;
 
 const APPLICATION_ID: i64 = 0x4343_5043;
@@ -157,6 +157,66 @@ fn format(connection: &Connection) -> anyhow::Result<u32> {
     }
     Ok(u32::try_from(version)?)
 }
+
+pub(super) fn inspect_update(directory: &Path) -> anyhow::Result<(WorkspaceTrust, u32, bool)> {
+    if !directory.is_absolute() {
+        bail!("update preflight requires an absolute profile directory");
+    }
+    private_directory(directory, false)?;
+    let path = directory.join(PROFILE);
+    private_file_limit(&path, 16 * 1024 * 1024)?;
+    check_update_header(directory, &path)?;
+    let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    connection.busy_timeout(Duration::from_secs(2))?;
+    let tx = connection.transaction()?;
+    let version = format(&tx)?;
+    let mode: String = tx.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+    if mode != "delete" {
+        bail!("unsupported workspace profile journal mode");
+    }
+    let (trust, mut pending): (String, bool) = tx.query_row(
+        "SELECT trust,pending IS NOT NULL FROM profile WHERE singleton=1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    if version >= 4 {
+        pending |= tx.query_row(
+            "SELECT pending IS NOT NULL FROM content_state WHERE singleton=1",
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+    }
+    if version >= 5 {
+        pending |= tx.query_row(
+            "SELECT pending IS NOT NULL FROM status_state WHERE singleton=1",
+            [],
+            |r| r.get::<_, bool>(0),
+        )?;
+    }
+    let trust: WorkspaceTrust = decode(&trust)?;
+    trust.validate()?;
+    tx.commit()?;
+    Ok((trust, version, pending))
+}
+
+fn check_update_header(directory: &Path, path: &Path) -> anyhow::Result<()> {
+    // Refuse WAL before SQLite can create sidecars even on a read-only open.
+    // SQLite fileformat2.html: offsets 18/19 are 1 for rollback, 2 for WAL.
+    let mut header = [0; 100];
+    fs::File::open(path)?.read_exact(&mut header)?;
+    if !header.starts_with(b"SQLite format 3\0") || header.get(18..20) != Some(&[1, 1]) {
+        bail!("unsupported workspace profile journal format");
+    }
+    for suffix in ["-journal", "-wal", "-shm"] {
+        match fs::symlink_metadata(directory.join(format!("{PROFILE}{suffix}"))) {
+            Ok(_) => bail!("profile has journal sidecars; no repair was attempted"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
 fn decode<T: DeserializeOwned>(value: &str) -> anyhow::Result<T> {
     serde_json::from_str(value)
         .map_err(|_private_data| anyhow::anyhow!("invalid workspace profile data"))
