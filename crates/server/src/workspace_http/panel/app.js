@@ -5,6 +5,7 @@ import {showAccess} from './access.js';
 import {showContext} from './context.js';
 import {showGuidance} from './guidance.js';
 import {showSettings} from './settings.js';
+import {showReported} from './reported.js';
 
 let fragmentKey = takeFragment(location, history);
 const state = {session: null, workspace: null, generation: 0, dirty: false, pending: null,
@@ -209,8 +210,9 @@ async function renderWorkspace() {
     heading.append(el('p', 'Instance key: workspace context is read-only. Sign in with a workspace key to edit.', 'muted'));
   }
   byId('global-guidance').setAttribute('aria-current', 'false');
-  for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', String(state.tab === tab));
+  for (const tab of ['access', 'context', 'reported', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', String(state.tab === tab));
   byId('content').replaceChildren();
+  if (state.tab === 'reported') return showReported(api);
   if (state.tab === 'settings') return showSettings(api);
   if (state.tab === 'guidance') await showGuidance(api);
   else await (state.tab === 'access' ? showAccess(api) : showContext(api));
@@ -222,7 +224,7 @@ async function globalGuidance() {
   byId('workspace-tabs').hidden = true;
   byId('workspace-heading').replaceChildren(el('h2', 'Global guidance'));
   for (const node of byId('workspaces').querySelectorAll('[aria-current]')) node.removeAttribute('aria-current');
-  for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
+  for (const tab of ['access', 'context', 'reported', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
   byId('global-guidance').setAttribute('aria-current', 'true');
   await showGuidance(api);
 }
@@ -236,7 +238,7 @@ async function activate(session) {
   state.tab = 'access';
   byId('workspace-tabs').hidden = true;
   byId('global-guidance').setAttribute('aria-current', 'false');
-  for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
+  for (const tab of ['access', 'context', 'reported', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
   byId('content').replaceChildren();
   byId('workspaces').replaceChildren();
   byId('login').hidden = true;
@@ -277,7 +279,7 @@ byId('refresh').addEventListener('click', () => run(async () => {
   else if (state.workspace) await renderWorkspace();
   else await workspaces();
 }));
-for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).addEventListener('click', () => run(async () => {
+for (const tab of ['access', 'context', 'reported', 'guidance', 'settings']) byId(`${tab}-tab`).addEventListener('click', () => run(async () => {
   if (!state.workspace || !mayLeave()) return;
   state.generation += 1;
   state.tab = tab;

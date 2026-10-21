@@ -151,8 +151,8 @@ Workspace keys can issue individual client invitations and revoke that
 workspace’s grants. Creation secrets appear only in that result view; copy them
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
-these actions do not have a browser retry mechanism. Reported work is not yet
-exposed in this first panel.
+these actions do not have a browser retry mechanism. Reported work has its own read-only
+[status view](workspace-status.md#inspect-reported-work-in-the-desktop-panel).
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
 

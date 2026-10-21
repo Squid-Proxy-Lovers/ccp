@@ -10,6 +10,7 @@ mod invitation_list;
 mod lifecycle;
 mod panel;
 mod recovery_list;
+mod reported;
 mod settings;
 mod team;
 mod transfer;

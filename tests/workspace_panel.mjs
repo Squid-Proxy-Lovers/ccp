@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -527,4 +527,41 @@ test('archived shelf pages reject foreign, duplicate, unsafe or unbound cursor m
   for (const value of [{items: [item, item], next_cursor: null}, {items: [{...item, workspace_id: 'foreign'}], next_cursor: null},
     {items: [{...item, revision: Number.MAX_SAFE_INTEGER + 1}], next_cursor: null}, {items: [], next_cursor: 'shelf'},
     {items: [item], next_cursor: 'other'}, {items: Array(33).fill(item), next_cursor: null}]) assert.throws(() => archivedShelfPage(value, 'workspace'), /metadata|numeric|page|cursor/);
+});
+
+test('reported-work pages bind workspace, independent status slots, cursor and server-observed age', () => {
+  const item = {workspace_id: 'workspace', status_id: 'status', client_id: 'client', client_name: 'registered name', client_disabled: false,
+    revision: 2, agent: '<script>literal</script>', message: 'Investigating retries', updated_at: 1000, stale: false};
+  const page = {items: [item], next_cursor: 'status', observed_at: 1299, stale_after_seconds: 300};
+  assert.equal(reportedWorkPage(page, 'workspace'), page);
+  for (const [now, stale] of [[1299, false], [1300, true], [999, true]]) {
+    assert.equal(reportedWorkPage({...page, observed_at: now, items: [{...item, stale}]}, 'workspace').items[0].stale, stale);
+  }
+  for (const value of [{...page, items: [item, item]}, {...page, next_cursor: 'different'}, {...page, items: [], next_cursor: 'status'},
+    {...page, observed_at: Number.MAX_SAFE_INTEGER + 1}, {...page, stale_after_seconds: 0}, {...page, items: Array(33).fill(item)},
+    {...page, items: [{...item, workspace_id: 'foreign'}]}, {...page, items: [{...item, stale: true}]},
+    {...page, items: [{...item, message: null}]}, {...page, items: [{...item, message: 'é'.repeat(2049)}]},
+    {...page, items: [{...item, agent: 'é'.repeat(65)}]}, {...page, items: [{...item, revision: 1.5}]},
+    {...page, items: [{...item, client_disabled: 'no'}]}, {...page, items: [{...item, updated_at: -1}]}]) assert.throws(() => reportedWorkPage(value, 'workspace'), /page|workspace|cursor|freshness|numeric/);
+});
+
+test('status message and optional label bounds preserve exact text without inventing an agent identity', () => {
+  const item = {workspace_id: 'workspace', status_id: 'status', client_id: 'client', client_name: 'name', client_disabled: true,
+    revision: 1, agent: null, message: 'é'.repeat(2048), updated_at: 1000, stale: true};
+  const page = {items: [item], next_cursor: null, observed_at: 1300, stale_after_seconds: 300};
+  assert.equal(reportedWorkPage(page, 'workspace').items[0].message, item.message);
+  assert.equal(reportedWorkPage(page, 'workspace').items[0].agent, null);
+  for (const bad of [{message: ''}, {message: '\0'}, {agent: ''}, {agent: '\0'}, {agent: 1}, {client_id: ''}, {client_name: ''}]) assert.throws(() => reportedWorkPage({...page, items: [{...item, ...bad}]}, 'workspace'), /workspace/);
+});
+
+test('server-accepted U+FEFF text and agent labels preserve the full page and its cursor', () => {
+  for (const [message, agent] of [['\uFEFF', 'label'], ['work', '\uFEFF'], ['\uFEFF', '\uFEFF'], [' \uFEFF\n', '\uFEFF ']]) {
+    const first = {workspace_id: 'workspace', status_id: 'status-1', client_id: 'client', client_name: 'name', client_disabled: false,
+      revision: 1, agent, message, updated_at: 1000, stale: false};
+    const later = {...first, status_id: 'status-2', message: 'Other client work remains readable', agent: null};
+    const page = {items: [first, later], next_cursor: 'status-2', observed_at: 1000, stale_after_seconds: 300};
+    const result = reportedWorkPage(page, 'workspace');
+    assert.equal(result.items[0].message, message); assert.equal(result.items[0].agent, agent);
+    assert.equal(result.items[1].message, later.message); assert.equal(result.next_cursor, 'status-2');
+  }
 });

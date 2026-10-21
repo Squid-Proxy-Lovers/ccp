@@ -320,3 +320,10 @@ paging and live-slot limits. SQL abort/ignore injection verifies whole-operation
 rollback; file reopen and concurrent CAS cases preserve tombstones and receipts.
 Schema migration tests cover preservation and atomic refusal; runtime adapters
 are not part of this core slice.
+
+Status HTTP/TLS tests cover strict set/clear variants, bounded reads, current
+client identity and read/write scope, real credential renewal, writer-grant
+revocation, archived reads, historical clear/replay and sanitized atomic faults.
+Cookie tests keep read authorization/CSRF separate from client publication.
+The reported-work model validates scoped pages, UTF-8 bounds and server-observed
+freshness without inferring contact or completion.

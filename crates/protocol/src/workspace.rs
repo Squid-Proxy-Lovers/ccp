@@ -9,6 +9,7 @@ pub mod browser;
 pub mod content;
 pub mod guidance;
 pub mod retention;
+pub mod work_status;
 
 pub const API_VERSION: u32 = 1;
 

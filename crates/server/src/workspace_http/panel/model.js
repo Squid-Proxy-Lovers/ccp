@@ -471,3 +471,23 @@ export class ContentAdminIntent {
     return value;
   }
 }
+
+export function reportedWorkPage(value, workspaceId) {
+  if (!Array.isArray(value?.items) || value.items.length > 32
+    || !Number.isSafeInteger(value.observed_at) || value.observed_at < 0
+    || !Number.isSafeInteger(value.stale_after_seconds) || value.stale_after_seconds < 1
+    || value.next_cursor !== null && typeof value.next_cursor !== 'string') throw new Error('The reported-work page could not be verified.');
+  const ids = new Set(), bytes = text => new TextEncoder().encode(text).length;
+  for (const item of value.items) {
+    if (item?.workspace_id !== workspaceId || typeof item.status_id !== 'string' || !item.status_id || ids.has(item.status_id)
+      || typeof item.client_id !== 'string' || !item.client_id || typeof item.client_name !== 'string' || !item.client_name
+      || typeof item.client_disabled !== 'boolean' || !Number.isSafeInteger(item.updated_at) || item.updated_at < 0
+      || typeof item.stale !== 'boolean' || typeof item.message !== 'string' || !item.message || item.message.includes('\0') || bytes(item.message) > 4096
+      || item.agent !== null && (typeof item.agent !== 'string' || !item.agent || item.agent.includes('\0') || bytes(item.agent) > 128)) throw new Error('Reported work did not match this workspace or could not be verified.');
+    exactRevision(item.revision); ids.add(item.status_id);
+    const age = value.observed_at - item.updated_at;
+    if (item.stale !== (age < 0 || age >= value.stale_after_seconds)) throw new Error('The report freshness observation could not be verified.');
+  }
+  if (value.next_cursor !== null && (!value.items.length || value.next_cursor !== value.items.at(-1).status_id)) throw new Error('The reported-work cursor could not be verified.');
+  return value;
+}

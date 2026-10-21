@@ -8,7 +8,7 @@ use super::{
     response::{self, Error, Reply},
     retention,
     session::Context,
-    team,
+    team, work_status,
 };
 use crate::foundation::{
     AccessStore, Actor, DataRole, RecoveryRedemptionRequest, RedemptionRequest, RenewalRequest,
@@ -76,10 +76,14 @@ fn https(
         && !content::handles(&input.path)
         && !guidance::handles(&input.path)
         && !retention::handles(&input.path)
+        && !work_status::reads(&input.path)
     {
         return Err(Error::NotFound);
     }
     let actor = browser::authenticate(state, store, &input, now)?;
+    if work_status::reads(&input.path) {
+        return work_status::dispatch(store, actor, &input, now);
+    }
     if retention::handles(&input.path) {
         return retention::dispatch(store, actor, &input, now);
     }
@@ -169,6 +173,7 @@ fn client(
         "/api/v1/workspaces" | "/api/v1/admissions" | "/api/v1/credentials/renew"
     ) && !content::client_handles(&input.path)
         && !guidance::client_handles(&input.path)
+        && !work_status::handles(&input.path)
     {
         return Err(Error::NotFound);
     }
@@ -206,6 +211,9 @@ fn client(
     let actor = store
         .authenticate_peer(&peer, now)
         .map_err(|error| response::operation(error, Error::Forbidden))?;
+    if work_status::handles(&input.path) {
+        return work_status::dispatch(store, actor, &input, now);
+    }
     if guidance::client_handles(&input.path) {
         return guidance::dispatch(store, actor, &input, now);
     }

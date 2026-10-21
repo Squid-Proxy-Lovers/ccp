@@ -12,6 +12,7 @@ mod purge;
 mod resolution;
 mod retention;
 mod shelves;
+mod work_status;
 
 struct User {
     client: Client,
