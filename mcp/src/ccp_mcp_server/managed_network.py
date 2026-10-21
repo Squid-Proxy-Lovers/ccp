@@ -86,7 +86,7 @@ def transfer(response: HTTPResponse, sink: BinaryIO, maximum: int) -> None:
             "Official download exceeds limit",
         )
     total, started = 0, time.monotonic()
-    while chunk := response.read(min(1024 * 1024, maximum - total + 1)):
+    while chunk := response.read1(min(1024 * 1024, maximum - total + 1)):
         total += len(chunk)
         require(
             total <= maximum and time.monotonic() - started < 120,

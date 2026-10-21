@@ -1,4 +1,4 @@
-# Stage and activate a managed client bundle
+# Install and manage a verified client/MCP bundle
 
 These unreleased commands keep a client executable and its MCP environment in one
 private generation. They support manual staging/activation/rollback, official
@@ -9,7 +9,7 @@ checks each configured profile before an update selects different software.
 [Documentation index](README.md) · [Release bundle verification](client-release-bundles.md) ·
 [Workspace MCP](workspace-mcp.md)
 
-## Prepare a candidate
+## Prepare the bootstrap manager
 
 Use Linux or macOS, Python 3.10+ and GitHub CLI with the required provenance flags.
 Install the matching checkout's MCP package into a separate bootstrap environment:
@@ -20,8 +20,7 @@ python3 -m venv ./ccp-bootstrap
 ```
 
 Keep that bootstrap environment available. Routine bundle activation does not
-upgrade the bootstrap manager itself. Obtain the immutable official release's
-files as described in [bundle verification](client-release-bundles.md). Older
+upgrade the bootstrap manager itself. Older
 releases without the required manifest/provenance cannot be staged. No production
 release with these new components is claimed available yet.
 
@@ -36,6 +35,42 @@ so existing launches and status can continue while a candidate is built.
 Only a writer initializes a store. Launch and status refuse an uninitialized store
 without creating directories, lock files or activation metadata. Missing activation
 metadata beside existing generations is also refused; retain those generations.
+
+## Install the first official bundle
+
+Use an empty store and explicitly select the channel. This downloads and verifies
+the matching official client/MCP artifacts, stages the pair and selects it with
+expected revision 0:
+
+```bash
+STORE="$HOME/.local/share/ccp-managed"
+./ccp-bootstrap/bin/ccp-managed --store "$STORE" install \
+  --channel stable --expected-revision 0
+./ccp-bootstrap/bin/ccp-managed --store "$STORE" status
+```
+
+Add `--tag YOUR_PUBLISHED_TAG` to choose one exact release, or use `--channel
+nightly` with its optional exact dated tag. An active store or existing update
+policy refuses this command before any download or build. Use `update` or an
+explicit staged activation for subsequent software changes. The selected channel
+and tag remain visible in `status`.
+
+Initial installation creates no workspace profile, trust, enrollment, host MCP
+configuration or automatic-update policy. Configure those explicitly through the
+[workspace client](workspace-client.md), [workspace MCP](workspace-mcp.md) and
+update policy below. Future channel/pin choices are a separate explicit policy
+decision; automatic checks remain off.
+
+A failed first download or verification can leave an initialized empty store;
+retry with revision 0 after inspecting it. A ready candidate may remain after an
+uncertain selection. If `status` already shows active software, inspect that pair
+and retain it; initial installation cannot overwrite it, including after a lost
+acknowledgement. Concurrent selection wins through the same revision check.
+
+## Stage separately acquired files
+
+Obtain the official release's files as described in
+[bundle verification](client-release-bundles.md), then stage them manually:
 
 ```bash
 STORE="$HOME/.local/share/ccp-managed"
@@ -139,6 +174,22 @@ visible. Retain both generations and inspect `policy-show`, `status` and
 or lowered, including after manual rollback. Missing or corrupt policy after its
 creation marker exists is refused rather than reset.
 
+If initial policy creation stops after writing its marker, keep using manual
+staging/activation while investigating. Restore a policy only from a matching
+known backup whose retained source floor is confirmed. If that floor is unknown,
+keep the store manual; deleting the marker or assuming the active generation is
+the floor can discard an already advanced antirollback boundary.
+
+To deliberately accept a moved tag, disable automatic checks, verify/stage/activate
+the intended replacement, then explicitly unpin and repin the now-active tag using
+observed policy revisions. Repeating the same pin preserves its old source. Merely
+unpinning and repinning while the old generation is active binds that old source
+again. These are deliberate operator actions; no update silently accepts a moved pin.
+
+Downloads have byte limits, socket timeouts and a soft body-progress deadline.
+Incremental reads allow progress checks without waiting to fill a large buffer;
+this is not an absolute wall-clock guarantee for response headers or chunk parsing.
+
 ## Enable optional automatic checks
 
 Automatic checks require a deliberate local policy change; workspace/server
@@ -162,7 +213,9 @@ Checks run at most once per 24 hours, when a managed launch occurs. Policy edits
 and a backward clock change do not bypass that interval. No daemon or recurring
 system job is installed; use `update` for an immediate explicit check. Results are
 available through `update-status`; a stale `scheduled` result after a crash does
-not establish success. This status describes automatic attempts; an explicit
+not establish success. One process owns each scheduled attempt through completion;
+duplicate runners cannot start a second check or replace a terminal result. This
+status describes automatic attempts; an explicit
 `update` returns its result directly. The worker rechecks policy revision/opt-in and pointer CAS
 before selection. A policy change or disable observed at that check prevents the
 attempt from selecting software. A build already started may finish as a retained candidate.

@@ -74,7 +74,7 @@ def due(root: Path) -> bool:
 def finish(store: Store, attempt: str, result: str, revision: int) -> None:
     with fs.locked(store.root):
         old = load(store.root)
-        if old is not None and old["attempt"] == attempt:
+        if old is not None and old["attempt"] == attempt and old["result"] == "scheduled":
             fs.atomic(store.root / NAME, {**old, "result": result, "policy_revision": revision})
 
 
@@ -117,28 +117,38 @@ def schedule(store: Store) -> None:
 
 def run(store: Store, revision: int, attempt: str) -> dict[str, object]:
     identity(attempt)
-    result: dict[str, object] = {"result": "refused", "policy_revision": revision}
-    allowed = False
     try:
-        with fs.locked(store.root, shared=True):
-            old = load(store.root)
-            contract.require(
-                old is not None
-                and old["attempt"] == attempt
-                and old["policy_revision"] == revision
-                and old["result"] == "scheduled",
-                "Stale automatic attempt",
-            )
-            allowed = True
+        scheduled(store, revision, attempt)
+        # Keep a separate process lease through completion, without blocking store readers.
+        with fs.locked(store.root / "automatic-job"):
+            scheduled(store, revision, attempt)
+            return complete(store, revision, attempt)
+    except (OSError, ValueError, KeyError):
+        return {"result": "refused", "policy_revision": revision}
+
+
+def scheduled(store: Store, revision: int, attempt: str) -> None:
+    contract.number(revision, 2**63 - 2)
+    with fs.locked(store.root, shared=True):
+        old = load(store.root)
+        contract.require(
+            old is not None
+            and old["attempt"] == attempt
+            and old["policy_revision"] == revision
+            and old["result"] == "scheduled",
+            "Stale automatic attempt",
+        )
+
+
+def complete(store: Store, revision: int, attempt: str) -> dict[str, object]:
+    result: dict[str, object] = {"result": "refused", "policy_revision": revision}
+    try:
         result = updater.update(store, revision)
         return result
-    except (OSError, ValueError, KeyError):
-        return result
     finally:
-        if allowed:
-            finish(
-                store,
-                attempt,
-                str(result["result"]),
-                contract.number(result["policy_revision"], 2**63 - 2),
-            )
+        finish(
+            store,
+            attempt,
+            str(result["result"]),
+            contract.number(result["policy_revision"], 2**63 - 2),
+        )

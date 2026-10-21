@@ -15,6 +15,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 from managed_bundle_tests import ManagedBundleTests as ManagedBundleTests
+from managed_install_tests import ManagedInstallTests as ManagedInstallTests
+from managed_install_tests import ManagedOperationalTests as ManagedOperationalTests
 from managed_update_tests import ManagedNetworkTests as ManagedNetworkTests
 from managed_update_tests import ManagedUpdateTests as ManagedUpdateTests
 

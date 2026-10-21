@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 
+from . import managed_install as initial
 from . import managed_policy as policy
 from . import managed_update as updater
 from . import managed_worker as worker
@@ -12,6 +13,10 @@ from .managed_store import Store
 
 
 def add(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    install = commands.add_parser("install")
+    install.add_argument("--channel", choices=("stable", "nightly"), required=True)
+    install.add_argument("--tag")
+    install.add_argument("--expected-revision", type=int, required=True)
     commands.add_parser("policy-show")
     setup = commands.add_parser("policy-set")
     setup.add_argument("--config", required=True)
@@ -29,6 +34,12 @@ def add(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
 
 
 def run(store: Store, args: argparse.Namespace) -> object:
+    if args.command == "install":
+        return initial.install(store, args.channel, args.tag, args.expected_revision)
+    return configured(store, args)
+
+
+def configured(store: Store, args: argparse.Namespace) -> object:
     if args.command == "policy-show":
         return policy.show(store)
     if args.command == "policy-set":
