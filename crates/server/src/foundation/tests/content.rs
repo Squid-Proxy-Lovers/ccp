@@ -463,7 +463,7 @@ fn schema14_upgrade_preserves_security_native_payload_and_hierarchy_survives_reo
         .unwrap()
         .instance_id()
         .unwrap();
-    f.connection.execute_batch("DROP TABLE ccp_content_books; DROP TABLE ccp_content_shelves; DELETE FROM schema_version WHERE version>14; INSERT OR IGNORE INTO schema_version(version) VALUES(14); INSERT INTO sessions(id,name) VALUES(99,'old'); INSERT INTO message_packs(session_id,name,context) VALUES(99,'entry','preserved native payload');").unwrap();
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TABLE ccp_content_books; DROP TABLE ccp_content_shelves; DELETE FROM schema_version WHERE version>14; INSERT OR IGNORE INTO schema_version(version) VALUES(14); INSERT INTO sessions(id,name) VALUES(99,'old'); INSERT INTO message_packs(session_id,name,context) VALUES(99,'entry','preserved native payload');").unwrap();
     drop(f.connection);
     crate::init::init_sqlite(&path).unwrap();
     let mut db = Connection::open(&path).unwrap();

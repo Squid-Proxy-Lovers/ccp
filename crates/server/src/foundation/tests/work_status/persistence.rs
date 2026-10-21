@@ -78,10 +78,10 @@ fn schema22_upgrade_preserves_rows_creates_empty_status_and_rolls_back_failed_sc
     crate::init::init_sqlite(&path).unwrap();
     let mut f = fixture_with_connection(Connection::open(&path).unwrap());
     let a = enroll(&mut f, DataRole::ReadWrite);
-    f.connection.execute_batch("DROP TABLE ccp_work_status_operations; DROP TABLE ccp_work_status; DELETE FROM schema_version WHERE version>22; INSERT INTO schema_version(version) VALUES(22);").unwrap();
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TABLE ccp_work_status_operations; DROP TABLE ccp_work_status; DELETE FROM schema_version WHERE version>22; INSERT INTO schema_version(version) VALUES(22);").unwrap();
     let client_count = rows(&f.connection, "ccp_clients");
     let audit_count = rows(&f.connection, "ccp_access_audit");
-    f.connection.execute_batch("CREATE TRIGGER status_migration_fault BEFORE INSERT ON schema_version WHEN NEW.version=23 BEGIN SELECT RAISE(ABORT,'schema failure'); END;").unwrap();
+    f.connection.execute_batch(&format!("CREATE TRIGGER status_migration_fault BEFORE INSERT ON schema_version WHEN NEW.version={} BEGIN SELECT RAISE(ABORT,'schema failure'); END;",crate::init::SCHEMA_VERSION)).unwrap();
     drop(f.connection);
     assert!(crate::init::init_sqlite(&path).is_err());
     f.connection = Connection::open(&path).unwrap();

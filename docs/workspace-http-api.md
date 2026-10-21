@@ -579,3 +579,10 @@ response capacity. Malformed HTTP may receive Hyper's framing rejection without
 the JSON envelope. Responses disable caching; no request bodies, keys, CSRs or
 private transport material are logged. Tests exercise actual localhost TLS,
 not a production deployment or a throughput guarantee.
+
+## Permanently delete an archived workspace
+
+The [confirmed deletion API](workspace-deletion.md) provides separate HTTPS admin
+preview, start and body-free status routes. Only its owner or an instance admin
+may start deletion of an already archived workspace. A start receipt confirms
+the terminal access fence; cleanup completion is a separate observed fact.

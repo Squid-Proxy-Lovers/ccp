@@ -24,6 +24,7 @@ mod retention;
 mod store;
 mod team;
 mod work_status;
+mod workspace_deletion;
 
 pub use access::authorize;
 pub(crate) use admin::AdminKeyIdentity;
@@ -73,6 +74,9 @@ pub use work_status::{
     WORK_STATUS_STALE_SECONDS, WorkStatus, WorkStatusChange, WorkStatusClear, WorkStatusMutation,
     WorkStatusPage, WorkStatusReceipt,
 };
+pub use workspace_deletion::{
+    WorkspaceDeletion, WorkspaceDeletionPreview, WorkspaceDeletionRequest,
+};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -91,6 +95,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(include_str!("entry_purge.sql"))?;
     transaction.execute_batch(include_str!("retention.sql"))?;
     transaction.execute_batch(include_str!("work_status.sql"))?;
+    workspace_deletion::migrate(transaction)?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

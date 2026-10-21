@@ -24,6 +24,7 @@ mod retention;
 mod shelves;
 mod team;
 mod work_status;
+mod workspace_deletion;
 
 use super::access::{authenticated_client, permitted};
 use super::{

@@ -14,6 +14,7 @@ const ENTRIES: usize = 8;
 struct Cycle {
     after: Option<Uuid>,
     failures: usize,
+    deletion_after: Option<Uuid>,
 }
 
 pub(super) async fn run(
@@ -24,6 +25,7 @@ pub(super) async fn run(
     let mut tick = interval(Duration::from_secs(1));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut after = None;
+    let mut deletion_after = None;
     loop {
         tokio::select! {
             biased;
@@ -38,12 +40,13 @@ pub(super) async fn run(
             // Captures survive cancellation of the async waiter. Keep the
             // permit and State/directory lease until all blocking SQL ends.
             let _permit = permit;
-            cycle(&job_state, after)
+            cycle(&job_state, after, deletion_after)
         })
         .await;
         match result {
             Ok(Ok(cycle)) => {
                 after = cycle.after;
+                deletion_after = cycle.deletion_after;
                 if cycle.failures > 0 {
                     eprintln!(
                         "workspace archive cleanup failed for {} targets; will retry later",
@@ -56,7 +59,11 @@ pub(super) async fn run(
     }
 }
 
-fn cycle(state: &State, after: Option<Uuid>) -> anyhow::Result<Cycle> {
+fn cycle(
+    state: &State,
+    after: Option<Uuid>,
+    deletion_after: Option<Uuid>,
+) -> anyhow::Result<Cycle> {
     let mut db = Connection::open_with_flags(&state.database, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     db.busy_timeout(Duration::from_secs(2))?;
     db.pragma_update(None, "synchronous", "FULL")?;
@@ -79,8 +86,24 @@ fn cycle(state: &State, after: Option<Uuid>) -> anyhow::Result<Cycle> {
             failures += 1;
         }
     }
+    let deletions = store.pending_workspace_deletions(deletion_after, WORKSPACES)?;
+    let deletion_next = if deletions.len() == WORKSPACES {
+        deletions.last().copied()
+    } else {
+        None
+    };
+    for workspace in deletions {
+        let now = crate::instance_tls::now()?;
+        if store
+            .advance_workspace_deletion(workspace, ENTRIES, now)
+            .is_err()
+        {
+            failures += 1;
+        }
+    }
     Ok(Cycle {
         after: next,
+        deletion_after: deletion_next,
         failures,
     })
 }

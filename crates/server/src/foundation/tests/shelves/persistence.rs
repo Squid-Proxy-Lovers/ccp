@@ -153,7 +153,7 @@ fn schema17_upgrade_backfills_preserves_content_and_reopen_does_not_reset_lifecy
         .unwrap()
         .get_entry(actor, f.workspace, entry.entry_id, NOW)
         .unwrap();
-    f.connection.execute_batch("DROP TABLE ccp_shelf_operations; DROP TABLE ccp_shelf_lifecycle; DELETE FROM schema_version WHERE version>17; INSERT OR IGNORE INTO schema_version(version) VALUES(17);").unwrap();
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TABLE ccp_shelf_operations; DROP TABLE ccp_shelf_lifecycle; DELETE FROM schema_version WHERE version>17; INSERT OR IGNORE INTO schema_version(version) VALUES(17);").unwrap();
     drop(f.connection);
     crate::init::init_sqlite(&path).unwrap();
     f.connection = Connection::open(&path).unwrap();

@@ -246,7 +246,7 @@ class ReleaseContractTests(unittest.TestCase):
                 "workspace_api": 1,
                 "client_profile_read_min": 1,
                 "client_profile_write": 5,
-                "server_schema_write": 23,
+                "server_schema_write": 24,
             },
         )
         self.assertEqual(set(value["artifacts"]), set(nightly.ASSETS) | {"build-info.json"})

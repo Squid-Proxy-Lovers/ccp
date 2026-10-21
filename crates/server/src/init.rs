@@ -53,7 +53,7 @@ const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 23;
+pub const SCHEMA_VERSION: u32 = 24;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
@@ -951,6 +951,12 @@ pub fn current_schema_version() -> anyhow::Result<u32> {
 }
 
 fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
+    // Every supported workspace schema atomically recorded this older native
+    // migration. Rebuilding both native auth tables on every startup holds the
+    // writer lock and reparses all later triggers for no schema change.
+    if has_recorded_workspace_schema(connection)? {
+        return Ok(());
+    }
     let has_auth_tokens: bool = connection
         .query_row(
             "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'auth_tokens'",
@@ -1028,6 +1034,23 @@ fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
     )
     .context("failed to migrate access_level admin")?;
     Ok(())
+}
+
+fn has_recorded_workspace_schema(connection: &Connection) -> anyhow::Result<bool> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(false);
+    }
+    let version: u32 = connection.query_row(
+        "SELECT coalesce(max(version),0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(version >= 5)
 }
 
 fn add_column_if_missing(connection: &Connection, sql: &str) -> anyhow::Result<()> {

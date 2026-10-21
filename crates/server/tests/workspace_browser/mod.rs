@@ -4,6 +4,7 @@
 
 use super::*;
 mod boundaries;
+mod deletion;
 mod guidance;
 mod initial_window;
 mod invitation_list;

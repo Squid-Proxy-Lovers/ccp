@@ -367,7 +367,7 @@ fn schema16_upgrade_preserves_commits_and_cancelled_intents_survive_reopen() {
     };
     let (request, cancel) = append(id, owner.credential_id);
     let workspace = f.workspace;
-    f.connection.execute_batch("DROP TRIGGER ccp_operation_excludes_own_cancellation; DROP TABLE ccp_content_cancellations; DELETE FROM schema_version WHERE version>16; INSERT OR IGNORE INTO schema_version(version) VALUES(16);").unwrap();
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TRIGGER ccp_operation_excludes_own_cancellation; DROP TABLE ccp_content_cancellations; DELETE FROM schema_version WHERE version>16; INSERT OR IGNORE INTO schema_version(version) VALUES(16);").unwrap();
     drop(f.connection);
     crate::init::init_sqlite(&path).unwrap();
     let mut db = Connection::open(&path).unwrap();

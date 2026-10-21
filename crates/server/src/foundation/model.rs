@@ -28,6 +28,7 @@ pub enum Action {
     ArchiveWorkspace,
     ReactivateWorkspace,
     PurgeWorkspace,
+    InspectWorkspaceDeletion,
     PurgeEntry,
     ManageArchives,
     ManageRetention,
@@ -48,6 +49,7 @@ impl Action {
                 | Self::DisableClient
                 | Self::RecoverGlobalClient
                 | Self::ManageInstanceKeys
+                | Self::InspectWorkspaceDeletion
         )
     }
 }

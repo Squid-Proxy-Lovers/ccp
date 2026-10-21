@@ -184,7 +184,7 @@ async fn one_workspace_fault_cannot_starve_other_scheduled_workspaces() {
         now,
     );
     db.execute_batch(&format!("CREATE TRIGGER worker_target_fault BEFORE INSERT ON ccp_entry_retention_purges WHEN NEW.workspace_id='{first}' BEGIN SELECT RAISE(ABORT,'PRIVATE_BODY'); END;")).unwrap();
-    let outcome = cycle(&server.state, None).unwrap();
+    let outcome = cycle(&server.state, None, None).unwrap();
     assert_eq!(outcome.failures, 1);
     assert!(outcome.after.is_none());
     assert_eq!(
@@ -205,7 +205,7 @@ async fn one_workspace_fault_cannot_starve_other_scheduled_workspaces() {
     );
     db.execute_batch("DROP TRIGGER worker_target_fault")
         .unwrap();
-    assert_eq!(cycle(&server.state, None).unwrap().failures, 0);
+    assert_eq!(cycle(&server.state, None, None).unwrap().failures, 0);
     assert_eq!(
         db.query_row("SELECT count(*) FROM ccp_entry_retention_purges", [], |r| r
             .get::<_, u64>(0))
@@ -247,7 +247,7 @@ async fn scheduling_cursor_bounds_each_cycle_and_reaches_the_next_page() {
             now,
         );
     }
-    let first = cycle(&server.state, None).unwrap();
+    let first = cycle(&server.state, None, None).unwrap();
     assert!(first.after.is_some());
     assert_eq!(first.failures, 0);
     assert_eq!(
@@ -256,7 +256,7 @@ async fn scheduling_cursor_bounds_each_cycle_and_reaches_the_next_page() {
             .unwrap(),
         WORKSPACES
     );
-    let second = cycle(&server.state, first.after).unwrap();
+    let second = cycle(&server.state, first.after, first.deletion_after).unwrap();
     assert!(second.after.is_none());
     assert_eq!(second.failures, 0);
     assert_eq!(
@@ -275,3 +275,5 @@ async fn scheduling_cursor_bounds_each_cycle_and_reaches_the_next_page() {
     drop(server);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+mod deletion;

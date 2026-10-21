@@ -223,7 +223,7 @@ fn failed_schema_record_rolls_back_new_guidance_tables_and_preserves_schema19_da
         .unwrap();
     f.connection
         .execute_batch(
-            "DROP TABLE ccp_guidance_operations;
+            "DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TABLE ccp_guidance_operations;
         DROP TABLE ccp_guidance_heads; DROP TABLE ccp_guidance_versions;
         DELETE FROM schema_version WHERE version>19;
         INSERT OR IGNORE INTO schema_version(version) VALUES(19);",

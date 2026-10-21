@@ -8,7 +8,7 @@ use super::{
     response::{self, Error, Reply},
     retention,
     session::Context,
-    team, work_status,
+    team, work_status, workspace_deletion,
 };
 use crate::foundation::{
     AccessStore, Actor, DataRole, RecoveryRedemptionRequest, RedemptionRequest, RenewalRequest,
@@ -87,6 +87,7 @@ fn https(
         && !content::handles(&input.path)
         && !guidance::handles(&input.path)
         && !retention::handles(&input.path)
+        && !workspace_deletion::handles(&input.path)
         && !work_status::admin_handles(&input.path)
     {
         return Err(Error::NotFound);
@@ -94,6 +95,9 @@ fn https(
     let actor = browser::authenticate(state, store, &input, now)?;
     if work_status::admin_handles(&input.path) {
         return work_status::dispatch(store, actor, &input, now);
+    }
+    if workspace_deletion::handles(&input.path) {
+        return workspace_deletion::dispatch(store, actor, &input, now);
     }
     if retention::handles(&input.path) {
         return retention::dispatch(store, actor, &input, now);

@@ -378,3 +378,33 @@ fn concurrent_session_startups_preserve_one_instance_and_schema_version() {
     drop(connection);
     fs::remove_file(path).unwrap();
 }
+
+#[test]
+fn current_schema_reopen_keeps_native_auth_tables_and_their_existing_guards() {
+    let path = temp_db_path("native-role-reopen");
+    init_sqlite(&path).unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TRIGGER retained_native_role_probe BEFORE INSERT ON auth_tokens BEGIN SELECT RAISE(ABORT,'owned role probe'); END;").unwrap();
+    let before: Vec<(String,String)> = db.prepare("SELECT name,sql FROM sqlite_master WHERE name IN ('auth_tokens','issued_client_certs','retained_native_role_probe') ORDER BY name").unwrap()
+        .query_map([],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert_eq!(before.len(), 3);
+    drop(db);
+    for _ in 0..3 {
+        init_sqlite(&path).unwrap();
+    }
+    let db = Connection::open(&path).unwrap();
+    let after: Vec<(String,String)> = db.prepare("SELECT name,sql FROM sqlite_master WHERE name IN ('auth_tokens','issued_client_certs','retained_native_role_probe') ORDER BY name").unwrap()
+        .query_map([],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert_eq!(after, before);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM schema_version WHERE version=?1",
+            [SCHEMA_VERSION],
+            |r| r.get::<_, u32>(0)
+        )
+        .unwrap(),
+        1
+    );
+    drop(db);
+    fs::remove_file(path).unwrap();
+}

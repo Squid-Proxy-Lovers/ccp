@@ -129,7 +129,7 @@ fn failed_schema_record_rolls_back_purge_table_and_tombstone_guard_before_retry(
     let mut f = fixture_with_connection(Connection::open(&path).unwrap());
     let owner = Actor::Admin(f.owner);
     let (_, request) = archived(&mut f, owner);
-    f.connection.execute_batch("DROP TRIGGER ccp_no_purged_entry_recreation; DROP TABLE ccp_entry_purges; DELETE FROM schema_version WHERE version>20; INSERT OR IGNORE INTO schema_version(version) VALUES(20);").unwrap();
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TRIGGER ccp_no_purged_entry_recreation; DROP TABLE ccp_entry_purges; DELETE FROM schema_version WHERE version>20; INSERT OR IGNORE INTO schema_version(version) VALUES(20);").unwrap();
     f.connection.execute_batch(&format!("CREATE TRIGGER purge_upgrade_fault BEFORE INSERT ON schema_version WHEN NEW.version={} BEGIN SELECT RAISE(ABORT,'schema fault'); END;",crate::init::SCHEMA_VERSION)).unwrap();
     drop(f.connection);
     assert!(crate::init::init_sqlite(&path).is_err());

@@ -57,7 +57,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 21. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 24. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -248,3 +248,11 @@ Reported work panel are available. Scoped owners/admins can explicitly clear a
 client message while preserving ownership and historical proof; archived
 workspaces remain read-only.
 See the [status contract](workspace-status.md).
+
+## Whole-workspace permanent deletion
+
+Schema24 adds [confirmed archived-workspace deletion](workspace-deletion.md),
+using a lifecycle revision, terminal UUID fence and bounded resumable cleanup.
+Only the workspace owner or an instance admin can start it. Shared identities and
+other workspace grants survive. Existing entry-purge retry protections remain
+until a separately confirmed whole-workspace job retires that namespace.

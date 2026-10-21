@@ -18,6 +18,7 @@ mod retention_worker;
 mod session;
 mod team;
 mod work_status;
+mod workspace_deletion;
 
 use std::future::Future;
 use std::net::SocketAddr;

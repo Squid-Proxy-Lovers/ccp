@@ -473,7 +473,7 @@ fn schema6_upgrade_keeps_keys_and_initial_closure_survives_restart() {
     // Enrollment additions are additive: removing their empty tables recreates schema6.
     f.connection
         .execute_batch(
-            "DROP TABLE ccp_invitation_receipts; DROP TABLE ccp_invitation_closures; DROP TABLE ccp_credential_certificates;
+            "DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TABLE ccp_invitation_receipts; DROP TABLE ccp_invitation_closures; DROP TABLE ccp_credential_certificates;
         DROP INDEX ccp_grant_workspace_identity;
         DROP TABLE ccp_enrollment_events; DROP TABLE ccp_initial_enrollment;
         DROP TABLE ccp_invitations; UPDATE schema_version SET version = 6;",

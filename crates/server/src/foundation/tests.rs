@@ -1309,3 +1309,5 @@ mod shelves;
 mod guidance;
 
 mod work_status;
+
+mod workspace_deletion;

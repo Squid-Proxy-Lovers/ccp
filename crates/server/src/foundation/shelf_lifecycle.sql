@@ -7,7 +7,8 @@ CREATE TABLE IF NOT EXISTS ccp_shelf_lifecycle (
         REFERENCES ccp_content_shelves(id, workspace_id) ON DELETE RESTRICT
 );
 INSERT OR IGNORE INTO ccp_shelf_lifecycle(shelf_id,workspace_id,revision)
-SELECT id,workspace_id,1 FROM ccp_content_shelves;
+SELECT s.id,s.workspace_id,1 FROM ccp_content_shelves s
+JOIN ccp_workspaces w ON w.id=s.workspace_id WHERE w.state!='purged';
 CREATE TABLE IF NOT EXISTS ccp_shelf_operations (
     workspace_id TEXT NOT NULL,
     operation_id TEXT NOT NULL,

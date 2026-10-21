@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod browser;
 pub mod content;
+pub mod deletion;
 pub mod guidance;
 pub mod retention;
 pub mod work_status;

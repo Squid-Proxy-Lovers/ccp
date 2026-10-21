@@ -118,7 +118,7 @@ fn failed_schema_record_rolls_back_all_retention_tables_before_preserving_retry(
     let mut f = fixture_with_connection(Connection::open(&path).unwrap());
     let e = entry(&mut f, "archive");
     archive(&mut f, e.entry_id, 1, NOW);
-    f.connection.execute_batch("DROP TRIGGER ccp_no_timed_purged_entry_recreation; DROP TABLE ccp_entry_retention_clocks; DROP TABLE ccp_entry_retention_purges; DROP TABLE ccp_entry_retention_heads; DROP TABLE ccp_entry_retention_versions; DELETE FROM schema_version WHERE version>21; INSERT OR IGNORE INTO schema_version(version) VALUES(21);").unwrap();
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TRIGGER ccp_no_timed_purged_entry_recreation; DROP TABLE ccp_entry_retention_clocks; DROP TABLE ccp_entry_retention_purges; DROP TABLE ccp_entry_retention_heads; DROP TABLE ccp_entry_retention_versions; DELETE FROM schema_version WHERE version>21; INSERT OR IGNORE INTO schema_version(version) VALUES(21);").unwrap();
     f.connection.execute_batch(&format!("CREATE TRIGGER retention_upgrade_fault BEFORE INSERT ON schema_version WHEN NEW.version={} BEGIN SELECT RAISE(ABORT,'schema fault'); END;",crate::init::SCHEMA_VERSION)).unwrap();
     drop(f.connection);
     assert!(crate::init::init_sqlite(&path).is_err());

@@ -21,7 +21,7 @@ fn parents(db: &Connection) -> Vec<String> {
 }
 fn schema18(f: &mut Fixture) {
     // Genuine old layout, including its version-row FK, not just an old marker.
-    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_immutable_content_operation;
+    f.connection.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion; DROP TRIGGER IF EXISTS ccp_immutable_content_operation;
         DROP TRIGGER IF EXISTS ccp_retain_content_operation;
         DROP TRIGGER ccp_cancellation_excludes_own_commit;
         DROP TRIGGER ccp_operation_excludes_own_cancellation;
