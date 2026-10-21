@@ -49,8 +49,10 @@ Clearing an owned message requires its current revision. It removes the current
 message and label, leaving an ownership/revision tombstone. Clearing is explicit;
 expiry alone never does this. A cleared slot can be deliberately republished by
 its owning client using the tombstone’s current revision. Previous message text
-is not stored as full revision history. Scoped owner/admin moderation is planned but not implemented yet.
-The current human panel is a read-only status viewer.
+is not stored as full revision history. Workspace owners/admins can explicitly
+clear any client’s message in their own active workspace. This preserves client ownership and records the administrator
+as the clearing actor. Instance keys cannot borrow this power. Archived workspaces
+block moderation as well as client changes.
 
 ## Exact operations and storage
 
@@ -123,10 +125,11 @@ to make another observation; there is no automatic polling or contact collection
 
 Use **Next status messages** and **First status messages** for independent pages.
 An unavailable or mismatched response is shown as unavailable, never as an empty
-workspace. Stale messages retain their last text/time until deliberately cleared
-or updated by the authorized client. Global keys can read all workspaces; scoped
+workspace. Stale messages retain their last text/time until an authorized client
+updates them or a client/scoped admin explicitly clears them. Global keys can read all workspaces; scoped
 keys read only their own. Archived workspaces remain readable. The human view
-publishes no client status and provides no administrative clear action.
+publishes no client status. A matching workspace owner/admin key shows a per-message
+**Clear status message** action while the workspace is active.
 
 Reported work is separate from recorded entry revisions in **Context & history**.
 Labels and messages render as literal text. Workspace, key and tab changes retain
@@ -199,3 +202,38 @@ is not proof that a replacement intent is safe. Server UUID/CAS checks continue
 to apply. Logical removal does not erase SQLite free pages, snapshots or backups.
 See [profile format 5](workspace-client.md#profile-storage-and-recovery-limits)
 for migration and rollback limits.
+
+
+## Clear a message as a workspace administrator
+
+Workspace owners/admins can use **Clear status message** on a row in **Reported
+work**. Confirm the exact workspace, status, owning client and revision. The action
+removes current text and its agent label, keeps client ownership, and records a
+body-free administrator receipt/audit entry. Disabled or revoked authors’ stored
+messages can still be cleared by a current scoped administrator. The original
+client can later publish a fresh update using the tombstone’s current revision.
+
+The separate HTTPS-only `POST /api/v1/admin/work/status/clear` accepts exactly
+`workspace_id`, `status_id`, `operation_id` and `expected_revision`. It uses current
+scoped admin authentication, including Origin/CSRF for browser sessions. It has no
+message, agent or claimed-client field. The mTLS client listener returns 404 for
+this administrative route; clients keep their own `mutate` clear operation.
+Unknown fields, invalid UUIDs or revision bounds return 400. A missing slot is
+404; stale revisions, already cleared slots and changed operation reuse are 409.
+Current scope/archive failures are 403. SQL failures return sanitized 503 with no
+partial head, receipt or audit commit. API1, schema23 and profile5 are unchanged.
+
+The browser retains the original operation UUID, revision, body and session if
+its response is unconfirmed. **Check / retry exact status clear** deliberately
+resends only that request with the original key/session; there is no automatic
+retry. An exact authorized retry returns its historical receipt even after the
+client has published a later message, without clearing that later message. Current
+authority is checked again, so archive, role loss or key revocation block replay.
+
+**Read separate status observation** does not attribute or cancel an uncertain
+request. Copy/forget/discard controls remove only local state and never claim
+server cancellation. Conflicts require a deliberate new decision after preserving
+or discarding the original intent. A confirmed receipt is acknowledged before
+later session/current-state reads; failed checks retain the confirmed IDs. Drafts
+and unconfirmed requests block navigation. Reloading or explicitly discarding the
+page loses this in-memory recovery copy; no durable browser queue is provided.

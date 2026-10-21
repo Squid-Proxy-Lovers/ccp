@@ -76,12 +76,12 @@ fn https(
         && !content::handles(&input.path)
         && !guidance::handles(&input.path)
         && !retention::handles(&input.path)
-        && !work_status::reads(&input.path)
+        && !work_status::admin_handles(&input.path)
     {
         return Err(Error::NotFound);
     }
     let actor = browser::authenticate(state, store, &input, now)?;
-    if work_status::reads(&input.path) {
+    if work_status::admin_handles(&input.path) {
         return work_status::dispatch(store, actor, &input, now);
     }
     if retention::handles(&input.path) {

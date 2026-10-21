@@ -477,17 +477,54 @@ export function reportedWorkPage(value, workspaceId) {
     || !Number.isSafeInteger(value.observed_at) || value.observed_at < 0
     || !Number.isSafeInteger(value.stale_after_seconds) || value.stale_after_seconds < 1
     || value.next_cursor !== null && typeof value.next_cursor !== 'string') throw new Error('The reported-work page could not be verified.');
-  const ids = new Set(), bytes = text => new TextEncoder().encode(text).length;
+  const ids = new Set();
   for (const item of value.items) {
-    if (item?.workspace_id !== workspaceId || typeof item.status_id !== 'string' || !item.status_id || ids.has(item.status_id)
-      || typeof item.client_id !== 'string' || !item.client_id || typeof item.client_name !== 'string' || !item.client_name
-      || typeof item.client_disabled !== 'boolean' || !Number.isSafeInteger(item.updated_at) || item.updated_at < 0
-      || typeof item.stale !== 'boolean' || typeof item.message !== 'string' || !item.message || item.message.includes('\0') || bytes(item.message) > 4096
-      || item.agent !== null && (typeof item.agent !== 'string' || !item.agent || item.agent.includes('\0') || bytes(item.agent) > 128)) throw new Error('Reported work did not match this workspace or could not be verified.');
-    exactRevision(item.revision); ids.add(item.status_id);
+    reportedWorkStatus(item, workspaceId, false);
+    if (ids.has(item.status_id)) throw new Error('Duplicate reported-work slot in workspace.');
+    ids.add(item.status_id);
     const age = value.observed_at - item.updated_at;
     if (item.stale !== (age < 0 || age >= value.stale_after_seconds)) throw new Error('The report freshness observation could not be verified.');
   }
   if (value.next_cursor !== null && (!value.items.length || value.next_cursor !== value.items.at(-1).status_id)) throw new Error('The reported-work cursor could not be verified.');
   return value;
+}
+
+export function reportedWorkStatus(item, workspaceId, allowCleared = true) {
+  const bytes = text => new TextEncoder().encode(text).length;
+  if (item?.workspace_id !== workspaceId || typeof item.status_id !== 'string' || !item.status_id
+    || typeof item.client_id !== 'string' || !item.client_id || typeof item.client_name !== 'string' || !item.client_name
+    || typeof item.client_disabled !== 'boolean' || !Number.isSafeInteger(item.updated_at) || item.updated_at < 0
+    || typeof item.stale !== 'boolean'
+    || (item.message === null ? !allowCleared || item.agent !== null || !item.stale
+      : typeof item.message !== 'string' || !item.message || item.message.includes('\0') || bytes(item.message) > 4096)
+    || item.agent !== null && (typeof item.agent !== 'string' || !item.agent || item.agent.includes('\0') || bytes(item.agent) > 128)) throw new Error('Reported work did not match this workspace or could not be verified.');
+  exactRevision(item.revision); return item;
+}
+
+
+export class StatusClearIntent {
+  constructor(session, workspace, report, operation = crypto.randomUUID()) {
+    if (!canManageInvitations(session, workspace) || workspace.archived) throw new Error('Use this active workspace’s owner/admin key to clear a status message.');
+    if (report?.workspace_id !== workspace.id || typeof report.message !== 'string' || !report.message) throw new Error('Select an uncleared status message in this workspace.');
+    const revision = exactRevision(report.revision);
+    if (revision === Number.MAX_SAFE_INTEGER) throw new Error('The next status revision exceeds the browser’s exact numeric range. Use the API.');
+    for (const id of [workspace.id, report.status_id, report.client_id, operation]) {
+      if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(id)) throw new Error('Status targets require canonical non-nil UUIDs.');
+    }
+    this.kind = 'status_clear'; this.workspace_id = workspace.id; this.status_id = report.status_id; this.client_id = report.client_id;
+    this.path = '/api/v1/admin/work/status/clear';
+    this.body = JSON.stringify({workspace_id: workspace.id, status_id: report.status_id, operation_id: operation, expected_revision: revision});
+    this.session = signature(session); this.proof = session.csrf_token; Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. This status clear cannot be retried under the new session.');
+    return {body: this.body, proof: this.proof};
+  }
+  receipt(value) {
+    const original = JSON.parse(this.body);
+    if (value?.workspace_id !== this.workspace_id || value.status_id !== this.status_id || value.client_id !== this.client_id
+      || value.operation_id !== original.operation_id || value.revision !== original.expected_revision + 1 || value.cleared !== true
+      || !Number.isSafeInteger(value.updated_at) || value.updated_at < 0) throw new Error('The status-clear receipt did not match the original request. Keep that request.');
+    return value;
+  }
 }

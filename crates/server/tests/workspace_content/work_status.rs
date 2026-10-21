@@ -4,6 +4,7 @@
 
 use super::*;
 mod boundaries;
+mod moderation;
 const BASE: &str = "/api/v1/work/status/";
 fn target(f: &Fixture, id: Uuid) -> Value {
     json!({"workspace_id":f.setup.workspace_id.to_string(),"status_id":id.to_string()})

@@ -66,3 +66,70 @@ async fn browser_reported_work_reads_keep_csrf_key_scope_and_client_publication_
         1
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn browser_status_moderation_requires_live_scoped_admin_csrf_and_preserves_client_ownership()
+{
+    const CLEAR: &str = "/api/v1/admin/work/status/clear";
+    let f = Fixture::new().await;
+    let (client, key) = f.enroll().await;
+    let peer = f.private_client(client["certificate_pem"].as_str().unwrap(), &key);
+    let id = Uuid::new_v4();
+    let set = json!({"workspace_id":f.setup.workspace_id.to_string(),"status_id":id.to_string(),"operation_id":Uuid::new_v4().to_string(),"expected_revision":0,"change":{"action":"set","message":"retained"}});
+    json_reply(
+        peer.post(f.mtls(MUTATE)).json(&set).send().await.unwrap(),
+        200,
+    )
+    .await;
+    let (owner, session) = login(&f, f.setup.owner_key.secret(), None).await;
+    let proof = session["csrf_token"].as_str().unwrap();
+    let ws = f.setup.workspace_id.to_string();
+    let appointed = post(
+        &f,
+        &owner,
+        proof,
+        "/api/v1/admin/team/appoint",
+        &json!({"workspace_id":ws,"principal":{"kind":"new_principal","name":"moderator"}}),
+        200,
+    )
+    .await;
+    let (cookie, admin) = login(&f, appointed["data"]["secret"].as_str().unwrap(), None).await;
+    let csrf = admin["csrf_token"].as_str().unwrap();
+    let body = json!({"workspace_id":ws,"status_id":id.to_string(),"operation_id":Uuid::new_v4().to_string(),"expected_revision":1});
+    post(&f, &cookie, "wrong", CLEAR, &body, 403).await;
+    let (global, global_session) = login(&f, f.setup.instance_key.secret(), None).await;
+    post(
+        &f,
+        &global,
+        global_session["csrf_token"].as_str().unwrap(),
+        CLEAR,
+        &body,
+        403,
+    )
+    .await;
+    let receipt = post(&f, &cookie, csrf, CLEAR, &body, 200).await;
+    assert_eq!(receipt["data"]["client_id"], client["client_id"]);
+    assert_eq!(receipt["data"]["revision"], 2);
+    assert_eq!(post(&f, &cookie, csrf, CLEAR, &body, 200).await, receipt);
+    post(&f, &owner, proof, CLEAR, &body, 409).await;
+    f.db()
+        .execute(
+            "UPDATE ccp_admin_keys SET revoked_at=?1 WHERE id=?2",
+            rusqlite::params![now(), admin["identity"]["key_id"].as_str().unwrap()],
+        )
+        .unwrap();
+    post(&f, &cookie, csrf, CLEAR, &body, 401).await;
+    assert_eq!(
+        post(
+            &f,
+            &owner,
+            proof,
+            GET,
+            &json!({"workspace_id":ws,"status_id":id.to_string()}),
+            200
+        )
+        .await["data"]["message"],
+        Value::Null
+    );
+    f.finish().await;
+}

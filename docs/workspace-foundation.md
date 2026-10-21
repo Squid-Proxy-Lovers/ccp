@@ -243,6 +243,8 @@ Client-owned slots retain their last message and timestamp when stale; explicit
 clear removes text while retaining ownership/revision fences. Current read/write
 permissions, CAS, credential-bound exact replay and audit commit together.
 No automatic contact collection, task management, message-history archive or
-cleanup starts on migration. The status HTTP adapter and read-only Reported work
-panel are available; dedicated client/MCP commands remain subsequent work.
+cleanup starts on migration. The status HTTP adapter, client/MCP commands and
+Reported work panel are available. Scoped owners/admins can explicitly clear a
+client message while preserving ownership and historical proof; archived
+workspaces remain read-only.
 See the [status contract](workspace-status.md).

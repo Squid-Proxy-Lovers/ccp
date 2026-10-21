@@ -70,8 +70,8 @@ pub use team::{
 };
 pub use work_status::{
     WORK_STATUS_AGENT_BYTES, WORK_STATUS_LIVE_LIMIT, WORK_STATUS_MESSAGE_BYTES,
-    WORK_STATUS_STALE_SECONDS, WorkStatus, WorkStatusChange, WorkStatusMutation, WorkStatusPage,
-    WorkStatusReceipt,
+    WORK_STATUS_STALE_SECONDS, WorkStatus, WorkStatusChange, WorkStatusClear, WorkStatusMutation,
+    WorkStatusPage, WorkStatusReceipt,
 };
 
 use anyhow::{Context, bail};

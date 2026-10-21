@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -564,4 +564,64 @@ test('server-accepted U+FEFF text and agent labels preserve the full page and it
     assert.equal(result.items[0].message, message); assert.equal(result.items[0].agent, agent);
     assert.equal(result.items[1].message, later.message); assert.equal(result.next_cursor, 'status-2');
   }
+});
+
+
+const moderationTarget = () => {
+  const workspace = {id: '11111111-1111-4111-8111-111111111111', archived: false};
+  const s = session(); s.identity.scope.workspace_id = workspace.id;
+  return {s, workspace, report: {workspace_id: workspace.id, status_id: '22222222-2222-4222-8222-222222222222',
+    client_id: '33333333-3333-4333-8333-333333333333', revision: 7, message: 'private work'}};
+};
+const moderationOperation = '44444444-4444-4444-8444-444444444444';
+const clearReceipt = intent => ({...JSON.parse(intent.body), client_id: intent.client_id, revision: 8, cleared: true, updated_at: 100});
+
+test('scoped status clearing freezes the original target/CAS/UUID without claiming client publication', () => {
+  const {s, workspace, report} = moderationTarget();
+  const intent = new StatusClearIntent(s, workspace, report, moderationOperation);
+  report.revision = 20; report.client_id = 'changed'; workspace.id = 'changed';
+  const first = intent.request(s); const body = JSON.parse(first.body);
+  assert.equal(body.expected_revision, 7); assert.equal(body.operation_id, moderationOperation);
+  assert.deepEqual(Object.keys(body).sort(), ['expected_revision', 'operation_id', 'status_id', 'workspace_id']);
+  assert.equal(intent.path, '/api/v1/admin/work/status/clear');
+  assert.equal(intent.client_id, '33333333-3333-4333-8333-333333333333');
+  assert.deepEqual(intent.request(structuredClone(s)), first);
+  assert.throws(() => {intent.body = '{}';}, TypeError);
+});
+test('status clear cannot borrow instance, archived, foreign or unknown scoped roles', () => {
+  for (const change of [v => {v.s.identity.scope = {kind: 'instance'};}, v => {v.workspace.archived = true;},
+    v => {v.s.identity.scope.role = 'reader';}, v => {v.report.workspace_id = 'foreign';},
+    v => {v.report.message = null;}, v => {v.report.revision = Number.MAX_SAFE_INTEGER;},
+    v => {v.report.status_id = '00000000-0000-0000-0000-000000000000';}]) {
+    const value = moderationTarget(); change(value);
+    assert.throws(() => new StatusClearIntent(value.s, value.workspace, value.report, moderationOperation));
+  }
+  const {s, workspace, report} = moderationTarget(); s.identity.scope.role = 'admin';
+  assert.equal(new StatusClearIntent(s, workspace, report, moderationOperation).kind, 'status_clear');
+});
+test('status clear exact retries retain the original session and reject every changed identity binding', () => {
+  const {s, workspace, report} = moderationTarget(); const intent = new StatusClearIntent(s, workspace, report, moderationOperation);
+  for (const change of [v => {v.csrf_token = 'other';}, v => {v.instance_id = 'other';}, v => {v.identity.key_id = 'other';},
+    v => {v.identity.principal_id = 'other';}, v => {v.identity.scope.role = 'admin';}, v => {v.identity.scope.workspace_id = 'other';}]) {
+    const other = structuredClone(s); change(other); assert.throws(() => intent.request(other), /session changed/);
+  }
+});
+test('status clear receipts bind the original owner target operation revision and action', () => {
+  const {s, workspace, report} = moderationTarget(); const intent = new StatusClearIntent(s, workspace, report, moderationOperation);
+  const receipt = clearReceipt(intent); delete receipt.expected_revision;
+  assert.deepEqual(intent.receipt(receipt), receipt);
+  for (const [field, value] of [['workspace_id', 'other'], ['status_id', 'other'], ['client_id', 'other'],
+    ['operation_id', 'other'], ['revision', 9], ['cleared', false], ['updated_at', -1], ['updated_at', 1.5]]) {
+    assert.throws(() => intent.receipt({...receipt, [field]: value}), /receipt/);
+  }
+});
+test('separate status observations preserve stale Unicode and cleared tombstones without invented observation times', () => {
+  const {workspace, report} = moderationTarget();
+  const row = {...report, client_name: 'client', client_disabled: true, message: '\ufeff', agent: '\ufeff', updated_at: 100, stale: true};
+  assert.deepEqual(reportedWorkStatus(row, workspace.id), row);
+  const cleared = {...row, message: null, agent: null};
+  assert.deepEqual(reportedWorkStatus(cleared, workspace.id), cleared);
+  assert.throws(() => reportedWorkStatus(cleared, workspace.id, false));
+  assert.throws(() => reportedWorkStatus({...cleared, stale: false}, workspace.id));
+  assert.throws(() => reportedWorkStatus({...cleared, agent: 'not cleared'}, workspace.id));
 });

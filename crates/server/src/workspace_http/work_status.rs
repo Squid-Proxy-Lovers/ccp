@@ -7,15 +7,21 @@ use super::{
     request::Input,
     response::{self, Error, Reply},
 };
-use crate::foundation::{AccessStore, Actor, ContentError, WorkStatusChange, WorkStatusMutation};
+use crate::foundation::{
+    AccessStore, Actor, ContentError, WorkStatusChange, WorkStatusClear, WorkStatusMutation,
+};
 use hyper::Method;
 use protocol::workspace::work_status as api;
 
 pub(super) const MUTATE: &str = "/api/v1/work/status/mutate";
+pub(super) const CLEAR: &str = "/api/v1/admin/work/status/clear";
 const GET: &str = "/api/v1/work/status/get";
 const LIST: &str = "/api/v1/work/status/list";
 pub(super) fn reads(path: &str) -> bool {
     matches!(path, GET | LIST)
+}
+pub(super) fn admin_handles(path: &str) -> bool {
+    reads(path) || path == CLEAR
 }
 pub(super) fn handles(path: &str) -> bool {
     reads(path) || path == MUTATE
@@ -79,19 +85,39 @@ pub(super) fn dispatch(
             let value = store
                 .mutate_work_status(actor, id(&body.workspace_id)?, &request, now)
                 .map_err(operation)?;
-            response::success(api::Receipt {
-                workspace_id: value.workspace_id.to_string(),
-                status_id: value.status_id.to_string(),
-                operation_id: value.operation_id.to_string(),
-                client_id: value.client_id.to_string(),
-                revision: value.revision,
-                cleared: value.cleared,
-                updated_at: value.updated_at,
-            })
+            receipt(value)
+        }
+        CLEAR => {
+            let body: api::Clear = decode(&input.body)?;
+            let value = store
+                .clear_client_work_status(
+                    actor,
+                    id(&body.workspace_id)?,
+                    &WorkStatusClear {
+                        operation_id: id(&body.operation_id)?,
+                        status_id: id(&body.status_id)?,
+                        expected_revision: body.expected_revision,
+                    },
+                    now,
+                )
+                .map_err(operation)?;
+            receipt(value)
         }
         _ => Err(Error::NotFound),
     }
 }
+fn receipt(value: crate::foundation::WorkStatusReceipt) -> Result<Reply, Error> {
+    response::success(api::Receipt {
+        workspace_id: value.workspace_id.to_string(),
+        status_id: value.status_id.to_string(),
+        operation_id: value.operation_id.to_string(),
+        client_id: value.client_id.to_string(),
+        revision: value.revision,
+        cleared: value.cleared,
+        updated_at: value.updated_at,
+    })
+}
+
 fn project(value: crate::foundation::WorkStatus) -> api::Status {
     api::Status {
         workspace_id: value.workspace_id.to_string(),

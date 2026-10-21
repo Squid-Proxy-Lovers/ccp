@@ -11,6 +11,7 @@ use crate::foundation::{
 use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
+mod moderation;
 mod read;
 mod records;
 

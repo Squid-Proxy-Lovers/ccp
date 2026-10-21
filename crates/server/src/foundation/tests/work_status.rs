@@ -6,6 +6,7 @@ use super::*;
 
 mod boundaries;
 mod faults;
+mod moderation;
 mod persistence;
 
 fn post(id: Uuid, revision: u64, text: &str) -> WorkStatusMutation {

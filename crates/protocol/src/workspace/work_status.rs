@@ -35,6 +35,15 @@ pub struct Mutation {
     pub expected_revision: u64,
     pub change: Change,
 }
+/// Separate HTTPS administrative clear; no supplied client or text.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Clear {
+    pub workspace_id: String,
+    pub status_id: String,
+    pub operation_id: String,
+    pub expected_revision: u64,
+}
 #[derive(Serialize, Deserialize)]
 pub struct Status {
     pub workspace_id: String,

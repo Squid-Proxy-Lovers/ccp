@@ -24,6 +24,13 @@ pub struct WorkStatusMutation {
     pub change: WorkStatusChange,
 }
 
+/// Explicit scoped moderation of an existing client slot; never publication.
+pub struct WorkStatusClear {
+    pub operation_id: Uuid,
+    pub status_id: Uuid,
+    pub expected_revision: u64,
+}
+
 /// Latest explicit message, not proof of contact, liveness or completed work.
 /// A cleared tombstone retains ownership/revision but contains no old text.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -81,6 +81,7 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
 | HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |
 | HTTPS or client mTLS | `POST /api/v1/work/status/get` or `/list` | Current workspace read authority; explicit messages stay visible when stale |
+| HTTPS | `POST /api/v1/admin/work/status/clear` | Current scoped owner/admin in an active workspace; clear-only CAS, retained client ownership and historical receipt |
 | Client mTLS | `POST /api/v1/work/status/mutate` | Current read/write client; owned status set/clear, exact operation receipt; [status contract](workspace-status.md) |
 | HTTPS | `POST /api/v1/admin/content/entries/purge` | Current scoped owner/admin key; explicitly confirmed, revision-bound purge of an individually archived entry, including in archived workspaces |
 | HTTPS | `POST /api/v1/admin/session/login` | Existing admin key in strict JSON, matching Origin and initial CSRF marker; ephemeral cookie issued |
