@@ -234,3 +234,14 @@ Session scope stays separate from registered clients and entry ownership. No
 schema or underlying key lifetime changes. See the
 [browser-session API](workspace-browser-session.md) for Origin/CSRF, expiry,
 resource bounds, logout and current backend/frontend limits.
+
+
+## Explicit work-status storage core
+
+Schema 23 adds empty current-message and body-free operation-proof tables.
+Client-owned slots retain their last message and timestamp when stale; explicit
+clear removes text while retaining ownership/revision fences. Current read/write
+permissions, CAS, credential-bound exact replay and audit commit together.
+No automatic contact collection, task management, message-history archive or
+cleanup starts on migration. HTTP/client/MCP/panel adapters remain subsequent
+work. See the [status contract](workspace-status.md).

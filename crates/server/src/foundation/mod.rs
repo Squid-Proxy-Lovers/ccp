@@ -23,6 +23,7 @@ mod recovery;
 mod retention;
 mod store;
 mod team;
+mod work_status;
 
 pub use access::authorize;
 pub(crate) use admin::AdminKeyIdentity;
@@ -67,6 +68,11 @@ pub use store::AccessStore;
 pub use team::{
     AdminAppointment, AdminKeyPage, AdminKeySummary, AdminPage, AdminSummary, PrincipalSelection,
 };
+pub use work_status::{
+    WORK_STATUS_AGENT_BYTES, WORK_STATUS_LIVE_LIMIT, WORK_STATUS_MESSAGE_BYTES,
+    WORK_STATUS_STALE_SECONDS, WorkStatus, WorkStatusChange, WorkStatusMutation, WorkStatusPage,
+    WorkStatusReceipt,
+};
 
 use anyhow::{Context, bail};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -84,6 +90,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(include_str!("guidance.sql"))?;
     transaction.execute_batch(include_str!("entry_purge.sql"))?;
     transaction.execute_batch(include_str!("retention.sql"))?;
+    transaction.execute_batch(include_str!("work_status.sql"))?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?
         .query_map([], |row| row.get::<_, String>(1))?

@@ -52,6 +52,7 @@ the other guides describe the supported native interface.
 | Refresh current guidance through MCP | [Explicit MCP guidance](workspace-mcp.md#refresh-guidance-explicitly) |
 | Retrieve guidance with a registered client | [Client guidance reader](workspace-client.md#read-current-guidance) |
 | Read or edit live guidance over TLS | [Guidance HTTP API](workspace-http-api.md#read-and-save-guidance) |
+| Understand explicit client-owned status freshness and retained clear proofs (core only) | [Work-status storage](workspace-status.md) |
 | Understand the unreleased workspace migration, permissions and guidance foundation | [Workspace access foundation](workspace-foundation.md) |
 | Create shelves/books and read workspace context and shelf lifecycle metadata through the normal client | [Workspace content client](workspace-content-client.md) |
 | Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |

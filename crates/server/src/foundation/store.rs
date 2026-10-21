@@ -23,6 +23,7 @@ mod renewal;
 mod retention;
 mod shelves;
 mod team;
+mod work_status;
 
 use super::access::{authenticated_client, permitted};
 use super::{

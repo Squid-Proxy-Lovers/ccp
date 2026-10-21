@@ -312,3 +312,11 @@ including archive/disable boundaries, frozen scope/body and session binding.
 The desktop archive tests cover immutable shelf/purge operations, exact receipt
 binding, unsafe revisions, scoped authority, archived-workspace manual purge and
 body-free shelf pagination. The bundled-asset TLS test includes the archive UI.
+
+The internal work-status tests cover authenticated client ownership, label/slot
+separation, fixed freshness boundaries without expiry deletion, exact historical
+retries after clear, current permissions, archive/disable/revocation, bounded
+paging and live-slot limits. SQL abort/ignore injection verifies whole-operation
+rollback; file reopen and concurrent CAS cases preserve tombstones and receipts.
+Schema migration tests cover preservation and atomic refusal; runtime adapters
+are not part of this core slice.
