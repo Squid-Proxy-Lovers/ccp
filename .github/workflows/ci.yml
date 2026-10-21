@@ -298,8 +298,57 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  release:
+  provenance:
     needs: [package]
+    if: >-
+      github.repository == 'Squid-Proxy-Lovers/ccp' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+       (github.ref == 'refs/heads/main' && (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.nightly))))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: dist
+      - name: Attest the matching release contract
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/ccp-release.json
+      - name: Verify publisher policy before making the bundle available
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp "$ATTESTATION_BUNDLE" dist/ccp-provenance.json
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            channel=stable
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            channel=nightly
+            tag="nightly-$(date -u +%Y-%m-%d)-${GITHUB_SHA:0:12}"
+          fi
+          python scripts/release_contract.py --directory dist --channel "$channel" --tag "$tag" --platform linux-x86_64 > /dev/null
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-provenance
+          path: dist/ccp-provenance.json
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: [package, provenance]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -308,6 +357,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-provenance
           path: dist
       # v3.0.3; retain the existing asset-update behavior on tag reruns.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # zizmor: ignore[superfluous-actions]
@@ -377,7 +430,7 @@ jobs:
           docker push ghcr.io/squid-proxy-lovers/ccp:latest
 
   nightly:
-    needs: [package, docker]
+    needs: [package, docker, provenance]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.nightly))
     runs-on: ubuntu-latest
     permissions:
@@ -394,6 +447,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-provenance
           path: dist
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

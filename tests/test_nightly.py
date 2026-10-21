@@ -4,8 +4,10 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
@@ -13,6 +15,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location("nightly", ROOT / "scripts/nightly.py")
 nightly = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(nightly)
@@ -38,6 +41,7 @@ class PublicationTests(unittest.TestCase):
         for name in nightly.ASSETS:
             (self.dist / name).write_bytes(name.encode())
         nightly.prepare(self.dist, SHA)
+        (self.dist / "ccp-provenance.json").write_text("fixture boundary bundle")
         self.calls = []
 
     def publish(self, *, releases=(), failure=(), revision=SHA, ancestor=False):
@@ -65,10 +69,12 @@ class PublicationTests(unittest.TestCase):
                 GITHUB_EVENT_NAME="schedule",
             ),
             patch.object(nightly, "run", side_effect=command),
+            patch.object(nightly.release_contract.subprocess, "run") as provenance,
             patch.object(nightly, "datetime") as clock,
         ):
             clock.now.return_value = datetime(2026, 10, 12, tzinfo=timezone.utc)
             nightly.publish(self.dist, self.dist / "image.tar.gz")
+            self.assertEqual(provenance.call_count, 1)
 
     def test_missing_platform_prevents_packaging(self):
         (self.dist / "ccp-server-darwin-aarch64").unlink()
@@ -168,6 +174,263 @@ class PublicationTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "scheduled/manual main"),
         ):
             nightly.publish(self.dist, self.dist / "image.tar.gz")
+
+    def test_missing_or_failed_provenance_prevents_every_publication_call(self):
+        with (
+            patch.dict(
+                os.environ,
+                GITHUB_SHA=SHA,
+                GITHUB_REPOSITORY="Squid-Proxy-Lovers/ccp",
+                GITHUB_REF="refs/heads/main",
+                GITHUB_EVENT_NAME="schedule",
+            ),
+            patch.object(nightly, "run") as publisher,
+            patch.object(
+                nightly.release_contract.subprocess,
+                "run",
+                side_effect=FileNotFoundError("verifier unavailable"),
+            ),
+            self.assertRaises(ValueError),
+        ):
+            nightly.publish(self.dist, self.dist / "image.tar.gz")
+        publisher.assert_not_called()
+        (self.dist / "ccp-provenance.json").unlink()
+        with self.assertRaises(OSError):
+            self.publish()
+        self.assertEqual(self.calls, [])
+
+    def test_fork_cannot_publish_under_the_official_contract(self):
+        with (
+            patch.dict(
+                os.environ,
+                GITHUB_SHA=SHA,
+                GITHUB_REPOSITORY="someone/fork",
+                GITHUB_REF="refs/heads/main",
+                GITHUB_EVENT_NAME="schedule",
+            ),
+            patch.object(nightly, "run") as command,
+            self.assertRaisesRegex(ValueError, "official repository"),
+        ):
+            nightly.publish(self.dist, self.dist / "image.tar.gz")
+        command.assert_not_called()
+
+
+class ReleaseContractTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.dist = Path(self.directory.name)
+        self.contract = nightly.release_contract
+        for name in nightly.ASSETS:
+            (self.dist / name).write_bytes((name + "-exact-source").encode())
+        nightly.prepare(self.dist, SHA)
+        (self.dist / self.contract.PROVENANCE).write_bytes(b"fixture verifier boundary")
+        self.raw = (self.dist / self.contract.MANIFEST).read_bytes()
+        self.manifest = self.contract.decode(self.raw)
+
+    def test_producer_binds_all_bytes_and_actual_source_versions_contracts(self):
+        value = self.manifest.value()
+        self.assertEqual(value["repository"], "Squid-Proxy-Lovers/ccp")
+        self.assertEqual(value["source_sha"], SHA)
+        self.assertEqual(value["package_version"], "0.1.0")
+        self.assertEqual(
+            value["contracts"],
+            {
+                "native_wire": 1,
+                "workspace_api": 1,
+                "client_profile_read_min": 1,
+                "client_profile_write": 5,
+                "server_schema_write": 23,
+            },
+        )
+        self.assertEqual(set(value["artifacts"]), set(nightly.ASSETS) | {"build-info.json"})
+        for name, item in self.manifest.artifacts.items():
+            self.assertEqual(
+                item.sha256, hashlib.sha256((self.dist / name).read_bytes()).hexdigest()
+            )
+            self.assertEqual(item.size, (self.dist / name).stat().st_size)
+        self.assertIn(self.contract.MANIFEST, (self.dist / "SHA256SUMS").read_text())
+
+    def test_strict_manifest_rejects_unknown_duplicate_future_and_claimed_sources(self):
+        original = json.loads(self.raw)
+        for key, value in [
+            ("format", True),
+            ("format", 2),
+            ("repository", "attacker/repo"),
+            ("source_sha", "a" * 39),
+            ("source_sha", "A" * 40),
+            ("url", "https://instance.invalid/download"),
+            ("platforms", ["windows"]),
+            ("package_version", "--source-ref=attacker"),
+        ]:
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                self.contract.decode(json.dumps({**original, key: value}).encode())
+        with self.assertRaisesRegex(ValueError, "Duplicate"):
+            self.contract.decode(self.raw.replace(b'"format": 1', b'"format": 1, "format": 1'))
+        with self.assertRaises(ValueError):
+            self.contract.decode(b"x" * (65536 + 1))
+        for raw in [b"\xff", b"[" * 2000 + b"]" * 2000]:
+            with self.assertRaises(ValueError):
+                self.contract.decode(raw)
+
+    def test_nested_contract_and_artifact_numbers_hashes_names_are_bounded(self):
+        for path, value in [
+            (("contracts", "workspace_api"), True),
+            (("contracts", "client_profile_write"), 0),
+            (("contracts", "native_wire"), 2**32),
+            (("contracts", "extra"), 1),
+            (("contracts", "client_profile_read_min"), 6),
+            (("artifacts", "ccp-mcp.tar.gz", "size"), -1),
+            (("artifacts", "ccp-mcp.tar.gz", "size"), self.contract.MAX_ARTIFACT + 1),
+            (("artifacts", "ccp-mcp.tar.gz", "sha256"), "f" * 63),
+            (("artifacts", "../../client"), {"size": 1, "sha256": "a" * 64}),
+        ]:
+            data = json.loads(self.raw)
+            parent = data
+            for part in path[:-1]:
+                parent = parent[part]
+            parent[path[-1]] = value
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.contract.decode(json.dumps(data).encode())
+
+    def test_release_selection_pins_stable_version_or_main_nightly_source(self):
+        self.assertEqual(
+            self.contract.source_ref("stable", "v0.1.0", self.manifest), "refs/tags/v0.1.0"
+        )
+        self.assertEqual(self.contract.source_ref("nightly", TAG, self.manifest), "refs/heads/main")
+        for channel, tag in [
+            ("stable", "latest"),
+            ("stable", "v0.2.0"),
+            ("nightly", "nightly"),
+            ("nightly", TAG.replace("a" * 12, "b" * 12)),
+            ("custom", TAG),
+        ]:
+            with self.assertRaises(ValueError):
+                self.contract.source_ref(channel, tag, self.manifest)
+
+    def test_verifier_enforces_exact_publisher_ref_commit_workflow_and_hosted_runner(self):
+        captured = []
+
+        def verified(command, **options):
+            captured.append(command)
+            self.assertEqual(command[:3], ["gh", "attestation", "verify"])
+            path = Path(command[3])
+            self.assertEqual(path.read_bytes(), self.raw)
+            self.assertNotEqual(path.parent, self.dist)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(
+                Path(command[command.index("--bundle") + 1]).stat().st_mode & 0o777, 0o600
+            )
+            self.assertTrue(options["check"] and options["capture_output"])
+            self.assertEqual(options["timeout"], 60)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(self.contract.subprocess, "run", side_effect=verified):
+            result = self.contract.verify(self.dist, "nightly", TAG, "darwin-aarch64")
+        self.assertEqual(result, self.manifest)
+        self.assertEqual(len(captured), 1)
+        command = captured[0]
+        for flag, value in [
+            ("--repo", "Squid-Proxy-Lovers/ccp"),
+            ("--hostname", "github.com"),
+            (
+                "--cert-identity",
+                "https://github.com/Squid-Proxy-Lovers/ccp/.github/workflows/ci.yml@refs/heads/main",
+            ),
+            ("--cert-oidc-issuer", "https://token.actions.githubusercontent.com"),
+            ("--source-ref", "refs/heads/main"),
+            ("--source-digest", SHA),
+            ("--signer-digest", SHA),
+        ]:
+            self.assertEqual(command[command.index(flag) + 1], value)
+        self.assertIn("--deny-self-hosted-runners", command)
+        self.assertNotIn(
+            "--signer-workflow", command, "exact certificate identity excludes prefix signer policy"
+        )
+        self.assertFalse(Path(command[3]).exists(), "private verification copies are removed")
+
+    def test_failed_missing_or_timed_out_provenance_never_falls_back_to_checksums(self):
+        before = {p.name: p.read_bytes() for p in self.dist.iterdir()}
+        for error in [
+            FileNotFoundError("PRIVATE_VERIFIER"),
+            subprocess.CalledProcessError(1, "gh", stderr=b"PRIVATE_VERIFIER"),
+            subprocess.TimeoutExpired("gh", 60),
+        ]:
+            with (
+                patch.object(self.contract.subprocess, "run", side_effect=error),
+                self.assertRaises(ValueError) as caught,
+            ):
+                self.contract.verify(self.dist, "stable", "v0.1.0", "linux-x86_64")
+            self.assertNotIn("PRIVATE_VERIFIER", str(caught.exception))
+            self.assertIn("no checksum fallback", str(caught.exception))
+        self.assertEqual({p.name: p.read_bytes() for p in self.dist.iterdir()}, before)
+        (self.dist / self.contract.PROVENANCE).unlink()
+        with patch.object(self.contract.subprocess, "run") as verifier, self.assertRaises(OSError):
+            self.contract.verify(self.dist, "stable", "v0.1.0", "linux-x86_64")
+        verifier.assert_not_called()
+
+    def test_corrupt_pair_or_symlink_is_refused_even_after_publisher_verification(self):
+        with patch.object(self.contract.subprocess, "run"):
+            (self.dist / "ccp-mcp.tar.gz").write_bytes(b"wrong MCP revision")
+            with self.assertRaisesRegex(ValueError, "differs"):
+                self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+        (self.dist / "ccp-mcp.tar.gz").unlink()
+        (self.dist / "ccp-mcp.tar.gz").symlink_to(self.dist / "build-info.json")
+        with (
+            patch.object(self.contract.subprocess, "run"),
+            self.assertRaisesRegex(ValueError, "Invalid artifact"),
+        ):
+            self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+
+    def test_manifest_or_bundle_path_substitution_and_unknown_platform_refuse_before_verifier(self):
+        for name in [self.contract.MANIFEST, self.contract.PROVENANCE]:
+            path = self.dist / name
+            saved = path.read_bytes()
+            path.unlink()
+            path.symlink_to(self.dist / "build-info.json")
+            with (
+                patch.object(self.contract.subprocess, "run") as verifier,
+                self.assertRaises(ValueError),
+            ):
+                self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+            verifier.assert_not_called()
+            path.unlink()
+            path.write_bytes(saved)
+        with (
+            patch.object(self.contract.subprocess, "run") as verifier,
+            self.assertRaises(ValueError),
+        ):
+            self.contract.verify(self.dist, "nightly", TAG, "unsupported")
+        verifier.assert_not_called()
+
+    def test_producer_rejects_mismatched_package_versions_and_missing_constants(self):
+        other = self.dist / "source"
+        for name in ["client", "server", "protocol"]:
+            path = other / "crates" / name / "Cargo.toml"
+            path.parent.mkdir(parents=True)
+            path.write_text('version = "0.1.0"\n')
+        path = other / "mcp/pyproject.toml"
+        path.parent.mkdir()
+        path.write_text('version = "0.2.0"\n')
+        with self.assertRaisesRegex(ValueError, "versions differ"):
+            self.contract.source_version(other)
+        path.write_text("const SOMETHING_ELSE: u32 = 5;\n")
+        with self.assertRaisesRegex(ValueError, "source contract"):
+            self.contract.source_number(other, "mcp/pyproject.toml", "MISSING")
+
+    def test_provenance_publication_has_no_self_download_and_both_publishers_get_the_bundle(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        jobs = dict(re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)", workflow, re.M | re.S))
+        proof = jobs["provenance"]
+        self.assertNotIn("name: release-provenance\n          path: dist\n", proof)
+        self.assertIn("path: dist/ccp-provenance.json", proof)
+        for name in ["nightly", "release"]:
+            self.assertIn("provenance]", jobs[name].splitlines()[0])
+            self.assertIn("name: release-provenance\n          path: dist\n", jobs[name])
+        for name, body in jobs.items():
+            if name != "provenance":
+                self.assertNotIn("id-token: write", body)
+                self.assertNotIn("attestations: write", body)
 
 
 class InstallerTests(unittest.TestCase):
