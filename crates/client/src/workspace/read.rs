@@ -53,7 +53,10 @@ impl WorkspaceProfile {
         let request = http
             .post(format!("{}{path}", self.trust.mtls_origin))
             .json(request);
-        if path == "api/v1/content/entries/get" {
+        if matches!(
+            path,
+            "api/v1/content/entries/get" | "api/v1/content/entries/native-history"
+        ) {
             network::snapshot_json(request).await
         } else {
             network::json(request).await

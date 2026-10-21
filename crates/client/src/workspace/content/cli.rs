@@ -30,6 +30,7 @@ struct Paging {
 
 #[derive(Subcommand)]
 enum Command {
+    NativeHistory(super::native::Args),
     #[command(flatten)]
     ShelfLifecycle(super::shelves::cli::Command),
     #[command(flatten)]
@@ -94,6 +95,7 @@ enum Command {
 
 pub(crate) async fn run(args: ContentArgs) -> anyhow::Result<()> {
     match args.command {
+        Command::NativeHistory(command) => super::native::run(&args.profile, command).await,
         Command::ShelfLifecycle(command) => super::shelves::cli::run(&args.profile, command).await,
         Command::Creation(command) => super::create::cli::run(&args.profile, command).await,
         Command::Mutation(command) => super::mutation::cli::run(&args.profile, command).await,
@@ -104,6 +106,7 @@ pub(crate) async fn run(args: ContentArgs) -> anyhow::Result<()> {
 async fn run_read(path: &std::path::Path, command: Command) -> anyhow::Result<()> {
     let mut profile = WorkspaceProfile::open(path)?;
     match command {
+        Command::NativeHistory(_) => bail!("source history requires its dispatcher"),
         Command::ShelfLifecycle(_) => bail!("shelf lifecycle reads require their dispatcher"),
         Command::Creation(_) => bail!("container creation requires the creation dispatcher"),
         Command::Mutation(_) => bail!("entry mutation command requires the mutation dispatcher"),

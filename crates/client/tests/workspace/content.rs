@@ -10,6 +10,7 @@ mod create;
 mod guidance;
 mod lifecycle;
 mod mutation;
+mod native;
 mod shelves;
 
 struct Records {

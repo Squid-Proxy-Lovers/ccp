@@ -7,6 +7,7 @@ use super::*;
 mod boundaries;
 mod guidance;
 mod lifecycle;
+mod native;
 mod ownership;
 mod purge;
 mod resolution;

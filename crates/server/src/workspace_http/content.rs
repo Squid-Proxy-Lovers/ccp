@@ -12,6 +12,7 @@ use hyper::Method;
 use protocol::workspace::content as api;
 
 mod entries;
+mod native;
 mod nodes;
 mod project;
 mod purge;
@@ -40,6 +41,7 @@ pub(super) fn handles(path: &str) -> bool {
             | "/api/v1/content/entries/get"
             | "/api/v1/content/entries/list"
             | "/api/v1/content/entries/history"
+            | "/api/v1/content/entries/native-history"
             | "/api/v1/content/entries/resolve-operation"
     )
 }
@@ -66,6 +68,7 @@ pub(super) fn dispatch(
         "/api/v1/content/entries/get" => entries::get(store, actor, input, now),
         "/api/v1/content/entries/list" => entries::list(store, actor, input, now),
         "/api/v1/content/entries/history" => entries::history(store, actor, input, now),
+        "/api/v1/content/entries/native-history" => native::history(store, actor, input, now),
         "/api/v1/content/entries/resolve-operation" => entries::resolve(store, actor, input, now),
         _ => nodes::dispatch(store, actor, input, now),
     }

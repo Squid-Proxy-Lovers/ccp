@@ -72,8 +72,8 @@ pub(super) fn success(value: impl Serialize) -> Result<Reply, Error> {
 }
 
 pub(super) fn content_snapshot(value: impl Serialize) -> Result<Reply, Error> {
-    // Full snapshot plus retained append delta can each escape to 6x the
-    // 256 KiB text bound. Other routes retain the original 1 MiB ceiling.
+    // Snapshots include escaped bodies and retained append deltas. Native source
+    // pages have a separate conservative 4 MiB budget. Other routes stay at 1 MiB.
     limited_success(value, 4 * 1024 * 1024)
 }
 

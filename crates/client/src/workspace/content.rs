@@ -7,7 +7,8 @@ pub use protocol::workspace::content::{
     ArchivedShelf, Book, BookPage, ContentActor, CreateBook, CreateShelf, EntryChange,
     EntryContent, EntryMutation, EntryOperationOutcome, EntryOperationResolution, EntryPage,
     EntryReceipt, EntryRevision, EntrySnapshot, EntrySummary, EntryTarget, History, HistoryPage,
-    NodeTarget, Page, Shelf, ShelfPage, ShelfState,
+    NativeHistory, NativeRecord, NativeRow, NativeSource, NativeValue, NodeTarget, Page, Shelf,
+    ShelfPage, ShelfState,
 };
 
 use super::*;
@@ -17,6 +18,7 @@ pub(crate) mod cli;
 pub(crate) mod create;
 pub(crate) mod mutation;
 pub use mutation::ContentOperationInfo;
+pub(crate) mod native;
 pub(crate) mod shelves;
 mod validate;
 

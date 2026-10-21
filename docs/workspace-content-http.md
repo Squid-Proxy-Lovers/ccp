@@ -24,7 +24,8 @@ self-service `entries/resolve-operation` route requires mTLS client identity;
 admin keys receive 403 for that operation.
 An instance-wide admin key can read all workspaces but cannot create or edit
 content, even if its principal also owns the workspace. Use that workspace's
-scoped owner/admin key for those writes. No anonymous or cookie login is added.
+scoped owner/admin key for those writes. Anonymous reads are denied. [Desktop browser sessions](workspace-browser-session.md)
+use the same current key scope with Origin/CSRF checks.
 
 Every content request is POST with `Content-Type: application/json`. Targets are
 explicit workspace and record UUIDs. There are no query parameters or implicit
@@ -62,6 +63,7 @@ All paths below start with `/api/v1/content/`. Each request includes
 | `entries/get` | `entry_id`; optional `revision` | Entry snapshot |
 | `entries/list` | `book_id`, `archived`; optional `after`, `limit` | Summary `items`, `next_cursor` |
 | `entries/history` | `entry_id`; optional `after`, `limit` | Revision metadata `items`, `next_cursor` |
+| `entries/native-history` | `entry_id`; optional ordinal `after`, `limit` | Target IDs, optional source header, raw typed `items`, `next_cursor` |
 | `entries/resolve-operation` | Original `credential_id`, `operation_id`, `request_hash` | Body-free committed receipt or cancellation |
 | `entries/mutate` | `operation_id`, optional `agent`, `change` | `entry_id`, `revision` receipt |
 
@@ -85,7 +87,8 @@ revision. History lists contain revision metadata without bodies.
 
 Lists default to 32 items and accept limits 1–32. Copy `next_cursor` into `after`
 until it is null. Hierarchy/entry cursors are UUID strings; history cursors are
-revision numbers and start at 0. Record limits bound encoded JSON even when
+revision numbers and start at 0. [Native source-history](native-provenance.md#read-original-source-records)
+cursors are ordinals; its byte budget may yield a partial count page with a cursor. Record limits bound encoded JSON even when
 hierarchy descriptions require heavy escaping. Reads use current permissions;
 record IDs or prior ownership cannot bypass revocation or disabling.
 
@@ -215,9 +218,10 @@ and 1 MiB responses. This operation does not purge payloads or start timed clean
 ## Bounds and failures
 
 Entry mutation JSON is capped at 2 MiB, including escaping. Other request bodies
-remain capped at 64 KiB. Entry snapshot responses are capped at 4 MiB to include
-both a full body and its original append delta with worst-case escaping. Other
-responses retain the 1 MiB cap. Field bounds still apply independently; larger
+remain capped at 64 KiB. Entry snapshots and native source-history pages have
+a 4 MiB response cap. Snapshots include a full body and its original append delta
+with worst-case escaping; source pages contain separately bounded raw records.
+Other responses retain the 1 MiB cap. Field bounds still apply independently; larger
 transport ceilings do not permit larger stored text. Existing HTTP framing,
 header/body deadlines, admission budgets and current authentication remain in
 force. An eager oversized uploader may see a connection reset after the early

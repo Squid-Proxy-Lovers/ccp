@@ -5,7 +5,8 @@ UUID to read shelves, books, entries, history and shelf lifecycle metadata. Thes
 use the authenticated [content HTTPS API](workspace-content-http.md). Entry
 mutations have their own [client guide](workspace-content-mutations.md).
 The client also creates shelves and books. The [workspace MCP bridge](workspace-mcp.md)
-exposes these reads, shelf/book creation and guarded entry mutations with explicit scopes.
+exposes hierarchy/revision reads, shelf/book creation and guarded entry mutations
+with explicit scopes. Native source-history MCP access remains separate work.
 
 [Documentation index](README.md) · [Caller selections](workspace-selection.md) ·
 [Content ownership and revisions](workspace-content.md)
@@ -96,9 +97,12 @@ They return the underlying typed JSON data without the HTTP envelope.
 | `entries` | Workspace, `--book-id UUID` | `--archived`, `--after UUID`, `--limit N` |
 | `entry` | Workspace, `--entry-id UUID` | `--revision N` |
 | `history` | Workspace, `--entry-id UUID` | `--after REVISION`, `--limit N` |
+| `native-history` | Workspace, `--entry-id UUID` | `--after ORDINAL`, `--limit N` |
 
 Lists default to 32 items and accept 1–32. Use `next_cursor` as `--after` until
-it is null. History cursors are revision numbers; other cursors are UUIDs.
+it is null. History cursors are revision numbers; native source-history cursors are ordinals;
+hierarchy cursors are UUIDs. [Native source history](native-provenance.md#read-original-source-records)
+returns original typed observations separately from workspace revisions.
 Request UUIDs must use the canonical lowercase hyphenated form.
 
 ## Inspect an archived shelf
@@ -164,8 +168,10 @@ IDs; their workspace/entry association comes from the verified TLS request.
 Shelf lifecycle responses require their known fields and types. Unknown additive
 response fields are tolerated and dropped through typed projection before CLI
 output, so unexpected descriptions or bodies are not forwarded in summaries.
-Snapshot reads allow up to 4 MiB of encoded JSON to preserve full escaped text
-and its original append contribution. Other content responses and all existing
+Native source-history DTOs instead reject unknown structural fields; original
+column names and values remain in their explicit source-row arrays.
+Snapshot and native source-history reads allow up to 4 MiB of encoded JSON for
+escaped snapshots and original source records. Other content responses and all existing
 client response paths keep their 1 MiB limit. Invalid, oversized, truncated,
 encoded or incompatible responses fail without printing remote body fragments.
 
