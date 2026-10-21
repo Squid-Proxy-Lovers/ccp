@@ -4,8 +4,10 @@
 
 use super::{Credential, Operation, Pending, WorkspaceProfile, WorkspaceTrust, crypto};
 
+mod lease;
 mod migration;
 use anyhow::{Context, bail};
+pub(super) use lease::exclusive_connection;
 use rusqlite::{Connection, OpenFlags, params};
 use serde::de::DeserializeOwned;
 use std::{fs, io::Read, path::Path, time::Duration};
@@ -78,18 +80,15 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<WorkspaceProfile> {
     private_directory(directory, false)?;
     let path = directory.join(PROFILE);
     private_file_limit(&path, 16 * 1024 * 1024)?;
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-    connection.busy_timeout(Duration::from_secs(2))?;
-    format(&connection)?;
-    let mode: String = connection.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
-    if mode != "delete" {
-        bail!("unsupported workspace profile journal mode");
-    }
-    connection.pragma_update(None, "synchronous", "FULL")?;
-    connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
-    connection
-        .execute_batch("BEGIN EXCLUSIVE; COMMIT;")
-        .context("workspace profile is busy or unavailable")?;
+    let connection =
+        exclusive_connection(&path, "workspace profile is busy or unavailable", |db| {
+            format(db)?;
+            let mode: String = db.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+            if mode != "delete" {
+                bail!("unsupported workspace profile journal mode");
+            }
+            Ok(())
+        })?;
     let version = format(&connection)?;
     if version < 4 {
         private_file(&directory.join(PROFILE))?;

@@ -229,7 +229,11 @@ fn head(db: &Connection, workspace: Uuid, id: Uuid) -> anyhow::Result<EntrySumma
     Ok(result)
 }
 
-fn active_head(db: &Connection, workspace: Uuid, id: Uuid) -> anyhow::Result<EntrySummary> {
+pub(super) fn active_head(
+    db: &Connection,
+    workspace: Uuid,
+    id: Uuid,
+) -> anyhow::Result<EntrySummary> {
     let head = head(db, workspace, id)?;
     if head.archived {
         return Err(ContentError::NotFound.into());

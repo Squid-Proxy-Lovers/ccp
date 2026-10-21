@@ -282,7 +282,17 @@ async fn competing_cli_selection_updates_accept_only_one_expected_revision() {
     *b.last_mut().unwrap() = &second;
     a.extend(["--default-workspace-id", &first]);
     let (one, two) = tokio::join!(f.cli(&a), f.cli(&b));
-    assert_ne!(one.status.success(), two.status.success());
+    assert_ne!(
+        one.status.success(),
+        two.status.success(),
+        "one: status={} stdout={} stderr={}; two: status={} stdout={} stderr={}",
+        one.status,
+        String::from_utf8_lossy(&one.stdout),
+        String::from_utf8_lossy(&one.stderr),
+        two.status,
+        String::from_utf8_lossy(&two.stdout),
+        String::from_utf8_lossy(&two.stderr),
+    );
     let p = WorkspaceProfile::open(&f.profile).unwrap();
     let selected = p.selection(&state).unwrap();
     assert_eq!(selected.revision, 1);

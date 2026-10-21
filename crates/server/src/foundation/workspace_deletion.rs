@@ -29,6 +29,9 @@ pub struct WorkspaceDeletion {
 
 // Order respects payload FKs. A row count bound never requires loading bodies.
 pub(super) const PAYLOAD: &[(&str, &str)] = &[
+    ("ccp_native_entry_rows", "workspace_id"),
+    ("ccp_native_workspace_rows", "workspace_id"),
+    ("ccp_native_imports", "workspace_id"),
     ("ccp_entry_retention_clocks", "workspace_id"),
     ("ccp_entry_retention_purges", "workspace_id"),
     ("ccp_entry_purges", "workspace_id"),
@@ -52,6 +55,11 @@ pub(super) const PAYLOAD: &[(&str, &str)] = &[
 ];
 
 const RETAIN: &[(&str, &str)] = &[
+    ("ccp_retain_native_import", "ccp_native_imports"),
+    (
+        "ccp_retain_native_workspace_row",
+        "ccp_native_workspace_rows",
+    ),
     ("ccp_retain_content_operation", "ccp_content_operations"),
     ("ccp_retain_entry_purge", "ccp_entry_purges"),
     ("ccp_retain_guidance_operation", "ccp_guidance_operations"),
@@ -73,10 +81,13 @@ const RETAIN: &[(&str, &str)] = &[
 pub(super) fn migrate(tx: &Transaction<'_>) -> anyhow::Result<()> {
     // Installed atomically with the schema marker. Avoid rewriting all retained
     // guards on every concurrent session startup once this migration is current.
-    let installed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='ccp_no_incomplete_workspace_deletion')", [], |r| r.get(0))?;
+    let installed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='ccp_no_incomplete_workspace_deletion') AND EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name='ccp_no_deleted_ccp_native_entry_rows')", [], |r| r.get(0))?;
     if installed {
         return Ok(());
     }
+    // Schema25 adds payload tables. Rebuild the old completion predicate once,
+    // in the same schema transaction, before accepting a completion claim.
+    tx.execute_batch("DROP TRIGGER IF EXISTS ccp_no_incomplete_workspace_deletion;")?;
     tx.execute_batch(include_str!("workspace_deletion.sql"))?;
     for (guard, table) in RETAIN {
         // Identifiers are compile-time schema constants, never request data.

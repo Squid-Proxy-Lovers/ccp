@@ -1,6 +1,6 @@
 # Permanently delete an archived workspace
 
-Unreleased workspace API1, server schema24. The desktop panel exposes the same confirmation and tracking flow. [Archive/reactivate](workspace-http-api.md) preserves context for
+Unreleased workspace API1, server schema25. The desktop panel exposes the same confirmation and tracking flow. [Archive/reactivate](workspace-http-api.md) preserves context for
 reading; permanent deletion is a separate, irreversible action available only to
 that workspace's owner or an instance administrator. Workspace admins and clients
 cannot delete a workspace.
@@ -132,6 +132,13 @@ identity guards and indexes, and preserves existing rows. It starts no deletion.
 Older binaries refuse schema24; rollback requires the complete matching old backup
 and its producing binary. Never lower a schema marker or copy selected tables to
 downgrade.
+
+Schema25 adds [native provenance storage](native-provenance.md) to the same cleanup
+contract. Its migration replaces the completion predicate once so existing jobs
+cannot report completion while provenance remains. Entry rows, workspace rows and
+import metadata are removed in bounded batches before the other payload. No import
+or deletion starts on upgrade; rollback from25 requires the complete matching
+schema24 backup and its producing binary.
 
 Foundation tests cover authority, lifecycle confirmation, exact retries, payload
 cleanup, shared identity/access preservation, transaction faults and reopen. TLS

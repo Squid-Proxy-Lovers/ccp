@@ -92,7 +92,38 @@ fn seed(f: &mut Fixture, client: &Enrollment) -> EntryMutation {
     .unwrap();
     seed_boards(&mut s, owner, f.workspace, writer, f.global);
     seed_invites(&mut s, owner, f.workspace, client);
+    seed_native(f);
     create
+}
+
+fn seed_native(f: &Fixture) {
+    let entry: String = f
+        .connection
+        .query_row(
+            "SELECT id FROM ccp_content_entries WHERE workspace_id=?1 LIMIT 1",
+            [f.workspace.to_string()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let entry_row = serde_json::to_string(&NativeRow {
+        columns: vec!["context".into()],
+        values: vec![NativeSqlValue::Text("PRIVATE_NATIVE_BODY".into())],
+    })
+    .unwrap();
+    let token_row = serde_json::to_string(&NativeRow {
+        columns: vec!["token_value".into()],
+        values: vec![NativeSqlValue::Text("PRIVATE_NATIVE_TOKEN".into())],
+    })
+    .unwrap();
+    f.connection.execute("INSERT INTO ccp_native_imports(workspace_id,source_sha256,source_schema,legacy_session_id,recorded_by,recorded_at) VALUES(?1,?2,2,7,?3,?4)",params![f.workspace.to_string(),"a".repeat(64),f.global.to_string(),NOW]).unwrap();
+    f.connection.execute("INSERT INTO ccp_native_entry_rows(workspace_id,entry_id,ordinal,source_table,source_key,row_json) VALUES(?1,?2,1,'message_packs','42',?3)",params![f.workspace.to_string(),entry,entry_row]).unwrap();
+    f.connection.execute("INSERT INTO ccp_native_workspace_rows(workspace_id,ordinal,source_table,source_key,row_json) VALUES(?1,1,'auth_tokens','7',?2)",params![f.workspace.to_string(),token_row]).unwrap();
+    f.connection
+        .execute(
+            "UPDATE ccp_native_imports SET sealed=1 WHERE workspace_id=?1",
+            [f.workspace.to_string()],
+        )
+        .unwrap();
 }
 
 #[test]

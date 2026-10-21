@@ -17,6 +17,7 @@ mod entry;
 mod guidance;
 mod invitation;
 mod model;
+mod native_provenance;
 mod operation_ledger;
 mod provisioning;
 mod recovery;
@@ -58,6 +59,10 @@ pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, GrantPage, GrantSummary,
     WorkspaceAdministration, WorkspacePage, WorkspaceSummary,
 };
+pub use native_provenance::{
+    NativeEntryHistory, NativeEntryRecord, NativeHistoryRequest, NativeImportInfo, NativeRow,
+    NativeSqlValue,
+};
 pub use provisioning::{InitialOwner, OwnerProvisioning, ProvisionedWorkspace};
 pub use recovery::{
     IssuedRecoveryInvitation, RecoveryInvitationPage, RecoveryInvitationRequest,
@@ -95,6 +100,7 @@ pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
     transaction.execute_batch(include_str!("entry_purge.sql"))?;
     transaction.execute_batch(include_str!("retention.sql"))?;
     transaction.execute_batch(include_str!("work_status.sql"))?;
+    transaction.execute_batch(include_str!("native_provenance.sql"))?;
     workspace_deletion::migrate(transaction)?;
     let has_key_audit = transaction
         .prepare("PRAGMA table_info(ccp_access_audit)")?

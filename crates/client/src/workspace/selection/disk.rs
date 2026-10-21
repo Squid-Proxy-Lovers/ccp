@@ -4,7 +4,6 @@
 
 use super::*;
 use rusqlite::{Connection, OpenFlags, params};
-use std::time::Duration;
 
 const FILE: &str = "caller-selection.sqlite3";
 const APPLICATION_ID: i64 = 0x4343_5053;
@@ -31,18 +30,14 @@ pub(super) fn open(directory: &Path) -> anyhow::Result<Connection> {
     store::private_directory(directory, false)?;
     let path = directory.join(FILE);
     store::private_file(&path)?;
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-    connection.busy_timeout(Duration::from_secs(2))?;
-    check_format(&connection)?;
-    let mode: String = connection.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
-    if mode != "delete" {
-        bail!("unsupported caller selection journal mode");
-    }
-    connection.pragma_update(None, "synchronous", "FULL")?;
-    connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
-    connection.execute_batch("BEGIN EXCLUSIVE; COMMIT;")?;
-    check_format(&connection)?;
-    Ok(connection)
+    store::exclusive_connection(&path, "caller selection is busy or unavailable", |db| {
+        check_format(db)?;
+        let mode: String = db.pragma_query_value(None, "journal_mode", |r| r.get(0))?;
+        if mode != "delete" {
+            bail!("unsupported caller selection journal mode");
+        }
+        Ok(())
+    })
 }
 
 fn check_format(connection: &Connection) -> anyhow::Result<()> {
@@ -88,6 +83,7 @@ pub(super) fn replace(directory: &Path, state: &Selection, expected: u64) -> any
 mod tests {
     use super::*;
     use std::sync::{Arc, Barrier, mpsc};
+    use std::time::Duration;
     use uuid::Uuid;
 
     enum CommitOrder {

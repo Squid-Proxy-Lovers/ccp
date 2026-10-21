@@ -57,7 +57,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 24. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 25. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -264,3 +264,12 @@ stopped source through a private copy, returning aggregate counts and a source
 fingerprint without initialization or conversion. It grants no ownership or
 access and does not remove the legacy-content gate. Actual conversion remains
 subsequent work.
+
+## Native provenance storage
+
+Schema25 adds empty [native provenance tables](native-provenance.md) and a scoped
+internal history reader. Typed source rows retain original values without claiming
+historical creators or granting access. Entry provenance follows entry purges;
+workspace provenance follows confirmed whole-workspace cleanup. Migration starts
+no import and leaves the legacy-content gate in place. The converter and external
+read adapters remain subsequent work.

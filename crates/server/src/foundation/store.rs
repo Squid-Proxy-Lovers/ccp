@@ -14,6 +14,7 @@ mod invitations;
 mod keys;
 mod local;
 mod management;
+mod native_provenance;
 mod peer;
 mod provisioning;
 mod readmission;
