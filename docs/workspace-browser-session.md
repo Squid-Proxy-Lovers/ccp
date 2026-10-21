@@ -152,7 +152,7 @@ workspace’s grants. Creation secrets appear only in that result view; copy the
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
 these actions do not have a browser retry mechanism. Initial group enrollment,
-readmission/recovery, owner/team/key administration, lifecycle/retention settings and
+readmission/recovery, owner/team/key administration and
 reported work are not yet exposed in this first panel.
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
@@ -240,3 +240,51 @@ already have superseded it. The panel reports that acknowledgement separately
 from the refreshed current revision. A failed refresh never relabels a confirmed
 save as unsaved. Session changes/loss still clear authorized views under the
 same draft/intent copying rules. Guidance drafts remain memory-only.
+
+
+## Workspace settings
+
+Open a workspace’s **Settings** tab. Its owner or an authorized instance key can
+**Archive workspace** or **Reactivate workspace**, with explicit confirmation.
+A workspace admin key can manage active retention but cannot change workspace
+lifecycle. Archived context remains readable; content writes and new admission
+stop, and timed cleanup pauses. Reactivation resumes the saved remaining time.
+Permanent whole-workspace deletion is not exposed by this panel or its current API.
+
+Retention is manual by default. Current policy metadata is available to scoped
+owners/admins and instance keys; only an active workspace’s owner/admin key can
+configure it. If the policy is unavailable, the panel does not assume a default,
+and keeps independently authorized lifecycle actions available.
+
+To **Enable timed cleanup**, enter a positive whole duration, choose Days, Hours
+or Seconds, and check the permanent-deletion confirmation. No duration is filled
+in automatically. Existing individual entry archives receive a fresh full window;
+new entry archives receive the chosen window. Cleanup removes due entry contents
+and revision history while retaining body-free proofs/audit; backup retention is
+separate. The policy belongs to the workspace and survives its configuring key’s
+expiry or revocation. See the [retention contract](workspace-retention.md).
+
+An enabled policy offers **Disable timed cleanup**. Disable before choosing another
+duration; subsequent enable starts fresh windows for existing archives. Archived
+workspaces show the policy read-only until reactivation. Instance keys cannot
+borrow workspace roles to configure it. Durations/revisions beyond JavaScript’s
+exact integer range require the API rather than a rounded browser request.
+
+Retention changes keep a frozen UUID, expected revision, request and session proof.
+On conflict or a lost response the original request stays visible, controls freeze,
+and **Read current state** loads a separate policy snapshot. **Check / retry exact
+policy change** deliberately resends the same request under the same session;
+it does not generate a new UUID. Confirmed saved and currently loaded policy
+revisions are reported separately. A failed refresh does not undo acknowledgement.
+
+Archive/reactivate endpoints have no operation UUID or exact retry receipt. The
+panel sends each captured lifecycle attempt once. If its response is uncertain,
+it offers **Read current state** and a copy of the original endpoint/target,
+with no retry button. A matching observed state does not prove which request
+changed it. **Forget local settings attempt** explicitly discards local tracking;
+it does not cancel delayed execution. Keep a copy if needed, then deliberately
+reload current settings before another action. Drafts/unknown requests block
+navigation. Discard/reload keeps the local draft until the relevant state or
+policy is read successfully; lifecycle-only recovery does not require a policy
+read. Failed policy reads retain configuration text for copying or a separate
+explicit discard. These remain memory-only.

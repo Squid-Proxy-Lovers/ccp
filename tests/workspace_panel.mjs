@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {Intent, GuidanceIntent, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -138,4 +138,80 @@ test('guidance snapshots keep global-first and exact target/revision/UTF8 limits
   assert.throws(() => guidanceBundle({...bundle, precedence: 'workspace_first'}, 'workspace'));
   assert.throws(() => guidanceBundle({...bundle, global: {...global, revision: 9007199254740992}}, 'workspace'));
   assert.throws(() => guidanceBundle({...bundle, global: {...global, text: 'é'.repeat(4097)}}, 'workspace'));
+});
+
+test('workspace lifecycle is owner or instance scoped, independently of active or archived state', () => {
+  const s = session(), ws = {id: 'workspace', name: 'Workspace', archived: false};
+  assert.equal(canChangeLifecycle(s, ws), true);
+  assert.equal(canChangeLifecycle(s, {...ws, archived: true}), true);
+  s.identity.scope.role = 'admin'; assert.equal(canChangeLifecycle(s, ws), false);
+  s.identity.scope.role = 'owner'; assert.equal(canChangeLifecycle(s, {...ws, id: 'foreign'}), false);
+  s.identity.scope = {kind: 'instance'}; assert.equal(canChangeLifecycle(s, ws), true);
+  assert.equal(canChangeLifecycle(s, null), false);
+});
+
+test('retention duration requires a positive explicit whole amount and exact allowed units', () => {
+  assert.equal(retentionSeconds('7', '86400'), 604800);
+  assert.equal(retentionSeconds('2', '3600'), 7200);
+  assert.equal(retentionSeconds('1', '1'), 1);
+  for (const [value, unit] of [['', '1'], ['0', '1'], ['-1', '1'], ['1.5', '1'], ['1', '60'], ['9007199254740991', '86400'], ['Infinity', '1']]) {
+    assert.throws(() => retentionSeconds(value, unit));
+  }
+});
+
+test('retention reads never substitute manual policy for missing, foreign or unsafe metadata', () => {
+  const policy = {workspace_id: 'workspace', revision: 0, retention_seconds: null, changed_at: null};
+  assert.equal(retentionPolicy(policy, 'workspace'), policy);
+  for (const bad of [{...policy, workspace_id: 'foreign'}, {...policy, retention_seconds: undefined},
+    {...policy, retention_seconds: 0}, {...policy, changed_at: 1}, {...policy, revision: 1},
+    {...policy, revision: 9007199254740992}, {...policy, revision: 1, changed_at: 1, retention_seconds: 9007199254740992}]) {
+    assert.throws(() => retentionPolicy(bad, 'workspace'));
+  }
+  const current = {workspace: {id: 'workspace', name: 'Workspace', archived: true}};
+  assert.equal(workspaceSnapshot(current, 'workspace').archived, true);
+  assert.throws(() => workspaceSnapshot(current, 'foreign'));
+  assert.throws(() => workspaceSnapshot({workspace: {...current.workspace, archived: 'true'}}, 'workspace'));
+});
+
+test('retention changes require explicit confirmation, alternating modes and immutable receipt-bound intents', () => {
+  const s = session();
+  const manual = {workspace_id: 'workspace', revision: 0, retention_seconds: null, changed_at: null};
+  assert.throws(() => new RetentionIntent(s, manual, 3600, false));
+  assert.throws(() => new RetentionIntent(s, manual, null, false));
+  const intent = new RetentionIntent(s, manual, 3600, true, 'retention-op');
+  manual.revision = 99;
+  const request = intent.request(s), original = JSON.parse(request.body);
+  assert.equal(original.expected_revision, 0);
+  assert.equal(original.confirm_timed_purge, true);
+  assert.equal(original.retention_seconds, 3600);
+  assert.deepEqual(intent.request(structuredClone(s)), request);
+  const other = session(); other.csrf_token = 'different session'; assert.throws(() => intent.request(other));
+  const saved = {workspace_id: 'workspace', revision: 1, retention_seconds: 3600, changed_at: 123};
+  assert.equal(intent.receipt({operation_id: 'retention-op', policy: saved}), saved);
+  for (const value of [{operation_id: 'other', policy: saved},
+    {operation_id: 'retention-op', policy: {...saved, revision: 2}},
+    {operation_id: 'retention-op', policy: {...saved, workspace_id: 'foreign'}},
+    {operation_id: 'retention-op', policy: {...saved, retention_seconds: 7200}}]) assert.throws(() => intent.receipt(value));
+  assert.throws(() => new RetentionIntent(s, saved, 7200, true));
+  assert.throws(() => new RetentionIntent(s, saved, null, true));
+  const disable = new RetentionIntent(s, saved, null, false, 'disable');
+  assert.equal(JSON.parse(disable.body).retention_seconds, null);
+  assert.equal(JSON.parse(disable.body).confirm_timed_purge, false);
+  assert.throws(() => new RetentionIntent(s, {...saved, revision: Number.MAX_SAFE_INTEGER}, null, false));
+});
+
+test('lifecycle requests freeze endpoint and target, have no pretend nonce and cannot be sent twice', () => {
+  const s = session(), workspace = {id: 'workspace', name: 'Workspace', archived: false};
+  const attempt = new LifecycleAttempt(s, workspace);
+  workspace.archived = true;
+  assert.equal(attempt.path, '/api/v1/admin/workspaces/archive');
+  assert.equal(attempt.archived, true);
+  assert.deepEqual(JSON.parse(attempt.body), {path: attempt.path, request: {workspace_id: 'workspace'}, target_archived: true});
+  const changed = session(); changed.identity.key_id = 'other'; assert.throws(() => attempt.request(changed));
+  assert.deepEqual(JSON.parse(attempt.request(s).body), {workspace_id: 'workspace'});
+  assert.throws(() => attempt.request(s), /Do not retry/);
+  assert.throws(() => {attempt.path = 'other';}, TypeError);
+  const restore = new LifecycleAttempt(s, workspace);
+  assert.equal(restore.path, '/api/v1/admin/workspaces/reactivate');
+  assert.equal(restore.archived, false);
 });

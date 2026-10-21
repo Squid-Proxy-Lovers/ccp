@@ -4,8 +4,8 @@ Archived entries are retained until privileged manual purge by default. In the
 unreleased workspace server, current scoped owners/admins can explicitly enable
 timed cleanup through HTTPS. The workspace-mode worker then removes due individual
 archives. An upgrade never enables a policy; previously enabled policies resume
-when that workspace server runs. No CLI/MCP setting or browser policy editor is
-provided yet.
+when that workspace server runs. The [desktop Settings tab](workspace-browser-session.md#workspace-settings)
+provides policy controls; no CLI/MCP configuration command is provided.
 
 [Documentation index](README.md) · [Entry purge](workspace-content.md#permanently-purge-an-archived-entry) ·
 [Workspace foundation](workspace-foundation.md)
@@ -69,8 +69,9 @@ sanitized503. The64KiB request/1MiB response/no-store limits remain unchanged.
 To disable, use a fresh operation and current expected revision, with REQUIRED
 `retention_seconds: null` and `confirm_timed_purge: false`. Omitting the duration
 field is invalid. Unknown fields and caller identity claims are rejected.
-Configuration is frozen while the workspace is archived. Human confirmation UI
-remains later work; the explicit flag records the authenticated caller's intent.
+Configuration is frozen while the workspace is archived. The desktop panel
+requires explicit confirmation before enabling timed cleanup. The API flag records
+the authenticated caller’s intent; it does not prove that a particular human clicked.
 
 ## Configure an explicit policy
 

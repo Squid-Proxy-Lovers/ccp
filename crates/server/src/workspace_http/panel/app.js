@@ -4,6 +4,7 @@ import {byId, el, button, notice, stamp, field, actions, copy, secret} from './v
 import {showAccess} from './access.js';
 import {showContext} from './context.js';
 import {showGuidance} from './guidance.js';
+import {showSettings} from './settings.js';
 
 let fragmentKey = takeFragment(location, history);
 const state = {session: null, workspace: null, generation: 0, dirty: false, pending: null,
@@ -33,7 +34,9 @@ function lock(message) {
     const text = state.pending ? state.pending.body : state.draft;
     field(panel, 'Unsaved local work / original write request', {value: text, area: true, readOnly: true});
     actions(panel, button('Copy local work', () => copy(text)));
-    panel.append(el('p', 'A pending write may already have completed. Discarding here does not cancel it on the server. Keep its operation ID to investigate.'));
+    panel.append(el('p', state.pending?.kind === 'lifecycle'
+      ? 'This lifecycle request has no operation ID. Discarding locally does not cancel execution. Copy the original endpoint and target, then read the current workspace state before another action.'
+      : 'A pending write may already have completed. Discarding here does not cancel it on the server. Keep the original request details to investigate.'));
   }
   actions(panel, button('Discard local work and return to sign in', () => {
     if (!confirm('Discard local work? Any uncertain server write remains uncertain.')) return;
@@ -122,6 +125,17 @@ async function run(action) {
 
 const api = {
   state, request, verify, run, mayLeave, lock,
+  reloadWorkspace: renderWorkspace,
+  workspaceAcknowledged(archived) {
+    state.workspace = {...state.workspace, archived};
+    const label = byId('workspace-state');
+    if (label) label.textContent = `${archived ? 'Archive' : 'Reactivation'} action confirmed. Current state awaits refresh.`;
+  },
+  workspaceObserved(archived) {
+    state.workspace = {...state.workspace, archived};
+    const label = byId('workspace-state');
+    if (label) label.textContent = `Last read workspace state: ${archived ? 'Archived' : 'Active'}.`;
+  },
   writable: () => canWrite(state.session, state.workspace),
   draft(text) { state.dirty = true; state.draft = text; },
   clean() { state.dirty = false; state.draft = ''; },
@@ -187,16 +201,19 @@ async function renderWorkspace() {
   state.workspace = info.workspace;
   byId('workspace-tabs').hidden = false;
   const heading = byId('workspace-heading');
-  heading.replaceChildren(el('h2', info.workspace.name), el('p', info.workspace.archived
+  const lifecycle = el('p', info.workspace.archived
     ? 'Archived · Context is readable; content writes and new admission are paused.'
-    : 'Active workspace'));
+    : 'Active workspace');
+  lifecycle.id = 'workspace-state';
+  heading.replaceChildren(el('h2', info.workspace.name), lifecycle);
   heading.append(el('p', `Workspace ${info.workspace.id} · Owner ${info.owner_id || 'Not appointed'}`, 'metadata'));
   if (state.session.identity.scope.kind === 'instance') {
     heading.append(el('p', 'Instance key: workspace context is read-only. Sign in with a workspace key to edit.', 'muted'));
   }
   byId('global-guidance').setAttribute('aria-current', 'false');
-  for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).setAttribute('aria-current', String(state.tab === tab));
+  for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', String(state.tab === tab));
   byId('content').replaceChildren();
+  if (state.tab === 'settings') return showSettings(api);
   if (state.tab === 'guidance') await showGuidance(api);
   else await (state.tab === 'access' ? showAccess(api) : showContext(api));
 }
@@ -207,7 +224,7 @@ async function globalGuidance() {
   byId('workspace-tabs').hidden = true;
   byId('workspace-heading').replaceChildren(el('h2', 'Global guidance'));
   for (const node of byId('workspaces').querySelectorAll('[aria-current]')) node.removeAttribute('aria-current');
-  for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
+  for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
   byId('global-guidance').setAttribute('aria-current', 'true');
   await showGuidance(api);
 }
@@ -221,7 +238,7 @@ async function activate(session) {
   state.tab = 'access';
   byId('workspace-tabs').hidden = true;
   byId('global-guidance').setAttribute('aria-current', 'false');
-  for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
+  for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
   byId('content').replaceChildren();
   byId('workspaces').replaceChildren();
   byId('login').hidden = true;
@@ -262,7 +279,7 @@ byId('refresh').addEventListener('click', () => run(async () => {
   else if (state.workspace) await renderWorkspace();
   else await workspaces();
 }));
-for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).addEventListener('click', () => run(async () => {
+for (const tab of ['access', 'context', 'guidance', 'settings']) byId(`${tab}-tab`).addEventListener('click', () => run(async () => {
   if (!state.workspace || !mayLeave()) return;
   state.generation += 1;
   state.tab = tab;

@@ -7,6 +7,7 @@ mod boundaries;
 mod guidance;
 mod lifecycle;
 mod panel;
+mod settings;
 
 const LOGIN: &str = "/api/v1/admin/session/login";
 const STATUS: &str = "/api/v1/admin/session";

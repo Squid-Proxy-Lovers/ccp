@@ -90,6 +90,84 @@ export class GuidanceIntent {
   }
 }
 
+export function canChangeLifecycle(session, workspace) {
+  const scope = session.identity.scope;
+  return !!workspace && (scope.kind === 'instance'
+    || scope.kind === 'workspace' && scope.workspace_id === workspace.id && scope.role === 'owner');
+}
+
+export function retentionSeconds(value, unit) {
+  const n = Number(value), scale = Number(unit), seconds = n * scale;
+  if (!Number.isSafeInteger(n) || n <= 0 || ![1, 3600, 86400].includes(scale)
+    || !Number.isSafeInteger(seconds) || seconds <= 0) {
+    throw new Error('Choose a positive whole duration within the browser’s exact numeric range.');
+  }
+  return seconds;
+}
+
+export function retentionPolicy(value, workspaceId) {
+  if (value?.workspace_id !== workspaceId || !Number.isSafeInteger(value.revision) || value.revision < 0
+    || value.retention_seconds !== null && (!Number.isSafeInteger(value.retention_seconds) || value.retention_seconds <= 0)
+    || (value.revision === 0 ? value.retention_seconds !== null || value.changed_at !== null
+      : !Number.isSafeInteger(value.changed_at) || value.changed_at < 0)) {
+    throw new Error('The retention policy could not be verified. No default policy was substituted.');
+  }
+  return value;
+}
+
+export function workspaceSnapshot(value, workspaceId) {
+  if (value?.workspace?.id !== workspaceId || typeof value.workspace.name !== 'string'
+    || typeof value.workspace.archived !== 'boolean') throw new Error('The current workspace state could not be verified.');
+  return value.workspace;
+}
+
+export class RetentionIntent {
+  constructor(session, policy, seconds, confirmTimed, operation = crypto.randomUUID()) {
+    retentionPolicy(policy, policy.workspace_id);
+    if (policy.revision >= Number.MAX_SAFE_INTEGER || typeof confirmTimed !== 'boolean'
+      || (seconds === null ? confirmTimed : !Number.isSafeInteger(seconds) || seconds <= 0 || !confirmTimed)
+      || (seconds === null) === (policy.retention_seconds === null)) {
+      throw new Error('Enable cleanup only from manual retention, with an explicit duration and confirmation. Disable an existing policy before changing its duration.');
+    }
+    this.kind = 'retention'; this.workspace_id = policy.workspace_id;
+    this.session = signature(session); this.proof = session.csrf_token;
+    this.body = JSON.stringify({workspace_id: policy.workspace_id, operation_id: operation,
+      expected_revision: policy.revision, retention_seconds: seconds, confirm_timed_purge: confirmTimed});
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. This retention change cannot be retried under the new session.');
+    return {body: this.body, proof: this.proof};
+  }
+  receipt(value) {
+    const original = JSON.parse(this.body);
+    const policy = retentionPolicy(value?.policy, this.workspace_id);
+    if (value.operation_id !== original.operation_id || policy.revision !== original.expected_revision + 1
+      || policy.retention_seconds !== original.retention_seconds) throw new Error('The retention receipt could not be verified. Keep the original change.');
+    return policy;
+  }
+}
+
+export class LifecycleAttempt {
+  #sent = false;
+  constructor(session, workspace) {
+    workspaceSnapshot({workspace}, workspace.id);
+    this.kind = 'lifecycle'; this.workspace_id = workspace.id;
+    this.archived = !workspace.archived;
+    this.path = '/api/v1/admin/workspaces/' + (this.archived ? 'archive' : 'reactivate');
+    this.requestBody = JSON.stringify({workspace_id: workspace.id});
+    this.body = JSON.stringify({path: this.path, request: JSON.parse(this.requestBody), target_archived: this.archived});
+    this.session = signature(session); this.proof = session.csrf_token;
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. Do not send this lifecycle request under the new session.');
+    if (this.#sent) throw new Error('Do not retry this lifecycle request. Read current state before deciding on another action.');
+    this.#sent = true;
+    return {body: this.requestBody, proof: this.proof};
+  }
+}
+
 export function takeFragment(location, history) {
   const fragment = location.hash;
   // Scrub before any exchange, including malformed fragments. Never log it.

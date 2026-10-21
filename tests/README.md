@@ -273,3 +273,10 @@ and global-first response scopes. Real cookie/TLS guidance cases cover live
 save/replay/stale CAS, publisher attribution, global versus workspace powers,
 archive freezing and empty-board clearing. Browser editor/draft/failure checks
 remain ad-hoc development verification.
+
+
+Settings model tests cover lifecycle owner/instance scope, one-shot endpoint
+binding without a fabricated nonce, explicit duration units/confirmation/mode
+transitions, policy validation and exact retention receipts. Cookie/TLS settings
+cases verify global read versus scoped configuration, owner/global lifecycle
+powers versus admin retention powers, archived freezes and historical receipts.

@@ -56,6 +56,10 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
             "text/javascript; charset=utf-8",
             include_bytes!("panel/guidance.js"),
         ),
+        "/admin/settings.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("panel/settings.js"),
+        ),
         _ => return Err(Error::NotFound),
     };
     let mut reply = Response::new(Full::new(Bytes::from_static(bytes)));
