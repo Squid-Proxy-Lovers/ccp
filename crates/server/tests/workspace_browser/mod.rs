@@ -9,6 +9,7 @@ mod lifecycle;
 mod panel;
 mod settings;
 mod team;
+mod transfer;
 
 const LOGIN: &str = "/api/v1/admin/session/login";
 const STATUS: &str = "/api/v1/admin/session";

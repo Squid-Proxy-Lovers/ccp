@@ -152,7 +152,7 @@ workspace’s grants. Creation secrets appear only in that result view; copy the
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
 these actions do not have a browser retry mechanism. Initial group enrollment,
-readmission/recovery, ownership transfer and
+readmission/recovery and
 reported work are not yet exposed in this first panel.
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
@@ -332,3 +332,32 @@ check fails, the panel clears private server views and reports the confirmed
 workspace/principal/key IDs with recovery directions; it does not describe the
 creation as failed. The unavailable secret is not included in recovery text.
 Drafts and unknown actions remain local memory only; closing the tab loses them.
+
+
+## Transfer workspace ownership
+
+Using the current workspace owner key, open **Settings → Manage administrators &
+keys**. In an active workspace, choose **Transfer ownership** on the intended
+enabled administrator’s row. Appoint them first if necessary. Verify privately
+that the recipient can use their workspace key. The server checks for a current
+scoped key record; that record alone does not prove delivery.
+
+The form names the workspace, former owner and exact recipient principal UUID.
+Confirm delivery/access with the initially unchecked checkbox, enter the new
+owner’s principal ID and review the final confirmation. A successful transfer
+revokes every former-owner key in this workspace, including your current login.
+The panel immediately locks with confirmed workspace/new-owner IDs before any
+further read. The recipient’s existing workspace key now has owner powers; no new
+secret is returned. Unrelated roles, keys, grants and content remain intact.
+Transfer is unavailable while archived, and instance/admin keys cannot initiate
+it. See [transfer semantics](workspace-owner-administration.md#transfer-ownership).
+
+This endpoint has no operation ID or safe retry. An unconfirmed response retains
+the original endpoint, workspace, former-owner and recipient IDs, with no retry
+button. Reading current ownership is a separate observation, not attribution.
+If the transfer committed, the old key can no longer inspect it: the session
+lock preserves the original request and directs you to the intended new owner,
+an instance admin’s owner-metadata read, or the host operator’s local inspection
+and recovery. Do not retry under a different key. Forgetting or discarding the
+local copy does not cancel a delayed transfer. Explicit local discard removes
+private form/copy DOM and permits navigation even if metadata is unavailable.

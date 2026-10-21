@@ -4,7 +4,7 @@ This unreleased HTTPS API lets a workspace owner appoint administrators, rotate
 scoped keys and transfer ownership. Use the owner's workspace key and verify the
 server CA and name before sending secrets. See the [workspace HTTPS guide](workspace-http-api.md)
 for startup, request limits and the JSON envelope, and the [documentation index](README.md).
-The desktop [admin panel](workspace-browser-session.md#manage-administrators-and-keys-as-the-owner) exposes owner team/key management. Ownership transfer still uses this API.
+The desktop [admin panel](workspace-browser-session.md#manage-administrators-and-keys-as-the-owner) exposes owner team/key management. The panel also offers the [ownership-transfer flow](workspace-browser-session.md#transfer-workspace-ownership).
 
 ## Appoint and deliver a key
 

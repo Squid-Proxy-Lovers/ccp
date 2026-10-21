@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -262,4 +262,46 @@ test('security action cannot be dispatched under changed credentials, scope or s
   }
   const s = session(); s.identity.scope.role = 'admin';
   assert.throws(() => new SecurityAttempt(s, 'keys/issue', {workspace_id: 'workspace'}), /owner key/);
+});
+
+
+test('ownership transfer requires active matching owner and a different enabled current admin', () => {
+  const s = session(), w = {id: 'workspace', archived: false}, a = {id: 'next', enabled: true, is_owner: false};
+  assert.equal(canTransferOwnership(s, w, a), true);
+  for (const changed of [{...a, enabled: false}, {...a, is_owner: true}, {...a, id: 'owner'}, {...a, id: ''}]) assert.equal(canTransferOwnership(s, w, changed), false);
+  assert.equal(canTransferOwnership(s, {...w, archived: true}, a), false);
+  assert.equal(canTransferOwnership(s, {...w, id: 'other'}, a), false);
+  s.identity.scope.role = 'admin'; assert.equal(canTransferOwnership(s, w, a), false);
+  s.identity.scope = {kind: 'instance'}; assert.equal(canTransferOwnership(s, w, a), false);
+});
+
+test('ownership transfer needs explicit delivery attestation and exact typed principal ID', () => {
+  const s = session(), w = {id: 'workspace', archived: false}, a = {id: 'next', enabled: true, is_owner: false};
+  for (const delivered of [false, null, 1, 'true']) assert.throws(() => new TransferAttempt(s, w, a, delivered, 'next'));
+  for (const text of ['', 'Next', 'next ', 'other']) assert.throws(() => new TransferAttempt(s, w, a, true, text));
+  const t = new TransferAttempt(s, w, a, true, 'next');
+  assert.deepEqual(JSON.parse(t.request(s).body), {workspace_id: 'workspace', new_owner_id: 'next'});
+});
+
+test('ownership transfer freezes original target and is one-shot without nonce or transmitted attestations', () => {
+  const s = session(), w = {id: 'workspace', archived: false}, a = {id: 'next', enabled: true, is_owner: false};
+  const t = new TransferAttempt(s, w, a, true, 'next');a.id = 'edited';w.id = 'edited';
+  const diagnostic = JSON.parse(t.body);
+  assert.equal(diagnostic.former_owner_id, 'owner');
+  assert.equal(diagnostic.request.new_owner_id, 'next');
+  assert.equal(t.path, '/api/v1/admin/workspaces/transfer-owner');
+  assert.ok(!t.body.includes('operation_id')&&!t.body.includes('proof')&&!t.body.includes('delivery_confirmed'));
+  const first = t.request(s);assert.equal(first.proof, 'proof');assert.equal(JSON.parse(first.body).workspace_id, 'workspace');
+  assert.throws(() => t.request(s), /Do not retry/);
+  assert.throws(() => {t.body = '{}';}, TypeError);
+});
+
+test('ownership transfer cannot cross session credentials, instance, principal or role changes', () => {
+  for (const mutate of [s => {s.csrf_token = 'new';}, s => {s.identity.key_id = 'other';},
+    s => {s.instance_id = 'other';}, s => {s.identity.principal_id = 'other';},
+    s => {s.identity.scope.role = 'admin';}, s => {s.identity.scope.workspace_id = 'other';}]) {
+    const s = session(), t = new TransferAttempt(s, {id: 'workspace', archived: false}, {id: 'next', enabled: true, is_owner: false}, true, 'next');
+    const changed = structuredClone(s);mutate(changed);assert.throws(() => t.request(changed), /session changed/);
+    assert.equal(JSON.parse(t.request(s).body).new_owner_id, 'next');
+  }
 });

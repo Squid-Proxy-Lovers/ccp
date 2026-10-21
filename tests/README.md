@@ -284,3 +284,8 @@ powers versus admin retention powers, archived freezes and historical receipts.
 Owner team/key browser-session cases cover scoped roster/creation, archived security
 and live cookie invalidation on role/key revocation; panel Node cases cover one-shot
 security actions, session binding and optional expiry.
+
+Owner-transfer browser-session tests cover all former-owner cookie invalidation,
+recipient role refresh on an existing session, scoped/archived refusal and global
+role preservation. Panel Node tests bind one-shot transfer intent to exact recipient,
+explicit delivery confirmation and the original browser session.

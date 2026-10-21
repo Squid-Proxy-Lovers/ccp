@@ -240,3 +240,30 @@ export class SecurityAttempt {
     return {body: this.requestBody, proof: this.proof};
   }
 }
+
+export function canTransferOwnership(session, workspace, admin) {
+  return canManageTeam(session, workspace) && !workspace.archived && admin?.enabled === true
+    && admin.is_owner === false && typeof admin.id === 'string' && !!admin.id
+    && admin.id !== session.identity.principal_id;
+}
+
+export class TransferAttempt {
+  #sent = false;
+  constructor(session, workspace, admin, delivered, confirmation) {
+    if (!canTransferOwnership(session, workspace, admin) || delivered !== true || confirmation !== admin.id) {
+      throw new Error('Select another enabled workspace administrator, confirm key delivery/access and enter that principal’s exact ID.');
+    }
+    this.kind = 'transfer'; this.workspace_id = workspace.id;
+    this.path = '/api/v1/admin/workspaces/transfer-owner';
+    this.requestBody = JSON.stringify({workspace_id: workspace.id, new_owner_id: admin.id});
+    this.body = JSON.stringify({path: this.path, request: JSON.parse(this.requestBody), former_owner_id: session.identity.principal_id});
+    this.session = signature(session); this.proof = session.csrf_token;
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. Do not send this ownership transfer under the new session.');
+    if (this.#sent) throw new Error('Do not retry this ownership transfer. Ask an authorized key holder to inspect current ownership.');
+    this.#sent = true;
+    return {body: this.requestBody, proof: this.proof};
+  }
+}

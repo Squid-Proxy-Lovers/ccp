@@ -34,7 +34,8 @@ function lock(message) {
     const text = state.pending ? state.pending.body : state.draft;
     field(panel, 'Unsaved local work / original write request', {value: text, area: true, readOnly: true});
     actions(panel, button('Copy local work', () => copy(text)));
-    panel.append(el('p', ['lifecycle', 'security'].includes(state.pending?.kind)
+    if (state.pending?.kind === 'transfer') panel.append(el('p', 'The transfer has no operation ID or safe retry. Your former-owner keys may already be revoked. Ask the intended new owner to inspect with their key, an instance admin to read the owner metadata, or the host operator to inspect local owner recovery. Forgetting locally does not cancel a transfer.'));
+    panel.append(el('p', ['lifecycle', 'security', 'transfer'].includes(state.pending?.kind)
       ? 'This action has no operation ID. Discarding locally does not cancel execution. Copy the original endpoint and target, then read the current metadata before another action.'
       : 'A pending write may already have completed. Discarding here does not cancel it on the server. Keep the original request details to investigate.'));
   }

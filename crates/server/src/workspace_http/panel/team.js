@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import {canManageTeam, keyExpiry, SecurityAttempt, wire} from './model.js';
+import {canTransferOwnership, canManageTeam, keyExpiry, SecurityAttempt, wire} from './model.js';
 import {byId, el, button, field, select, actions, notice, stamp, copy, secret} from './view.js';
+import {showTransfer} from './transfer.js';
 const BASE = '/api/v1/admin/';
 
 export async function showTeam(api, adminAfter = null, keyAfter = null) {
@@ -17,6 +18,7 @@ export async function showTeam(api, adminAfter = null, keyAfter = null) {
   for (const admin of roster.admins) {
     const cell = el('td', admin.name); cell.append(el('small', admin.id, 'identifier'));
     const controls = el('td');
+    if (canTransferOwnership(api.state.session, workspace, admin)) controls.append(button('Transfer ownership', () => api.run(() => showTransfer(api, admin)), 'danger'));
     if (admin.enabled) controls.append(button('Issue key', () => api.run(() => edit(api, admin))));
     if (!admin.is_owner) controls.append(button('Revoke administrator', () => api.run(async () => {
       if (!api.mayLeave() || !confirm(`Revoke ${admin.name} (${admin.id}) in ${workspace.name}? All of this principal’s workspace keys are revoked; other workspaces and stored content are preserved.`)) return;
