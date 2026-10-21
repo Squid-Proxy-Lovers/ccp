@@ -5,7 +5,9 @@ client profiles. It exposes current workspace metadata and explicit caller
 selections, shelves, books, entries and revision history, plus shelf/book creation.
 It also exposes durable entry mutations and guarded outcome controls.
 Relevant guidance is returned automatically with successful addressed tool calls
-and can also be refreshed explicitly. Status and the browser panel remain later work. The supported native
+and can also be refreshed explicitly. Status remains later work. A separate
+[desktop panel](workspace-browser-session.md#use-the-desktop-panel) supports
+human administration and context editing. The supported native
 `ccp-mcp-server` entry point stays available.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md) ·

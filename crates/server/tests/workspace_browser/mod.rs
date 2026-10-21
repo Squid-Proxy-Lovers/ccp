@@ -5,6 +5,7 @@
 use super::*;
 mod boundaries;
 mod lifecycle;
+mod panel;
 
 const LOGIN: &str = "/api/v1/admin/session/login";
 const STATUS: &str = "/api/v1/admin/session";

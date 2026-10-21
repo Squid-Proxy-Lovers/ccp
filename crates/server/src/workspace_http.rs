@@ -10,6 +10,7 @@ mod dispatch;
 mod guidance;
 mod invitations;
 mod management;
+mod panel;
 mod request;
 mod response;
 mod retention;

@@ -250,4 +250,18 @@ key exchange/cookie attributes/no secret JSON, current owner/admin/instance scop
 existing cookie-authenticated content/guidance/retention routes, CSRF/Origin denial,
 strict shapes/limits, mixed or duplicate credentials, old Bearer/mTLS separation,
 key expiry/revocation/demotion, logout and process restart with reusable keys.
-The login page and bookmark fragment exchange are not yet browser-tested or built.
+The login page and bookmark fragment exchange are built and covered by the
+Node/Rust suites below. Browser-engine verification is currently an ad-hoc
+development check, rather than a repository automation gate.
+
+
+### Workspace desktop panel
+
+`node --test tests/workspace_panel.mjs` is included in `make quality-tests`.
+It checks immutable entry intents and session bindings, scope/archive edit
+availability, fragment scrubbing, safe numeric revisions and sanitized no-retry
+transport failures using Node’s built-in runner (Node18+; no npm dependencies).
+The Rust workspace HTTP suite additionally checks bundled HTTPS-only assets,
+security headers and cookie-authenticated editing/history/conflict/archive
+privacy. These tests do not substitute for browser-engine testing. See the
+[desktop/session guide](../docs/workspace-browser-session.md#use-the-desktop-panel).

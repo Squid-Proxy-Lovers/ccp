@@ -20,6 +20,9 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 pub(super) fn dispatch(context: &Context, input: Input) -> Result<Reply, Error> {
+    if super::panel::handles(&input.path) {
+        return super::panel::serve(context.surface, &input);
+    }
     if input.query.is_some()
         && !matches!(
             input.path.as_str(),

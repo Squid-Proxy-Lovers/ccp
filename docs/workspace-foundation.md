@@ -24,7 +24,8 @@ bundle. The existing native mTLS client protocol and CLI remain in service in
 native mode. The separate [workspace HTTPS API](workspace-http-api.md)
 now exposes TLS-only invitation/enrollment/discovery and scoped admin surfaces.
 The [browser-session API](workspace-browser-session.md) provides the authentication
-boundary; its login page and workspace panel remain later work.
+boundary and a [desktop login/access/context panel](workspace-browser-session.md#use-the-desktop-panel).
+Other panel workflows remain subsequent work as documented there.
 [Content endpoints](workspace-content-http.md) expose hierarchy and entry actions;
 [Shelf archive/restore](workspace-content-http.md#archive-or-restore-a-shelf) is
 also exposed through scoped admin HTTPS, with state/archive summaries available

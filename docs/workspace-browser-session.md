@@ -3,9 +3,9 @@
 This unreleased HTTPS API exchanges an existing admin key for an ephemeral browser
 session. It supports login, current session metadata and logout, and authenticates
 the existing HTTPS admin/content routes under the same current key scope.
-The actual `/admin` login page, reusable `#key` exchange and desktop workspace
-viewer/editor are subsequent frontend work; these endpoints alone do not provide
-a working bookmark login screen yet.
+Open `/admin` on the HTTPS listener for the desktop panel. It provides manual
+key login, reusable `#key` links, workspace/client access and a human context
+viewer/editor with revision history. Native-mode administration is separate.
 
 [Documentation index](README.md) · [HTTPS setup](workspace-http-api.md) ·
 [Admin keys](workspace-admin-keys.md)
@@ -92,8 +92,8 @@ both a monotonic elapsed-time deadline and the server UTC expiry. Either deadlin
 ends the session; requests do not slide them forward. Underlying admin-key lifetime
 is unchanged: valid until revoked/rotated by default, with optional issuer expiry.
 An earlier key expiry/revocation can end access sooner. Server restart drops all
-sessions; the same still-valid key can log in again. The planned bookmark page
-will use the original reusable key rather than make that key one-use.
+sessions; the same still-valid key can log in again. The bookmark page
+uses the original reusable key; that key is not made one-use.
 
 A successful new login from a browser replaces its prior session after the new
 key is validated. Failed key authentication does not invalidate the existing
@@ -127,3 +127,81 @@ A full budget returns a sanitized503 without removing a valid old session. Norma
 64KiB request/1MiB response limits apply. Invalid shapes/duplicate credentials
 return400; missing or invalid session/key returns401; Origin/CSRF failures return403;
 internal failures return503. No SQL, secret key or raw request appears in errors.
+
+
+## Use the desktop panel
+
+Open `https://YOUR_TRUSTED_HOST/admin` after independently trusting the instance
+CA. Enter your key. To save a reusable bookmark, choose **Copy reusable login
+link** before signing in and save the copied link privately. If clipboard access
+is denied, select and copy the displayed private link manually. It contains the
+same key as manual login. Opening `/admin#key=...` removes the fragment from the
+active URL before exchanging the key; the saved original bookmark remains
+reusable while its key is valid. Query-string keys are refused. The panel does
+not store keys, drafts or sessions in localStorage/sessionStorage.
+
+The header shows the active key/principal and scope. These labels do not prove
+which person is using a shared key. Choose a workspace, then **Clients & access**
+or **Context & history**. Instance keys can create a workspace with a new owner
+principal and copy its owner key once. They can read workspace grants/context
+and disable a listed client instance-wide, but cannot invite or edit through
+borrowed workspace roles. Sign in using a workspace key for scoped actions.
+
+Workspace keys can issue individual client invitations and revoke that
+workspace’s grants. Creation secrets appear only in that result view; copy them
+privately before navigating away. After a lost response to workspace/container
+or invitation creation, inspect the current list or API state before repeating;
+these actions do not have a browser retry mechanism. Initial group enrollment,
+readmission/recovery, owner/team/key administration, lifecycle/retention settings,
+guidance editors and reported work are not yet exposed in this first panel.
+Use their existing APIs where available. Whole-workspace deletion and legacy
+conversion remain separate unfinished work.
+
+A confirmed workspace creation displays its owner key before refreshing the
+workspace list; a failed list read keeps the key available for copying. If the
+session cannot be verified after a confirmed workspace or invitation creation,
+the panel locks and explicitly reports that creation succeeded but its secret
+is unavailable. Recover a lost owner key through the host operator’s
+[local owner-key reset](local-workspace-administration.md); an instance key
+cannot reset it remotely. For an invitation, use the reported invitation and
+workspace IDs with the authorized
+[invitation revocation API](workspace-http-api.md#manage-invitations-and-recover-a-client) before deliberately
+creating a replacement. Neither path automatically repeats the creation.
+
+For human context work, select an active shelf and book. Lists use explicit pages;
+**Next** means more records exist. Create containers/entries, edit an entry,
+append a separate note or inspect recorded revisions. A human admin-created
+entry has no registered-client owner; edits preserve an existing client owner
+and record the actual admin key. Agent labels are self-reported attribution.
+All text displays literally, including markup; the panel runs no entry HTML.
+Archived entries expose summaries only. Restore before reading their bodies or
+history. Archived workspaces remain readable but cannot receive content writes.
+Archived shelves are not included in this first active hierarchy browser.
+
+Unsaved entry edits block navigation. Save or deliberately discard/reload before
+leaving; entry edits and separate append notes cannot silently replace each
+other. The page asks before closing with unsaved or uncertain work, but browser
+closure/crash still loses in-memory drafts. It offers no durable offline queue.
+
+Each entry write captures its UUID, exact request, expected revision and current
+session proof. The page never automatically retries a mutation. If a response is
+lost or conflicts, the original request remains visible and the editor freezes.
+**Check / retry exact write** deliberately repeats those same bytes under the
+same session, allowing the server to return an existing receipt. It never
+creates a replacement UUID. **Forget local attempt** only discards local tracking;
+it does not cancel server execution. Copy its operation ID for investigation.
+A confirmed write stays confirmed even if the subsequent view refresh fails.
+
+Every operation refreshes current session metadata. A key/session change,
+permission loss or unavailable session locks the data view; only unsaved local
+text/original intent is offered for copying. Explicitly discard it before a new
+login. The panel never resends it with a new key or CSRF proof. Already-authorized
+server transactions may finish after logout. Browser-side view clearing does
+not erase text that was already delivered or copied elsewhere.
+
+The desktop shell and scripts are bundled with the server, without external
+fonts, scripts or telemetry. Assets are public only on the HTTPS listener;
+API data remains authenticated. CSP disallows inline scripts/styles, external
+connections, framing and form navigation; headers also disable caching and
+referrers. JavaScript and a browser supporting ES modules are required. Desktop
+resizing and keyboard navigation are supported; phone-specific parity is deferred.

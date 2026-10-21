@@ -7,7 +7,8 @@ MCP bridge expose access and selections; the [normal client](workspace-content-c
 now also supports content reads and [entry mutations](workspace-content-mutations.md).
 The normal client and [workspace MCP bridge](workspace-mcp.md) also read shelf
 lifecycle state and archive summaries. The bridge supports shelf/book creation
-and guarded entry mutations. The human panel remains later work. Native commands keep their native-mode API.
+and guarded entry mutations. The [desktop panel](workspace-browser-session.md#use-the-desktop-panel)
+also provides human context editing and history. Native commands keep their native-mode API.
 
 [Documentation index](README.md) · [Content storage and ownership](workspace-content.md) ·
 [Workspace HTTPS setup](workspace-http-api.md)

@@ -96,4 +96,5 @@ atomic appointment with a first key, owner-only metadata and scoped key
 issue/revoke. Admin revocation terminally revokes its workspace keys. Ownership
 transfer revokes the former owner's workspace keys while preserving unrelated
 roles and keys. The [browser-session API](workspace-browser-session.md) now
-provides cookie/CSRF handling. The fragment-login page remains later work.
+provides cookie/CSRF handling. The [desktop panel](workspace-browser-session.md#use-the-desktop-panel)
+supports manual and reusable fragment-key login with the same scoped keys.
