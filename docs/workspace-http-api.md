@@ -393,8 +393,9 @@ substituting an empty board. This explicit read API adds no guidance freshness
 gate to other operations. The normal client now supports
 [explicit guidance reads](workspace-client.md#read-current-guidance). The MCP adapter returns
 [explicit and automatic guidance](workspace-mcp.md#read-automatic-guidance-alongside-results),
-including unavailable warnings beside successful primary results. Desktop editors
-remain later work. See the
+including unavailable warnings beside successful primary results. The
+[desktop guidance editors](workspace-browser-session.md#read-and-edit-guidance)
+use the same live-save, scope and retry rules. See the
 [storage and retry contract](workspace-foundation.md#guidance-publication-foundation).
 
 ## Retrieve an authenticated guidance context

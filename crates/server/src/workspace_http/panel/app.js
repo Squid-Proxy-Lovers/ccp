@@ -3,6 +3,7 @@ import {signature, takeFragment, wire, canWrite} from './model.js';
 import {byId, el, button, notice, stamp, field, actions, copy, secret} from './view.js';
 import {showAccess} from './access.js';
 import {showContext} from './context.js';
+import {showGuidance} from './guidance.js';
 
 let fragmentKey = takeFragment(location, history);
 const state = {session: null, workspace: null, generation: 0, dirty: false, pending: null,
@@ -53,6 +54,7 @@ function reset() {
   byId('workspaces').replaceChildren();
   byId('workspace-heading').replaceChildren();
   notice('');
+  byId('workspace-tabs').hidden = true;
   byId('identity').textContent = '';
   byId('identity').removeAttribute('title');
   byId('login').hidden = false;
@@ -183,6 +185,7 @@ function createWorkspace(root) {
 async function renderWorkspace() {
   const info = await request('/api/v1/admin/workspaces/inspect', {workspace_id: state.workspace.id});
   state.workspace = info.workspace;
+  byId('workspace-tabs').hidden = false;
   const heading = byId('workspace-heading');
   heading.replaceChildren(el('h2', info.workspace.name), el('p', info.workspace.archived
     ? 'Archived · Context is readable; content writes and new admission are paused.'
@@ -191,10 +194,22 @@ async function renderWorkspace() {
   if (state.session.identity.scope.kind === 'instance') {
     heading.append(el('p', 'Instance key: workspace context is read-only. Sign in with a workspace key to edit.', 'muted'));
   }
-  byId('access-tab').setAttribute('aria-current', String(state.tab === 'access'));
-  byId('context-tab').setAttribute('aria-current', String(state.tab === 'context'));
+  byId('global-guidance').setAttribute('aria-current', 'false');
+  for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).setAttribute('aria-current', String(state.tab === tab));
   byId('content').replaceChildren();
-  await (state.tab === 'access' ? showAccess(api) : showContext(api));
+  if (state.tab === 'guidance') await showGuidance(api);
+  else await (state.tab === 'access' ? showAccess(api) : showContext(api));
+}
+
+async function globalGuidance() {
+  state.workspace = null;
+  state.tab = 'global-guidance';
+  byId('workspace-tabs').hidden = true;
+  byId('workspace-heading').replaceChildren(el('h2', 'Global guidance'));
+  for (const node of byId('workspaces').querySelectorAll('[aria-current]')) node.removeAttribute('aria-current');
+  for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
+  byId('global-guidance').setAttribute('aria-current', 'true');
+  await showGuidance(api);
 }
 
 async function activate(session) {
@@ -203,6 +218,10 @@ async function activate(session) {
   state.session = session;
   state.locked = false;
   state.workspace = null;
+  state.tab = 'access';
+  byId('workspace-tabs').hidden = true;
+  byId('global-guidance').setAttribute('aria-current', 'false');
+  for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).setAttribute('aria-current', 'false');
   byId('content').replaceChildren();
   byId('workspaces').replaceChildren();
   byId('login').hidden = true;
@@ -239,14 +258,20 @@ byId('copy-link').addEventListener('click', async () => {
 });
 byId('refresh').addEventListener('click', () => run(async () => {
   if (!mayLeave()) return;
-  if (state.workspace) await renderWorkspace();
+  if (state.tab === 'global-guidance') await globalGuidance();
+  else if (state.workspace) await renderWorkspace();
   else await workspaces();
 }));
-for (const tab of ['access', 'context']) byId(`${tab}-tab`).addEventListener('click', () => run(async () => {
+for (const tab of ['access', 'context', 'guidance']) byId(`${tab}-tab`).addEventListener('click', () => run(async () => {
   if (!state.workspace || !mayLeave()) return;
   state.generation += 1;
   state.tab = tab;
   await renderWorkspace();
+}));
+byId('global-guidance').addEventListener('click', () => run(async () => {
+  if (!mayLeave()) return;
+  state.generation += 1;
+  await globalGuidance();
 }));
 byId('signout').addEventListener('click', () => run(async () => {
   if (!mayLeave()) return;

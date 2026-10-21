@@ -265,3 +265,11 @@ The Rust workspace HTTP suite additionally checks bundled HTTPS-only assets,
 security headers and cookie-authenticated editing/history/conflict/archive
 privacy. These tests do not substitute for browser-engine testing. See the
 [desktop/session guide](../docs/workspace-browser-session.md#use-the-desktop-panel).
+
+
+The panel Node suite also checks guidance publisher scopes, immutable zero-base
+save intents, exact Unicode/empty text and UTF-8 limits, echoed receipt binding
+and global-first response scopes. Real cookie/TLS guidance cases cover live
+save/replay/stale CAS, publisher attribution, global versus workspace powers,
+archive freezing and empty-board clearing. Browser editor/draft/failure checks
+remain ad-hoc development verification.

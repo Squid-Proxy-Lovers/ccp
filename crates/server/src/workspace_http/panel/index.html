@@ -27,10 +27,10 @@
     </section>
     <section id="locked" hidden></section>
     <section id="workspace-app" hidden>
-      <div class="toolbar"><h1>Workspaces</h1><button id="refresh" type="button">Refresh</button><button id="signout" type="button">Sign out / change key</button></div>
+      <div class="toolbar"><h1>Workspaces</h1><button id="global-guidance" type="button">Global guidance</button><button id="refresh" type="button">Refresh</button><button id="signout" type="button">Sign out / change key</button></div>
       <div class="workspace-layout"><nav id="workspaces" aria-label="Workspaces"></nav><div class="workspace-body">
         <div id="workspace-heading"><p>Select a workspace to manage access or read shared context.</p></div>
-        <nav class="tabs" aria-label="Workspace views"><button id="access-tab" type="button">Clients &amp; access</button><button id="context-tab" type="button">Context &amp; history</button></nav>
+        <nav id="workspace-tabs" class="tabs" aria-label="Workspace views" hidden><button id="access-tab" type="button">Clients &amp; access</button><button id="context-tab" type="button">Context &amp; history</button><button id="guidance-tab" type="button">Guidance</button></nav>
         <section id="content"></section>
       </div></div>
     </section>

@@ -33,6 +33,63 @@ export class Intent {
   }
 }
 
+export function canPublish(session, scope, workspace) {
+  if (scope.kind === 'global') return session.identity.scope.kind === 'instance';
+  return scope.kind === 'workspace' && workspace?.id === scope.workspace_id
+    && canWrite(session, workspace);
+}
+
+function guidanceRevision(value) {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error('Guidance revision is outside the browser’s exact numeric range. Use the CLI.');
+  return value;
+}
+
+function scopeKey(scope) {
+  if (scope?.kind === 'global') return 'global';
+  if (scope?.kind === 'workspace' && typeof scope.workspace_id === 'string') return 'workspace:' + scope.workspace_id;
+  throw new Error('The guidance scope could not be verified.');
+}
+
+export function guidanceBundle(bundle, workspaceId) {
+  if (bundle?.precedence !== 'global_first' || scopeKey(bundle.global?.scope) !== 'global'
+    || (workspaceId ? scopeKey(bundle.workspace?.scope) !== 'workspace:' + workspaceId : bundle.workspace !== null)) {
+    throw new Error('The guidance response did not match the requested scope.');
+  }
+  for (const board of [bundle.global, bundle.workspace].filter(Boolean)) {
+    guidanceRevision(board.revision);
+    if (typeof board.text !== 'string' || new TextEncoder().encode(board.text).length > 8192) {
+      throw new Error('The guidance text could not be verified.');
+    }
+  }
+  return bundle;
+}
+
+export class GuidanceIntent {
+  constructor(session, scope, revision, text, operation = crypto.randomUUID()) {
+    guidanceRevision(revision);
+    scopeKey(scope);
+    if (revision === Number.MAX_SAFE_INTEGER || typeof text !== 'string' || new TextEncoder().encode(text).length > 8192) {
+      throw new Error('Guidance needs at most 8192 UTF-8 bytes and an exactly representable next revision.');
+    }
+    this.session = signature(session);
+    this.proof = session.csrf_token;
+    this.body = JSON.stringify({scope, operation_id: operation, expected_revision: revision, text});
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. This guidance save cannot be retried with the new session.');
+    return {body: this.body, proof: this.proof};
+  }
+  receipt(value) {
+    const original = JSON.parse(this.body);
+    if (scopeKey(value?.scope) !== scopeKey(original.scope) || value.operation_id !== original.operation_id
+      || guidanceRevision(value.revision) !== original.expected_revision + 1) {
+      throw new Error('The guidance save response could not be verified. Keep the original operation.');
+    }
+    return value.revision;
+  }
+}
+
 export function takeFragment(location, history) {
   const fragment = location.hash;
   // Scrub before any exchange, including malformed fragments. Never log it.

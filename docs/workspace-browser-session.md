@@ -152,8 +152,8 @@ workspace’s grants. Creation secrets appear only in that result view; copy the
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
 these actions do not have a browser retry mechanism. Initial group enrollment,
-readmission/recovery, owner/team/key administration, lifecycle/retention settings,
-guidance editors and reported work are not yet exposed in this first panel.
+readmission/recovery, owner/team/key administration, lifecycle/retention settings and
+reported work are not yet exposed in this first panel.
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
 
@@ -205,3 +205,38 @@ API data remains authenticated. CSP disallows inline scripts/styles, external
 connections, framing and form navigation; headers also disable caching and
 referrers. JavaScript and a browser supporting ES modules are required. Desktop
 resizing and keyboard navigation are supported; phone-specific parity is deferred.
+
+
+## Read and edit guidance
+
+Choose **Global guidance** without selecting a workspace, or open a workspace’s
+**Guidance** tab to read both sources. The panel shows the loaded revision and
+actual publisher key/principal and timestamp. Revision 0 is unpublished. It does
+not poll or claim agents read or followed a board. Global guidance wins conflicts
+within CCP guidance; host instructions and actual permissions still take priority.
+
+An instance key can edit the global board only from **Global guidance**.
+Workspace **Guidance** tabs always show the global board read-only.
+Workspace owner/admin keys can
+edit their own active workspace board only. Archived workspace guidance stays
+readable and cannot be saved, including retries, until reactivation. Global
+updates remain available independently. **Save guidance** immediately makes an
+accepted revision live; there is no separate Publish step. Empty text explicitly
+clears the board after confirmation and still records a revision. The editor
+counts UTF-8 bytes and accepts at most 8192, including Unicode text.
+
+Each save freezes its original board, UUID, expected revision, exact text and
+session proof. Dirty drafts block navigation. Conflict or unknown responses
+preserve the draft and original request, freeze editing, and never retry
+automatically. **Compare current guidance** loads a separate current server
+snapshot without changing the draft or its base. **Check / retry exact guidance
+save** deliberately resends the same request under the same session. **Forget
+local guidance attempt** does not cancel execution. Copy/merge your draft,
+deliberately discard/reload current guidance, then paste and review before a new
+Save. There is no force overwrite, implicit rebase or guidance history/rollback interface.
+
+A receipt confirms the original saved revision; another authorized save may
+already have superseded it. The panel reports that acknowledgement separately
+from the refreshed current revision. A failed refresh never relabels a confirmed
+save as unsaved. Session changes/loss still clear authorized views under the
+same draft/intent copying rules. Guidance drafts remain memory-only.

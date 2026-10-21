@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {Intent, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {Intent, GuidanceIntent, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -79,4 +79,63 @@ test('wire never retries ambiguous writes and never echoes server-controlled err
     globalThis.fetch = async () => ({ok: true, status: 200, json: async () => ({api_version: 1, data: {revision: 2}})});
     assert.deepEqual(await wire('/api/v1/content/entries/mutate', 'original', 'proof'), {revision: 2});
   } finally { globalThis.fetch = original; }
+});
+
+test('guidance publishing follows the key scope and active workspace independently of read access', () => {
+  const owner = session();
+  const ws = {id: 'workspace', archived: false};
+  const scope = {kind: 'workspace', workspace_id: 'workspace'};
+  assert.equal(canPublish(owner, scope, ws), true);
+  assert.equal(canPublish(owner, scope, {...ws, archived: true}), false);
+  assert.equal(canPublish(owner, {kind: 'workspace', workspace_id: 'foreign'}, ws), false);
+  assert.equal(canPublish(owner, {kind: 'global'}, ws), false);
+  assert.equal(canPublish(owner, scope, null), false);
+  const global = session(); global.identity.scope = {kind: 'instance'};
+  assert.equal(canPublish(global, scope, ws), false);
+  assert.equal(canPublish(global, {kind: 'global'}, {...ws, archived: true}), true);
+});
+
+test('guidance intent preserves empty/Unicode text and the exact original proof, nonce and scope', () => {
+  const s = session();
+  const scope = {kind: 'workspace', workspace_id: 'workspace'};
+  const text = 'é'.repeat(4096);
+  const intent = new GuidanceIntent(s, scope, 0, text, 'guidance-operation');
+  scope.workspace_id = 'changed after dispatch';
+  const first = intent.request(s);
+  assert.equal(first.proof, 'proof');
+  assert.equal(JSON.parse(first.body).text, text);
+  assert.equal(JSON.parse(first.body).scope.workspace_id, 'workspace');
+  assert.equal(JSON.parse(first.body).expected_revision, 0);
+  assert.equal(JSON.parse(first.body).operation_id, 'guidance-operation');
+  assert.deepEqual(intent.request(structuredClone(s)), first);
+  for (const alter of [v => {v.csrf_token = 'new session';}, v => {v.identity.key_id = 'other key';}, v => {v.identity.scope.role = 'admin';}]) {
+    const changed = session(); alter(changed); assert.throws(() => intent.request(changed), /session changed/);
+  }
+  assert.equal(JSON.parse(new GuidanceIntent(s, {kind: 'global'}, 3, '', 'empty').body).text, '');
+  for (const bad of ['é'.repeat(4097), '😀'.repeat(2049)]) assert.throws(() => new GuidanceIntent(s, {kind: 'global'}, 0, bad));
+  for (const revision of [-1, 1.5, NaN, 9007199254740992, Number.MAX_SAFE_INTEGER]) assert.throws(() => new GuidanceIntent(s, {kind: 'global'}, revision, 'text'));
+});
+
+test('guidance receipts must confirm the original board, UUID and exactly the next revision', () => {
+  const intent = new GuidanceIntent(session(), {kind: 'global'}, 4, 'saved', 'op');
+  const receipt = {scope: {kind: 'global'}, operation_id: 'op', revision: 5};
+  assert.equal(intent.receipt(receipt), 5);
+  for (const changed of [{...receipt, revision: 6}, {...receipt, revision: 9007199254740992},
+    {...receipt, operation_id: 'different'}, {...receipt, scope: {kind: 'workspace', workspace_id: 'workspace'}}]) {
+    assert.throws(() => intent.receipt(changed));
+  }
+  assert.throws(() => {intent.body = '{}';}, TypeError);
+});
+
+test('guidance snapshots keep global-first and exact target/revision/UTF8 limits', () => {
+  const global = {scope: {kind: 'global'}, revision: 0, text: '', publisher: null};
+  const workspace = {scope: {kind: 'workspace', workspace_id: 'workspace'}, revision: 2, text: 'current', publisher: null};
+  const bundle = {precedence: 'global_first', global, workspace};
+  assert.equal(guidanceBundle(bundle, 'workspace'), bundle);
+  assert.throws(() => guidanceBundle(bundle, 'foreign'));
+  assert.throws(() => guidanceBundle(bundle, null));
+  assert.equal(guidanceBundle({...bundle, workspace: null}, null).global.revision, 0);
+  assert.throws(() => guidanceBundle({...bundle, precedence: 'workspace_first'}, 'workspace'));
+  assert.throws(() => guidanceBundle({...bundle, global: {...global, revision: 9007199254740992}}, 'workspace'));
+  assert.throws(() => guidanceBundle({...bundle, global: {...global, text: 'é'.repeat(4097)}}, 'workspace'));
 });

@@ -4,6 +4,7 @@
 
 use super::*;
 mod boundaries;
+mod guidance;
 mod lifecycle;
 mod panel;
 
