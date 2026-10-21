@@ -96,7 +96,7 @@ There is no automatic OS/browser trust installation or server update.
 | HTTPS | `POST /api/v1/admin/workspaces/transfer-owner` | Current owner key; transfer to an eligible provisioned scoped admin |
 | HTTPS | `POST /api/v1/admin/invitations/initial` | Current workspace owner/admin key; bounded initial group link |
 | HTTPS | `POST /api/v1/admin/invitations/individual` | Current workspace owner/admin key; individual link under existing window/expiry policy |
-| HTTPS | `POST /api/v1/admin/enrollment/close` | Scoped security authority; terminal initial-window closure |
+| HTTPS | `POST /api/v1/admin/enrollment/status` or `/close` | Scoped security authority; current initial-phase metadata or terminal closure |
 | HTTPS | `POST /api/v1/admin/invitations/list`, `/status` or `/revoke` | Scoped security authority; paged metadata, individual status or revocation |
 | HTTPS | `POST /api/v1/admin/invitations/readmission` | Current workspace owner/admin key; fresh targeted admission after revoked membership |
 | HTTPS | `POST /api/v1/admin/recovery/issue` | Current global or scoped recovery authority; captures still-authorized grants |
@@ -192,6 +192,28 @@ commit together; failures roll them back. Only requested rows get individual
 expiry observations, excluding the next-page lookahead; the existing workspace
 initial-window refresh still applies when inspecting a returned row. Listing does
 not create invitations, admit clients, reopen a window or run entry cleanup.
+
+### Read the initial enrollment window
+
+POST `/api/v1/admin/enrollment/status` with only `workspace_id`, using the same
+current workspace owner/admin security authority as invitation inspection. It
+also works while archived; instance keys, foreign scopes and client credentials
+cannot use it. The response contains:
+
+- `workspace_id`, `phase` (`unused`, `open` or `closed`) and nullable `closed_at`;
+- nullable `invitation`, using the existing group invitation status fields;
+- `has_admission_history`, including revoked grants;
+- `workspace_archived` and current `can_open`.
+
+This reads the persisted window and grant history atomically, refreshing existing
+terminal deadline/capacity closure rules. A failed refresh rolls back the complete
+observation. Moving the clock backward cannot reopen an observed closure. A window
+closed before issuing a group link has phase `closed` with no invitation. A missing
+window row can be `unused` while admission history still makes opening impossible.
+Do not infer eligibility from an empty invitation inventory. `can_open` is only a
+current observation, never a lease: issuing the initial invitation rechecks all
+permissions, workspace state and persisted first-use conditions transactionally.
+No secret or verifier is returned, and this endpoint cannot reopen a group.
 
 The initial invitation body contains `workspace_id`, `role` (`read` or
 `read_write`), `max_clients` and `expires_at` (Unix seconds). At least a positive

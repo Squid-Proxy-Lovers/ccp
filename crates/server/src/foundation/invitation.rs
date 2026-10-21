@@ -85,3 +85,21 @@ pub struct InvitationPage {
     pub invitations: Vec<InvitationSummary>,
     pub next_cursor: Option<Uuid>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitialEnrollmentPhase {
+    Unused,
+    Open,
+    Closed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InitialEnrollmentStatus {
+    pub workspace_id: Uuid,
+    pub phase: InitialEnrollmentPhase,
+    pub closed_at: Option<i64>,
+    pub invitation: Option<InvitationStatus>,
+    pub has_admission_history: bool,
+    pub workspace_archived: bool,
+    pub can_open: bool,
+}

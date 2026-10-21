@@ -151,8 +151,7 @@ Workspace keys can issue individual client invitations and revoke that
 workspace’s grants. Creation secrets appear only in that result view; copy them
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
-these actions do not have a browser retry mechanism. Initial group enrollment,
-readmission/recovery and
+these actions do not have a browser retry mechanism. Readmission/recovery and
 reported work are not yet exposed in this first panel.
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
@@ -376,8 +375,8 @@ not imply an empty list; an earlier table remains labelled as a prior observatio
 Issuer authority is a current check. It is false while archived or after issuer
 permission/key loss, separately from permanent invitation revocation. Metadata
 is not a redemption lease or a causal operation receipt. No secret can be
-retrieved. An empty list does not establish initial-group eligibility; opening
-or closing initial group enrollment still uses the existing API.
+retrieved. An empty list does not establish initial-group eligibility. The separate initial
+group section reads the real window state before offering its controls.
 
 In an active workspace, choose the requested data access and a 1–168 hour lifetime,
 then **Create invitation**. Copy its one-time secret privately before navigating
@@ -401,3 +400,37 @@ inspect/revoke the undelivered invitation before deliberately issuing another.
 It never describes confirmed creation as failed. Drafts and unknown requests
 remain in tab memory only. Client paging and workspace-grant revocation also
 respect invitation drafts before redrawing this shared view.
+
+
+## Open or close initial group enrollment
+
+In **Clients & access**, a workspace owner/admin sees the real initial-window
+state, history and archive status. Issuing an individual invitation permanently
+seals an unused initial group phase, even before any client redeems it.
+**Configure initial group** appears only when the status read currently permits
+opening. It opens a separate form so a group draft cannot silently replace an
+individual-invitation draft. Choose a positive
+admission capacity, a positive whole lifetime in hours, or both. Neither numeric
+field has a default. Confirm the initially unchecked single-phase acknowledgement
+and review the exact bounds before creating the one-time group invitation.
+Extreme deadlines outside the browser’s date range require the API.
+
+Copy and deliver the secret privately before leaving. A lost group secret cannot
+be retrieved or replaced by reopening the phase. Inspect/revoke that invitation
+or close the window, then use individual invitations. A known-open group suppresses
+the individual-create form until closure; existing invitation history stays visible.
+
+**Close initial enrollment permanently** works even while archived and can seal
+an unused phase before any group link is created. It cannot reopen. Existing client
+grants and individual invitations are preserved. A status-read failure never
+assumes an unused/open/closed state or exposes group actions; other authorized
+workflows retain their own server checks.
+
+Group create/close actions send once, preserve the original endpoint/body/session
+binding, and have no operation ID or retry button. After an unconfirmed response,
+read current window state as a separate observation, not attribution. Forgetting
+or discarding locally does not cancel delayed execution. Explicit local discard
+clears the request and stale form even if reads are unavailable. An acknowledged
+creation is recorded before the next session check; if that check fails, the lock
+reports confirmed IDs with close/revoke and individual-invitation recovery directions,
+without showing the unavailable secret or describing creation as failed.

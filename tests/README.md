@@ -298,3 +298,8 @@ rollback of page observations. They add no browser-engine workflow claim.
 Panel invitation model checks cover exact-range metadata, scoped archive security,
 immutable one-shot deadlines/targets and session binding. The existing asset TLS
 test also verifies the bundled invitation module.
+
+Initial-window tests cover real persisted eligibility rather than inventory
+inference, revoked admission history, closure without a link, atomic rollback,
+clock rollback/capacity terminality and actual enrollment over cookie/TLS. Panel
+model tests cover explicit optional bounds, confirmation and one-shot session binding.

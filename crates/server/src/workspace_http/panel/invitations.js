@@ -3,7 +3,7 @@ import {AdmissionAttempt, canManageInvitations, invitationDeadline, invitationPa
 import {byId, el, button, field, select, actions, notice, stamp, copy, secret} from './view.js';
 const BASE = '/api/v1/admin/invitations/';
 
-export async function showInvitations(api, parent, after = null) {
+export async function showInvitations(api, parent, after = null, initialOpen = false) {
   let root = parent.querySelector('.invitations');
   if (!root) { root = el('section', undefined, 'invitations'); parent.append(root); }
   if (!canManageInvitations(api.state.session, api.state.workspace)) {
@@ -34,7 +34,7 @@ export async function showInvitations(api, parent, after = null) {
     }
     const scroll = el('div', undefined, 'table-scroll'); scroll.append(table); root.append(scroll);
     if (!page.invitations.length) root.append(el('p', 'No invitations on this page.', 'empty'));
-    const read = cursor => api.run(async () => { if (api.mayLeave()) await showInvitations(api, parent, cursor); });
+    const read = cursor => api.run(async () => { if (api.mayLeave()) await showInvitations(api, parent, cursor, initialOpen); });
     actions(root, button('Read current invitations', () => read(null)));
     if (page.next_cursor) actions(root, button('Next invitations', () => read(page.next_cursor)));
     if (after) actions(root, button('First invitations', () => read(null)));
@@ -43,12 +43,12 @@ export async function showInvitations(api, parent, after = null) {
     if (api.state.locked) return;
     const failure = el('section', undefined, 'invitation-read-error');
     failure.append(el('h3', 'Invitation metadata unavailable'), el('p', error.message), el('p', 'No empty inventory or usable invitation was assumed. Any earlier table is a previous observation.'));
-    actions(failure, button('Read invitation metadata', () => api.run(async () => { if (api.mayLeave()) await showInvitations(api, parent, after); })));
+    actions(failure, button('Read invitation metadata', () => api.run(async () => { if (api.mayLeave()) await showInvitations(api, parent, after, initialOpen); })));
     root.querySelector('.invitation-read-error')?.remove(); root.append(failure);
   }
   if (!root.querySelector('.invitation-form')) {
-    if (api.writable()) issueForm(api, root);
-    else root.append(el('p', 'New client admission is paused while archived.', 'muted'));
+    if (api.writable() && !initialOpen) issueForm(api, root);
+    else root.append(el('p', initialOpen ? 'Close initial group enrollment before issuing individual invitations.' : 'New client admission is paused while archived.', 'muted'));
   }
 }
 

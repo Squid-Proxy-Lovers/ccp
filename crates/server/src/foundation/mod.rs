@@ -48,8 +48,9 @@ pub use guidance::{
     GuidancePublisher, GuidanceRead, GuidanceReceipt, GuidanceSave, GuidanceScope,
 };
 pub use invitation::{
-    IndividualInvitationRequest, InitialInvitationRequest, InvitationKind, InvitationPage,
-    InvitationStatus, InvitationSummary, IssuedInvitation, ReadmissionInvitationRequest,
+    IndividualInvitationRequest, InitialEnrollmentPhase, InitialEnrollmentStatus,
+    InitialInvitationRequest, InvitationKind, InvitationPage, InvitationStatus, InvitationSummary,
+    IssuedInvitation, ReadmissionInvitationRequest,
 };
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, GrantPage, GrantSummary,

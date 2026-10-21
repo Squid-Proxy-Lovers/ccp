@@ -5,6 +5,7 @@
 use super::*;
 mod boundaries;
 mod guidance;
+mod initial_window;
 mod invitation_list;
 mod lifecycle;
 mod panel;

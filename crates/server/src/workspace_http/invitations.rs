@@ -11,6 +11,7 @@ use crate::foundation::{
     AccessStore, Actor, IndividualInvitationRequest, InitialInvitationRequest,
     ReadmissionInvitationRequest, RecoveryInvitationRequest, RecoveryScope,
 };
+mod enrollment;
 mod listing;
 
 use hyper::Method;
@@ -26,6 +27,7 @@ pub(super) fn handles(path: &str) -> bool {
             | "/api/v1/admin/invitations/status"
             | "/api/v1/admin/invitations/revoke"
             | "/api/v1/admin/enrollment/close"
+            | "/api/v1/admin/enrollment/status"
             | "/api/v1/admin/recovery/issue"
             | "/api/v1/admin/recovery/status"
             | "/api/v1/admin/recovery/revoke"
@@ -43,6 +45,7 @@ pub(super) fn dispatch(
     }
     match input.path.as_str() {
         "/api/v1/admin/invitations/list" => listing::list(store, actor, input, now),
+        "/api/v1/admin/enrollment/status" => enrollment::get(store, actor, input, now),
         "/api/v1/admin/invitations/initial" => {
             let body: api::InitialInvitation = decode(&input.body)?;
             let issued = store

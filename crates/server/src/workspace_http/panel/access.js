@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {byId, el, button, actions, notice} from './view.js';
 
+import {showEnrollment} from './enrollment.js';
 import {showInvitations} from './invitations.js';
 
 export async function showAccess(api, after = null) {
@@ -44,5 +45,6 @@ export async function showAccess(api, after = null) {
   if (!page.grants.length) root.append(el('p', 'No client grants on this page.', 'empty'));
   if (page.next_cursor) actions(root, button('Next clients', () => api.run(async () => { if (api.mayLeave()) await showAccess(api, page.next_cursor); })));
   if (after) actions(root, button('First clients', () => api.run(async () => { if (api.mayLeave()) await showAccess(api); })));
-  await showInvitations(api, root);
+  const enrollment = await showEnrollment(api, root);
+  await showInvitations(api, root, null, enrollment?.phase === 'open');
 }

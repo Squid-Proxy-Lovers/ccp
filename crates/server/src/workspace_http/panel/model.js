@@ -328,3 +328,48 @@ export class AdmissionAttempt {
     return {body: this.requestBody, proof: this.proof};
   }
 }
+
+export function enrollmentStatus(value, workspaceId) {
+  if (value?.workspace_id !== workspaceId || !['unused', 'open', 'closed'].includes(value.phase)
+    || !['has_admission_history', 'workspace_archived', 'can_open'].every(key => typeof value[key] === 'boolean')
+    || value.closed_at !== null && (!Number.isSafeInteger(value.closed_at) || value.closed_at < 0)) throw new Error('Initial enrollment state could not be verified. No eligibility was assumed.');
+  if (value.invitation !== null) invitationStatus(value.invitation);
+  if (value.phase === 'unused' && (value.closed_at !== null || value.invitation !== null)
+    || value.phase === 'open' && (value.closed_at !== null || !value.invitation || value.invitation.initial_closed || value.invitation.revoked || value.invitation.expired)
+    || value.phase === 'closed' && (value.closed_at === null || value.invitation !== null && !value.invitation.initial_closed)
+    || value.can_open && (value.phase !== 'unused' || value.has_admission_history || value.workspace_archived)) throw new Error('Initial enrollment metadata is inconsistent. Read current state before continuing.');
+  return value;
+}
+
+export function initialBounds(capacity, hours, now = Date.now()) {
+  const max = capacity.trim() === '' ? null : Number(capacity);
+  const lifetime = hours.trim() === '' ? null : Number(hours);
+  const expiry = lifetime === null ? null : Math.floor(now / 1000) + lifetime * 3600;
+  if (max !== null && (!Number.isInteger(max) || max < 1 || max > 4294967295)
+    || lifetime !== null && (!Number.isSafeInteger(lifetime) || lifetime < 1 || !Number.isSafeInteger(expiry) || expiry * 1000 > 8640000000000000)
+    || max === null && expiry === null) throw new Error('Choose a positive client capacity (at most 4294967295), a positive whole lifetime in hours, or both within the browser’s date range.');
+  return {max_clients: max, expires_at: expiry};
+}
+
+export class EnrollmentAttempt {
+  #sent = false;
+  constructor(session, state, action, body, confirmed) {
+    enrollmentStatus(state, state.workspace_id);
+    if (!canManageInvitations(session, {id: state.workspace_id}) || body.workspace_id !== state.workspace_id || confirmed !== true
+      || !['initial', 'close'].includes(action) || action === 'close' && state.phase === 'closed'
+      || action === 'initial' && (!state.can_open || !['read', 'read_write'].includes(body.role)
+        || body.max_clients !== null && (!Number.isInteger(body.max_clients) || body.max_clients < 1 || body.max_clients > 4294967295)
+        || body.expires_at !== null && (!Number.isSafeInteger(body.expires_at) || body.expires_at < 1)
+        || body.max_clients === null && body.expires_at === null)) throw new Error('Use the current workspace key, explicit bounds and confirmation for this initial-window action.');
+    this.kind = 'enrollment'; this.workspace_id = state.workspace_id;
+    this.path = action === 'initial' ? '/api/v1/admin/invitations/initial' : '/api/v1/admin/enrollment/close';
+    this.requestBody = JSON.stringify(action === 'initial' ? {workspace_id: state.workspace_id, role: body.role, max_clients: body.max_clients, expires_at: body.expires_at} : {workspace_id: state.workspace_id});
+    this.body = JSON.stringify({path: this.path, request: JSON.parse(this.requestBody)});
+    this.session = signature(session); this.proof = session.csrf_token; Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. Do not send this initial-window action under the new session.');
+    if (this.#sent) throw new Error('Do not retry this initial-window action. Inspect current state first.');
+    this.#sent = true; return {body: this.requestBody, proof: this.proof};
+  }
+}

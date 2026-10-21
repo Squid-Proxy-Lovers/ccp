@@ -185,6 +185,25 @@ pub struct Invitations {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InitialEnrollmentPhase {
+    Unused,
+    Open,
+    Closed,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct InitialEnrollmentStatus {
+    pub workspace_id: String,
+    pub phase: InitialEnrollmentPhase,
+    pub closed_at: Option<i64>,
+    pub invitation: Option<InvitationStatus>,
+    pub has_admission_history: bool,
+    pub workspace_archived: bool,
+    pub can_open: bool,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct RecoveryStatus {
     pub client_id: String,
     pub scope: RecoveryScope,

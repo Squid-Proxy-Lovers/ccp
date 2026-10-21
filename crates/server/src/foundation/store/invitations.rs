@@ -4,6 +4,7 @@
 
 use rusqlite::OptionalExtension;
 
+mod enrollment;
 mod pages;
 
 use super::*;

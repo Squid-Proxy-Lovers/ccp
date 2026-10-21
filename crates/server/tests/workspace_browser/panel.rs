@@ -21,6 +21,7 @@ async fn panel_assets_are_bundled_public_https_only_and_locked_down() {
         ("/admin/team.js", "text/javascript"),
         ("/admin/transfer.js", "text/javascript"),
         ("/admin/invitations.js", "text/javascript"),
+        ("/admin/enrollment.js", "text/javascript"),
     ] {
         let response = f.public_client().get(f.url(path)).send().await.unwrap();
         assert_eq!(response.status(), 200);

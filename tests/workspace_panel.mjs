@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -348,5 +348,61 @@ test('admission original cannot cross any session binding, while archived revoca
     const s=session(),t=new AdmissionAttempt(s,{id:'workspace',archived:true},'revoke',{workspace_id:'workspace',invitation_id:'invite'});
     const changed=structuredClone(s);mutate(changed);assert.throws(()=>t.request(changed),/session changed/);
     assert.equal(JSON.parse(t.request(s).body).invitation_id,'invite');
+  }
+});
+
+
+const unusedWindow = () => ({workspace_id: 'workspace', phase: 'unused', closed_at: null,
+  invitation: null, has_admission_history: false, workspace_archived: false, can_open: true});
+
+test('initial-window metadata distinguishes unused, open and closed without inferring eligibility', () => {
+  const unused = unusedWindow();
+  assert.equal(enrollmentStatus(unused, 'workspace').can_open, true);
+  const history = {...unused, has_admission_history: true, can_open: false};
+  assert.equal(enrollmentStatus(history, 'workspace').phase, 'unused');
+  assert.equal(enrollmentStatus({...unused, phase: 'closed', closed_at: 1000, can_open: false}, 'workspace').invitation, null);
+  for (const changed of [{...unused, has_admission_history: true}, {...unused, workspace_archived: true},
+    {...unused, phase: 'open', can_open: false}, {...unused, phase: 'closed', can_open: false},
+    {...unused, workspace_id: 'other'}, {...unused, phase: 'unknown'}]) {
+    assert.throws(() => enrollmentStatus(changed, 'workspace'));
+  }
+});
+
+test('initial group bounds permit count or time or both, with no implicit default', () => {
+  assert.deepEqual(initialBounds('2', '', 1000000), {max_clients: 2, expires_at: null});
+  assert.deepEqual(initialBounds('', '2', 1000000), {max_clients: null, expires_at: 8200});
+  assert.deepEqual(initialBounds('3', '2', 1000000), {max_clients: 3, expires_at: 8200});
+  assert.equal(initialBounds('4294967295', '', 1000000).max_clients, 4294967295);
+  for (const [capacity, hours] of [['', ''], ['0', ''], ['4294967296', ''], ['1.5', ''],
+    ['', '0'], ['', '-1'], ['', '1.5'], ['', 'Infinity'], ['', '9999999999999999']]) {
+    assert.throws(() => initialBounds(capacity, hours, 1000000));
+  }
+});
+
+test('initial-window actions require explicit confirmation and freeze a one-shot original without nonce', () => {
+  const s = session(), state = unusedWindow();
+  const body = {workspace_id: 'workspace', role: 'read', max_clients: 2, expires_at: null};
+  assert.throws(() => new EnrollmentAttempt(s, state, 'initial', body, false));
+  assert.throws(() => new EnrollmentAttempt(s, state, 'initial', {...body, max_clients: null}, true));
+  const attempt = new EnrollmentAttempt(s, state, 'initial', body, true);
+  body.max_clients = 99;
+  assert.equal(JSON.parse(attempt.request(s).body).max_clients, 2);
+  assert.throws(() => attempt.request(s), /Do not retry/);
+  assert.ok(!attempt.body.includes('operation_id') && !attempt.body.includes('proof'));
+  const archived = {...unusedWindow(), workspace_archived: true, can_open: false};
+  assert.throws(() => new EnrollmentAttempt(s, archived, 'initial', body, true));
+  const close = new EnrollmentAttempt(s, archived, 'close', {workspace_id: 'workspace'}, true);
+  assert.deepEqual(JSON.parse(close.request(s).body), {workspace_id: 'workspace'});
+  assert.throws(() => new EnrollmentAttempt(s, {...state, phase: 'closed', closed_at: 1000, can_open: false}, 'close', body, true));
+});
+
+test('initial-window actions cannot cross original session, scope or principal bindings', () => {
+  for (const mutate of [s => {s.csrf_token = 'new';}, s => {s.identity.key_id = 'other';},
+    s => {s.instance_id = 'other';}, s => {s.identity.principal_id = 'other';},
+    s => {s.identity.scope.role = 'admin';}, s => {s.identity.scope.workspace_id = 'other';}]) {
+    const s = session(), attempt = new EnrollmentAttempt(s, unusedWindow(), 'close', {workspace_id: 'workspace'}, true);
+    const changed = structuredClone(s); mutate(changed);
+    assert.throws(() => attempt.request(changed), /session changed/);
+    assert.equal(JSON.parse(attempt.request(s).body).workspace_id, 'workspace');
   }
 });
