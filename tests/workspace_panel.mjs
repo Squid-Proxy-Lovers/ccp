@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/src/workspace_http/panel/model.js', import.meta.url), 'utf8');
-const {Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -214,4 +214,52 @@ test('lifecycle requests freeze endpoint and target, have no pretend nonce and c
   const restore = new LifecycleAttempt(s, workspace);
   assert.equal(restore.path, '/api/v1/admin/workspaces/reactivate');
   assert.equal(restore.archived, false);
+});
+
+
+test('team administration is owner-only in the matching workspace, including archived security', () => {
+  const s = session();
+  assert.equal(canManageTeam(s, {id: 'workspace', archived: true}), true);
+  assert.equal(canManageTeam(s, {id: 'other'}), false);
+  s.identity.scope.role = 'admin';
+  assert.equal(canManageTeam(s, {id: 'workspace'}), false);
+  s.identity.scope = {kind: 'instance'};
+  assert.equal(canManageTeam(s, {id: 'workspace'}), false);
+});
+
+test('optional expiry defaults to until revoked and refuses past, invalid or fractional seconds', () => {
+  const now = Date.parse('2026-10-20T12:00:00Z');
+  assert.equal(keyExpiry('', now), null);
+  assert.equal(keyExpiry('2026-10-21T12:00:00Z', now), now / 1000 + 86400);
+  for (const value of ['invalid', '2026-10-19T12:00:00Z', '2026-10-20T12:00:00Z', '2026-10-21T12:00:00.001Z']) assert.throws(() => keyExpiry(value, now));
+});
+
+test('security action is frozen and one-shot without an invented operation ID or safe retry', () => {
+  const s = session();
+  for (const action of ['team/appoint', 'team/revoke', 'keys/issue', 'keys/revoke']) {
+    const body = {workspace_id: 'workspace', principal: {kind: 'new_principal', name: 'original'}};
+    const a = new SecurityAttempt(s, action, body);
+    body.principal.name = 'edited';
+    assert.equal(JSON.parse(a.body).request.principal.name, 'original');
+    assert.equal(a.path, '/api/v1/admin/' + action);
+    assert.ok(!a.body.includes('operation_id'));
+    assert.ok(!a.body.includes('proof'));
+    assert.equal(a.request(s).proof, 'proof');
+    assert.throws(() => a.request(s), /Do not retry/);
+    assert.throws(() => {a.path = 'other';}, TypeError);
+  }
+  assert.throws(() => new SecurityAttempt(s, 'workspaces/transfer-owner', {workspace_id: 'workspace'}), /Unknown/);
+});
+
+test('security action cannot be dispatched under changed credentials, scope or session', () => {
+  for (const mutate of [s => {s.csrf_token = 'new';}, s => {s.identity.key_id = 'other';},
+    s => {s.instance_id = 'other';}, s => {s.identity.principal_id = 'other';},
+    s => {s.identity.scope.role = 'admin';}, s => {s.identity.scope.workspace_id = 'other';}]) {
+    const s = session(), a = new SecurityAttempt(s, 'keys/revoke', {workspace_id: 'workspace', key_id: 'target'});
+    const changed = structuredClone(s); mutate(changed);
+    assert.throws(() => a.request(changed), /session changed/);
+    assert.deepEqual(JSON.parse(a.request(s).body), {workspace_id: 'workspace', key_id: 'target'});
+  }
+  const s = session(); s.identity.scope.role = 'admin';
+  assert.throws(() => new SecurityAttempt(s, 'keys/issue', {workspace_id: 'workspace'}), /owner key/);
 });

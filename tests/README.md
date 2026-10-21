@@ -280,3 +280,7 @@ binding without a fabricated nonce, explicit duration units/confirmation/mode
 transitions, policy validation and exact retention receipts. Cookie/TLS settings
 cases verify global read versus scoped configuration, owner/global lifecycle
 powers versus admin retention powers, archived freezes and historical receipts.
+
+Owner team/key browser-session cases cover scoped roster/creation, archived security
+and live cookie invalidation on role/key revocation; panel Node cases cover one-shot
+security actions, session binding and optional expiry.

@@ -152,7 +152,7 @@ workspace’s grants. Creation secrets appear only in that result view; copy the
 privately before navigating away. After a lost response to workspace/container
 or invitation creation, inspect the current list or API state before repeating;
 these actions do not have a browser retry mechanism. Initial group enrollment,
-readmission/recovery, owner/team/key administration and
+readmission/recovery, ownership transfer and
 reported work are not yet exposed in this first panel.
 Use their existing APIs where available. Whole-workspace deletion and legacy
 conversion remain separate unfinished work.
@@ -288,3 +288,47 @@ navigation. Discard/reload keeps the local draft until the relevant state or
 policy is read successfully; lifecycle-only recovery does not require a policy
 read. Failed policy reads retain configuration text for copying or a separate
 explicit discard. These remain memory-only.
+
+
+## Manage administrators and keys as the owner
+
+Open **Settings → Manage administrators & keys** using this workspace’s owner
+key. Instance and scoped administrator keys cannot read this security inventory.
+The roster shows principal UUIDs alongside labels; keys separately show expiry,
+revocation and recorded role activity. Role activity does not make an expired
+or revoked key valid. Use **Next administrators** and **Next keys** independently;
+pages are current observations and can change while you browse.
+
+Choose **Appoint administrator**, then explicitly choose a new principal label
+or an existing principal UUID. A matching label never selects an existing
+identity. Appointment is available only in active workspaces. Existing roles
+can receive an additional key through **Issue key**, including while archived.
+Leave optional expiry empty for valid until revoked; a supplied local date/time
+is converted to a future Unix timestamp. Creating a new key leaves other keys
+valid. Copy the one-time secret privately, verify delivery, then deliberately
+revoke the old key if rotating. Secrets cannot be retrieved from the inventory.
+See [owner administration](workspace-owner-administration.md) for permissions.
+
+**Revoke administrator** removes that workspace role and revokes all its scoped
+keys. **Revoke key** affects just that key. Revoking your current login key ends
+its authority; the panel reports the confirmed action and returns through the
+session-lock sign-in flow. Have another owner key available. Otherwise the host
+operator can use [local owner recovery](local-workspace-administration.md).
+
+These security routes have no operation nonce or safe replay receipt. The panel
+sends each action once. On an unconfirmed response, controls freeze and retain
+the exact original endpoint and target. Read current security metadata separately;
+this is observation, not proof that your request caused a change. There is no
+retry button. Forgetting locally does not cancel a delayed server action. After
+copying and investigating, explicitly discard the local copy to reload the full
+paginated view. If reads remain unavailable, **Discard local security copy**
+clears the private copy without claiming cancellation or a successful read.
+For a lost key secret, inspect the relevant principal’s keys,
+issue a replacement and revoke undelivered keys. Do not repeat new-principal
+appointment by label to recover a secret.
+
+Acknowledged key creation is recorded before checking the session again. If that
+check fails, the panel clears private server views and reports the confirmed
+workspace/principal/key IDs with recovery directions; it does not describe the
+creation as failed. The unavailable secret is not included in recovery text.
+Drafts and unknown actions remain local memory only; closing the tab loses them.

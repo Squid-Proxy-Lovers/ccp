@@ -8,6 +8,7 @@ mod guidance;
 mod lifecycle;
 mod panel;
 mod settings;
+mod team;
 
 const LOGIN: &str = "/api/v1/admin/session/login";
 const STATUS: &str = "/api/v1/admin/session";

@@ -208,3 +208,35 @@ export async function wire(path, body, proof) {
   }
   return envelope.data;
 }
+
+export function canManageTeam(session, workspace) {
+  const scope = session.identity.scope;
+  return !!workspace && scope.kind === 'workspace' && scope.workspace_id === workspace.id && scope.role === 'owner';
+}
+
+export function keyExpiry(value, now = Date.now()) {
+  if (!value) return null;
+  const seconds = new Date(value).getTime() / 1000;
+  if (!Number.isSafeInteger(seconds) || seconds <= now / 1000) throw new Error('Choose a valid future expiry, or leave it empty for valid until revoked.');
+  return seconds;
+}
+
+export class SecurityAttempt {
+  #sent = false;
+  constructor(session, action, body) {
+    if (!['team/appoint', 'team/revoke', 'keys/issue', 'keys/revoke'].includes(action)) throw new Error('Unknown security action.');
+    if (!canManageTeam(session, {id: body.workspace_id})) throw new Error('Use this workspace’s owner key.');
+    this.kind = 'security'; this.workspace_id = body.workspace_id;
+    this.path = '/api/v1/admin/' + action;
+    this.requestBody = JSON.stringify(body);
+    this.body = JSON.stringify({path: this.path, request: JSON.parse(this.requestBody)});
+    this.session = signature(session); this.proof = session.csrf_token;
+    Object.freeze(this);
+  }
+  request(session) {
+    if (this.session !== signature(session)) throw new Error('The session changed. Do not send this security action under the new session.');
+    if (this.#sent) throw new Error('Do not retry this security action. Inspect current metadata first.');
+    this.#sent = true;
+    return {body: this.requestBody, proof: this.proof};
+  }
+}

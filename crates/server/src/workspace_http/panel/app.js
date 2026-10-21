@@ -34,8 +34,8 @@ function lock(message) {
     const text = state.pending ? state.pending.body : state.draft;
     field(panel, 'Unsaved local work / original write request', {value: text, area: true, readOnly: true});
     actions(panel, button('Copy local work', () => copy(text)));
-    panel.append(el('p', state.pending?.kind === 'lifecycle'
-      ? 'This lifecycle request has no operation ID. Discarding locally does not cancel execution. Copy the original endpoint and target, then read the current workspace state before another action.'
+    panel.append(el('p', ['lifecycle', 'security'].includes(state.pending?.kind)
+      ? 'This action has no operation ID. Discarding locally does not cancel execution. Copy the original endpoint and target, then read the current metadata before another action.'
       : 'A pending write may already have completed. Discarding here does not cancel it on the server. Keep the original request details to investigate.'));
   }
   actions(panel, button('Discard local work and return to sign in', () => {

@@ -4,7 +4,7 @@ This unreleased HTTPS API lets a workspace owner appoint administrators, rotate
 scoped keys and transfer ownership. Use the owner's workspace key and verify the
 server CA and name before sending secrets. See the [workspace HTTPS guide](workspace-http-api.md)
 for startup, request limits and the JSON envelope, and the [documentation index](README.md).
-Normal client/MCP and browser workflows remain subsequent work.
+The desktop [admin panel](workspace-browser-session.md#manage-administrators-and-keys-as-the-owner) exposes owner team/key management. Ownership transfer still uses this API.
 
 ## Appoint and deliver a key
 
@@ -112,5 +112,7 @@ Core and actual localhost TLS tests exercise owner-only scope, one-time key
 output, metadata pagination, role/key expiry and revocation, reappointment,
 archived security, rollback, concurrent transfer and authority changes on an
 existing connection. Native compatibility and MCP smoke remain separate tests.
-These checks do not establish a browser workflow, production rollout,
+Cookie/TLS integration and owned-fixture browser checks additionally exercise
+team/key panel workflows and session invalidation. These checks do not establish
+a production rollout,
 throughput guarantee or physical key delivery.

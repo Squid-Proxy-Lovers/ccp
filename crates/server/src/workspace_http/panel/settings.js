@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, wire} from './model.js';
+import {showTeam} from './team.js';
+import {canManageTeam} from './model.js';
 import {byId, el, button, field, select, actions, notice, stamp, copy} from './view.js';
 
 const GET = '/api/v1/admin/content/retention/get';
@@ -8,6 +10,11 @@ const CHANGE = '/api/v1/admin/content/retention/change';
 export async function showSettings(api) {
   const root = byId('content'); root.replaceChildren(el('h2', 'Workspace settings'));
   lifecycle(api, root);
+  const team = el('section'); root.append(team);
+  team.append(el('h3', 'Administrators & keys'), el('p', 'Only this workspace’s owner can inspect its administrator roster, issue scoped keys or revoke its administrators and keys.'));
+  if (canManageTeam(api.state.session, api.state.workspace)) actions(team, button('Manage administrators & keys', () => api.run(async () => {
+    if (api.mayLeave()) await showTeam(api);
+  })));
   const section = el('section', undefined, 'retention-settings');
   section.append(el('h3', 'Archived entry retention'), el('p', 'Loading current policy…', 'muted')); root.append(section);
   try {
