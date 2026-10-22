@@ -162,6 +162,7 @@ async def archives_and_large_snapshot(client, fixture, ids, scope):
         client, "workspace_entry", profile="office", scope=scope, query={**query, "revision": 1}
     )
     await refused(client, "workspace_history", profile="office", scope=scope, query=query)
+    await refused(client, "workspace_native_history", profile="office", scope=scope, query=query)
     archived = await call(
         client,
         "workspace_entries",
@@ -308,7 +309,7 @@ async def check():
         )
         async with Client(transport) as client:
             tools = await client.list_tools()
-            assert len(tools) == 31
+            assert len(tools) == 32
             names = {tool.name for tool in tools}
             assert {
                 "workspace_shelves",
@@ -318,6 +319,7 @@ async def check():
                 "workspace_entries",
                 "workspace_entry",
                 "workspace_history",
+                "workspace_native_history",
                 "workspace_shelf_state",
                 "workspace_archived_shelves",
             } <= names
@@ -335,6 +337,9 @@ async def check():
             )
             scope = {"selection_id": handle}
             await browse(client, fixture, ids, scope)
+            from workspace_mcp_native import check_native_reads
+
+            await check_native_reads(client, fixture, ids, scope)
             from workspace_mcp_shelf_reads import check_shelf_reads
 
             await check_shelf_reads(client, fixture, ids, scope)

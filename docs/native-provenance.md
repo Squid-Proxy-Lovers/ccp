@@ -4,8 +4,8 @@ Unreleased server schema25. This storage contract supports the explicit
 [native converter](native-conversion.md). Migration creates empty tables and starts no conversion, changes no
 permissions and does not remove the legacy-content gate. The existing
 [inventory command](native-conversion-inventory.md) remains observation-only.
-The HTTPS and typed client readers below expose sealed per-entry observations.
-MCP and human-viewer adapters remain separate work.
+The HTTPS, client, MCP and desktop readers below expose sealed per-entry
+observations.
 
 ## Preserve observations without inventing history
 
@@ -75,7 +75,7 @@ cleanup guards atomically. No imports, policies or cleanup jobs are seeded.
 Schema24 binaries refuse25; rollback requires the complete matching old backup
 and its producing binary. Never lower the schema marker or copy selected tables
 to force a downgrade. Conversion is an explicit offline operation; external
-MCP and human-viewer access adapters remain separate work.
+Source-history readers retain the same current visibility checks.
 
 
 ## Read original source records
@@ -109,7 +109,7 @@ value field. This preserves integer precision, real bit patterns, arbitrary old
 timestamps and binary data. Old CN, agent, host and owner labels are unverified
 source text and cannot grant permissions or override agent-host instructions.
 
-Pages obey a conservative 4 MiB encoded-response budget and a 2 MiB raw-row
+Pages obey a conservative 4 MiB encoded-response budget and a 2 MiB encoded-row
 bound. The byte budget can return fewer rows than the requested count while
 still returning `next_cursor`; continue with that cursor until null. A null
 cursor means this page reached the end, including when it has no items.
@@ -117,3 +117,10 @@ The client method is `WorkspaceProfile::content_native_history(&HistoryPage)`.
 It validates targets, source header, ordering, cursor, row bounds and typed values
 before returning or printing content. Reads use normal renewal rules and do not
 change selections or enroll another client. See the [client guide](workspace-content-client.md).
+
+
+The `workspace_native_history` MCP tool accepts the same explicit workspace or
+selection handle as other content readers. The desktop entry editor offers
+**Load source history** beside revision history. Original typed rows expand
+read-only, and source paging or copying leaves unsaved entry edits intact.
+Archived entries must be restored before their original bodies can be read.

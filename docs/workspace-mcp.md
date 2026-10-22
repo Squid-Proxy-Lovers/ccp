@@ -219,7 +219,7 @@ Stamps record a prepared response, not network receipt, model reading or obedien
 
 ## Read content in one workspace
 
-The nine content readers take `profile` and a nested `scope`. Supply either
+The ten content readers take `profile` and a nested `scope`. Supply either
 `scope.workspace_id` explicitly or `scope.selection_id` to use that handle's
 default. An explicit workspace takes precedence when both are present; the
 handle's choices are not consulted or changed. Missing/unknown handles and absent
@@ -238,6 +238,7 @@ Even empty pages and history are labeled with the resolved workspace UUID.
 | `workspace_entries` | `query: {book_id, archived?, after?, limit?}`; entry summaries |
 | `workspace_entry` | `query: {entry_id, revision?}`; exact current or historical snapshot |
 | `workspace_history` | `query: {entry_id, after?, limit?}`; revision metadata without bodies |
+| `workspace_native_history` | `query: {entry_id, after?, limit?}`; original typed source records and ordinal cursor |
 
 For example, call `workspace_entry` using the handle you opened and an actual
 entry UUID. These identifiers are illustrative:
@@ -442,8 +443,8 @@ use the CLI for detailed local errors. A timed-out renewal may have committed on
 the server: preserve the profile and let the client's exact retry recover it.
 The underlying target resolution also has its documented page bounds.
 
-The bridge exposes 31 tools: eight metadata/selection tools, one guidance reader,
-nine content reads,
+The bridge exposes 32 tools: eight metadata/selection tools, one guidance reader,
+ten content reads,
 two container creations, four entry-intent/outcome tools and seven status tools. It does not publish
 guidance, manage tasks or start a server.
 
@@ -487,3 +488,13 @@ Pending metadata receives global guidance only; status reads, writes, resume and
 forget use their captured workspace. Guidance collection never retries a primary
 mutation. Administrative clear and status publication as another client are not
 exposed by this bridge.
+
+
+Native source-history pages preserve integer decimal strings, real bit strings,
+text and distinct byte-array types from the original database. Old labels are
+unverified observations, not instruction boards, identities or permissions. The
+4 MiB page budget can return fewer records than requested with a `next_cursor`;
+continue until null. Current read grants and active-entry visibility apply. The
+source header omits internal recording-admin and legacy-session identifiers, and
+workspace-level token/certificate records are never returned by this tool. See
+[native source history](native-provenance.md#read-original-source-records).

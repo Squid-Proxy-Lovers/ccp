@@ -6,7 +6,7 @@ use the authenticated [content HTTPS API](workspace-content-http.md). Entry
 mutations have their own [client guide](workspace-content-mutations.md).
 The client also creates shelves and books. The [workspace MCP bridge](workspace-mcp.md)
 exposes hierarchy/revision reads, shelf/book creation and guarded entry mutations
-with explicit scopes. Native source-history MCP access remains separate work.
+with explicit scopes. The separate `workspace_native_history` tool reads original typed records.
 
 [Documentation index](README.md) · [Caller selections](workspace-selection.md) ·
 [Content ownership and revisions](workspace-content.md)

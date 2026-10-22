@@ -36,6 +36,7 @@ from fastmcp.exceptions import ToolError, ValidationError
 from workspace_delivery_tests import WorkspaceDeliveryTests as WorkspaceDeliveryTests
 from workspace_entry_tests import WorkspaceEntryTests as WorkspaceEntryTests
 from workspace_guidance_tests import WorkspaceGuidanceTests as WorkspaceGuidanceTests
+from workspace_native_tests import WorkspaceNativeTests as WorkspaceNativeTests
 from workspace_status_tests import WorkspaceStatusTests as WorkspaceStatusTests
 
 
@@ -156,6 +157,18 @@ class WorkspaceProcessTests(unittest.IsolatedAsyncioTestCase):
                 arguments=snapshot,
             )
 
+    async def test_only_fixed_native_history_read_argv_gets_four_mib(self):
+        args = ("content", "--profile", "/configured/profile", "native-history")
+        code = "import json; print(json.dumps({'text':'x'*(2*1024*1024)}))"
+        result = await self.exercise_child(code, arguments=args)
+        self.assertEqual(len(result["text"]), 2 * 1024 * 1024)
+        for arguments in [
+            ("native-history",),
+            ("content", "native-history", "--profile", "/configured/profile"),
+        ]:
+            with self.assertRaises(ToolError):
+                await self.exercise_child(code, arguments=arguments)
+
     async def test_failure_and_invalid_json_never_echo_child_output(self):
         for code in ["import sys; print('private-path'); sys.exit(7)", "print('private-path')"]:
             with self.assertRaises(ToolError) as error:
@@ -269,7 +282,7 @@ class WorkspaceSessionTests(unittest.IsolatedAsyncioTestCase):
         with WorkspaceRuntime(self.config()) as runtime:
             async with Client(build_server(runtime)) as client:
                 tools = await client.list_tools()
-                self.assertEqual(len(tools), 31)
+                self.assertEqual(len(tools), 32)
                 self.assertTrue(
                     {
                         "workspace_profiles",

@@ -697,3 +697,5 @@ test('new global session may inspect same-instance body-free tracking but cannot
   assert.equal(JSON.stringify(exported).includes('global proof'), false);
   assert.equal('request' in JSON.parse(deletionTracking(lookup, null)), false);
 });
+
+import './workspace_native_panel.mjs';

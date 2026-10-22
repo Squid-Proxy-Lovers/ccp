@@ -8,3 +8,6 @@
 .reported-table{table-layout:fixed}.reported-table th:nth-child(1){width:28%}.reported-table th:nth-child(2){width:45%}.reported-table th:nth-child(3){width:27%}.reported-table td{overflow-wrap:anywhere}.reported-table pre{font:inherit;white-space:pre-wrap;max-width:none;margin:0}
 
 .deletion-settings{margin-top:2rem;padding-top:1rem;border-top:1px solid var(--line)}.deletion-tracker{margin:1.5rem 0;padding:1.5rem;border:1px solid var(--line);background:var(--surface)}.deletion-tracker textarea{max-width:80ch;min-height:10rem;font-family:ui-monospace,monospace;font-size:.85rem}.deletion-settings form{max-width:72ch}
+
+.source-history{margin-top:2rem;padding-top:.25rem;border-top:1px solid var(--line)}.source-record{margin:0}.source-record table{table-layout:fixed}.source-record th:first-child{width:28%}.source-record td{overflow-wrap:anywhere}.source-record pre{max-height:20rem;overflow:auto;margin:.35rem 0;max-width:100%}
+.source-export textarea{min-height:12rem;max-height:20rem;font-family:ui-monospace,monospace;font-size:.85rem}

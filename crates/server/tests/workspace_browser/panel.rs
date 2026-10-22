@@ -15,6 +15,8 @@ async fn panel_assets_are_bundled_public_https_only_and_locked_down() {
         ("/admin/model.js", "text/javascript"),
         ("/admin/view.js", "text/javascript"),
         ("/admin/context.js", "text/javascript"),
+        ("/admin/native_history.js", "text/javascript"),
+        ("/admin/native_values.js", "text/javascript"),
         ("/admin/access.js", "text/javascript"),
         ("/admin/guidance.js", "text/javascript"),
         ("/admin/settings.js", "text/javascript"),

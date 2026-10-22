@@ -72,6 +72,14 @@ fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
             "text/javascript; charset=utf-8",
             include_bytes!("panel/view.js"),
         ),
+        "/admin/native_history.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("panel/native_history.js"),
+        ),
+        "/admin/native_values.js" => (
+            "text/javascript; charset=utf-8",
+            include_bytes!("panel/native_values.js"),
+        ),
         "/admin/context.js" => (
             "text/javascript; charset=utf-8",
             include_bytes!("panel/context.js"),

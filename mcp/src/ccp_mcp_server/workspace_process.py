@@ -114,7 +114,7 @@ class WorkspaceProcess:
             len(arguments) >= 4
             and arguments[0] == "content"
             and arguments[1] == "--profile"
-            and arguments[3] == "entry"
+            and arguments[3] in {"entry", "native-history"}
         ):
             return 4 * 1024 * 1024
         return self.output_limit

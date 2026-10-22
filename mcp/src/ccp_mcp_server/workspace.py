@@ -18,6 +18,7 @@ from .workspace_content import WorkspaceContentTools
 from .workspace_delivery import WorkspaceDeliveryMiddleware
 from .workspace_entry import WorkspaceEntryTools
 from .workspace_guidance import WorkspaceGuidanceTools
+from .workspace_native import WorkspaceNativeTools
 from .workspace_runtime import WorkspaceRuntime
 from .workspace_status import WorkspaceStatusTools
 from .workspace_validation import WorkspaceValidationMiddleware
@@ -157,6 +158,7 @@ def build_server(runtime: WorkspaceRuntime) -> FastMCP:
     mcp.tool(content.workspace_entries)
     mcp.tool(content.workspace_entry)
     mcp.tool(content.workspace_history)
+    mcp.tool(WorkspaceNativeTools(runtime).workspace_native_history)
     writes = WorkspaceWriteTools(runtime)
     mcp.tool(writes.workspace_create_shelf)
     mcp.tool(writes.workspace_create_book)

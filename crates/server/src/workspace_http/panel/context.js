@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import {Intent, wire, exactRevision} from './model.js';
+import {showNativeHistory} from './native_history.js';
 import {showArchivedShelves, showShelf, purgeForm} from './archives.js';
 import {byId, el, button, field, select, actions, notice, stamp, copy} from './view.js';
 
@@ -107,7 +108,7 @@ async function openEntry(api, entryId, context) {
 
 function metadata(root, entry) {
   root.append(el('p', `Revision ${entry.revision} · Updated ${stamp(entry.updated_at)}`, 'metadata'));
-  root.append(el('p', `Entry ${entry.id} · Owner ${entry.owner_client_id || 'No registered client (admin-created)'}`, 'metadata'));
+  root.append(el('p', `Entry ${entry.id} · Owner ${entry.owner_client_id || 'No registered client (admin-managed)'}`, 'metadata'));
 }
 
 function archivedEntry(api, entry, context) {
@@ -159,7 +160,9 @@ function editor(api, snapshot, context) {
     });
     if (entry) entryControls(api, root, entry, context);
   }
-  if (entry) actions(root, button('Load revision history', () => api.run(() => history(api, root, entry.id))));
+  if (entry) actions(root,
+    button('Load revision history', () => api.run(() => history(api, root, entry.id))),
+    button('Load source history', () => api.run(() => showNativeHistory(api, root, entry.id))));
 }
 
 function entryControls(api, root, entry, context) {
