@@ -108,6 +108,11 @@ struct WorkspaceServeArgs {
     https_listen: SocketAddr,
     #[arg(long, default_value = "127.0.0.1:8444")]
     mtls_listen: SocketAddr,
+    #[arg(
+        long,
+        help = "Enable fixed-path WebSocket carriers for end-to-end CCP TLS on the HTTPS listener"
+    )]
+    websocket_tunnels: bool,
 }
 
 #[derive(Args)]
@@ -259,7 +264,8 @@ async fn serve_workspace(args: WorkspaceServeArgs) -> anyhow::Result<()> {
         mtls_listen: args.mtls_listen,
         activate_workspace: args.activate_workspace,
     })
-    .await?;
+    .await?
+    .with_websocket_tunnels(args.websocket_tunnels);
     print_json(&server.startup()?)?;
     let report = server
         .run_until(async {

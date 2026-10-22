@@ -20,6 +20,11 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 pub(super) fn dispatch(context: &Context, input: Input) -> Result<Reply, Error> {
+    if matches!(context.surface, Surface::Bootstrap)
+        && !super::tunnel::bootstrap_allows(&input.method, &input.path)
+    {
+        return Err(Error::NotFound);
+    }
     if super::panel::handles(&input.path) {
         return super::panel::serve(context.surface, &input);
     }
@@ -63,7 +68,9 @@ pub(super) fn dispatch(context: &Context, input: Input) -> Result<Reply, Error> 
         AccessStore::new(&mut connection).map_err(|_database_error| Error::Unavailable)?;
     let now = crate::instance_tls::now().map_err(|_clock_error| Error::Unavailable)?;
     match context.surface {
-        Surface::Https => https(context.state.as_ref(), &mut store, input, now),
+        Surface::Https | Surface::Bootstrap => {
+            https(context.state.as_ref(), &mut store, input, now)
+        }
         Surface::Client => client(context, &mut store, input, now),
     }
 }

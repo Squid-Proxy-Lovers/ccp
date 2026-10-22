@@ -11,6 +11,8 @@ mod tests {
     mod content;
     #[path = "workspace_preflight/mod.rs"]
     mod preflight;
+    #[path = "workspace_tunnel/mod.rs"]
+    mod tunnel;
     use anyhow::Context;
     use rcgen::{CertificateParams, KeyPair};
     use reqwest::Client;
@@ -103,6 +105,9 @@ mod tests {
     }
     impl Fixture {
         async fn new() -> Self {
+            Self::with_tunnels(false).await
+        }
+        async fn with_tunnels(enabled: bool) -> Self {
             let directory = std::env::temp_dir().join(format!("ccp-http-{}", Uuid::new_v4()));
             let setup = server::local_admin::bootstrap(&directory, "operator", "first").unwrap();
             let trust = server::instance_tls::initialize(
@@ -117,7 +122,8 @@ mod tests {
                 activate_workspace: true,
             })
             .await
-            .unwrap();
+            .unwrap()
+            .with_websocket_tunnels(enabled);
             let startup = server.startup().unwrap();
             let (stop, signal) = oneshot::channel();
             let task = tokio::spawn(
@@ -562,8 +568,8 @@ mod tests {
         drop(public);
         f.finish().await;
     }
-    struct Wire {
-        stream: TlsStream<TcpStream>,
+    struct Wire<S = TlsStream<TcpStream>> {
+        stream: S,
         buffer: Vec<u8>,
     }
     impl Wire {
@@ -586,6 +592,8 @@ mod tests {
                 buffer: Vec::new(),
             }
         }
+    }
+    impl<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin> Wire<S> {
         async fn send(&mut self, request: &str) {
             self.stream.write_all(request.as_bytes()).await.unwrap();
             self.stream.flush().await.unwrap();

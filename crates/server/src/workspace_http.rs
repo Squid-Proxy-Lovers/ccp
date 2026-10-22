@@ -17,6 +17,7 @@ mod retention;
 mod retention_worker;
 mod session;
 mod team;
+mod tunnel;
 mod work_status;
 mod workspace_deletion;
 
@@ -64,6 +65,7 @@ pub struct WorkspaceServer {
     mtls_tls: TlsAcceptor,
     state: Arc<State>,
     cleanup_budget: Arc<Semaphore>,
+    websocket_tunnels: bool,
 }
 
 struct State {
@@ -75,6 +77,7 @@ struct State {
 #[derive(Clone, Copy)]
 enum Surface {
     Https,
+    Bootstrap,
     Client,
 }
 
@@ -112,7 +115,14 @@ impl WorkspaceServer {
             mtls_tls,
             state,
             cleanup_budget: Arc::new(Semaphore::new(1)),
+            websocket_tunnels: false,
         })
+    }
+
+    /// Opt into fixed-path WSS carriers on the existing HTTPS listener.
+    pub fn with_websocket_tunnels(mut self, enabled: bool) -> Self {
+        self.websocket_tunnels = enabled;
+        self
     }
 
     pub fn startup(&self) -> anyhow::Result<Startup> {
@@ -143,11 +153,11 @@ impl WorkspaceServer {
                 result = &mut shutdown => break result,
                 result = self.https.accept() => {
                     let (socket, _) = result.context("HTTPS accept failed")?;
-                    session::spawn(&mut tasks, socket, self.https_tls.clone(), self.state.clone(), Surface::Https, receiver.clone(), budget.clone());
+                    session::spawn(&mut tasks, socket, session::Endpoint { acceptor: self.https_tls.clone(), surface: Surface::Https, tunnels: self.websocket_tunnels }, self.state.clone(), receiver.clone(), budget.clone());
                 }
                 result = self.mtls.accept() => {
                     let (socket, _) = result.context("mTLS accept failed")?;
-                    session::spawn(&mut tasks, socket, self.mtls_tls.clone(), self.state.clone(), Surface::Client, receiver.clone(), budget.clone());
+                    session::spawn(&mut tasks, socket, session::Endpoint { acceptor: self.mtls_tls.clone(), surface: Surface::Client, tunnels: false }, self.state.clone(), receiver.clone(), budget.clone());
                 }
                 result = tasks.join_next(), if !tasks.is_empty() => collect_task(result, &mut report)?,
             }

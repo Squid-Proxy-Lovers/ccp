@@ -96,7 +96,7 @@ pub(super) async fn read(request: Request<Incoming>) -> Result<Input, Error> {
     })
 }
 
-fn validate_headers(headers: &hyper::HeaderMap) -> Result<String, Error> {
+pub(super) fn validate_headers(headers: &hyper::HeaderMap) -> Result<String, Error> {
     let host = single(headers, HOST)?.ok_or(Error::BadRequest)?;
     let target =
         url::Url::parse(&format!("https://{host}")).map_err(|_invalid_host| Error::BadRequest)?;
@@ -135,7 +135,7 @@ fn validate_headers(headers: &hyper::HeaderMap) -> Result<String, Error> {
     Ok(target.origin().ascii_serialization())
 }
 
-fn single(
+pub(super) fn single(
     headers: &hyper::HeaderMap,
     name: hyper::header::HeaderName,
 ) -> Result<Option<&str>, Error> {

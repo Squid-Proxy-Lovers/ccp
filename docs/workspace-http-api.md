@@ -69,6 +69,57 @@ client TLS peer. Server-leaf renewal remains the separate local
 [renewal command](server-certificate-renewal.md) and requires the runtime to stop.
 There is no automatic OS/browser trust installation or server update.
 
+## Optional WebSocket carriers
+
+The server can carry the existing CCP TLS protocol inside WebSockets on its HTTPS
+listener, alongside the browser UI:
+
+```bash
+ccp-server workspace-serve --data-dir ./ccp-data --websocket-tunnels
+```
+
+This is an opt-in server transport. The current released/direct client setup does
+not select it automatically; client profile and onboarding support are separate
+work. No extra process runs on a connecting client, and the server never dials a
+forwarding target. The server's direct listeners remain available.
+
+The outer HTTP/1.1 upgrade uses two exact paths and subprotocol `ccp-tls-v1`:
+
+| Path | Inner connection |
+| --- | --- |
+| `/ccp/tunnel/v1/enroll` | Server-authenticated CCP TLS; only `GET /api/v1/health`, `GET /api/v1/software-info`, `POST /api/v1/enroll` and `POST /api/v1/recover` |
+| `/ccp/tunnel/v1/client` | Mandatory CCP mTLS and current registered-client permissions, as on the direct client listener |
+
+The enrollment carrier cannot serve the admin shell, browser sessions or admin
+APIs, even with a valid key or cookie. This preserves an operator's separate edge
+Access policy for administration. Only the first HTTP request on a connection can
+upgrade. Queries, request bodies, duplicate handshake headers, Origin-bearing
+requests and extension offers are refused. The fixed subprotocol must match
+exactly. Frames are binary and uncompressed; frame/message size is capped at
+64KiB, while larger inner HTTP bodies stream across multiple frames. Empty and
+control frames share a 128-per-second limit. Data reads continue while outgoing
+writes are backpressured.
+
+Each tunnel retains one of the existing 64 connection slots. A single 120-second
+absolute deadline starts at admission and covers outer TLS, upgrade, inner TLS
+and inner HTTP; both TLS handshakes also have five-second limits. The inner HTTP
+parser retains its header/body limits and 100-request cap. Shutdown cancels the
+tracked connection without promising a TLS or WebSocket closing handshake;
+already dispatched database jobs still drain with their lease and slot.
+
+For a TLS-terminating proxy, the outer public certificate and the inner CCP
+CA/name/instance binding are separate trust decisions. An independently trusted
+invitation must supply the inner anchor; do not learn it from an unverified proxy
+response. Hosted browser code and admin keys still trust that proxy. Inner mTLS
+protects the machine channel, and does not make proxy-served administration
+private from the proxy.
+
+No Cloudflare Access policy, DNS, origin-trust configuration or system trust store
+is changed by this option. Public WebSocket/Access/origin behavior needs a real
+Cloudflare rehearsal before a hosted setup is considered supported. Preserve
+verified origin HTTPS and never substitute forwarded identity headers for the
+inner TLS peer.
+
 ## Listener and authority table
 
 | Listener | Method and path | Authority and result |
