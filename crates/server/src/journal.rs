@@ -97,10 +97,34 @@ pub struct JournalHandle {
     path: PathBuf,
     sender: mpsc::SyncSender<JournalCommand>,
     last_error: Arc<Mutex<Option<String>>>,
+    _directory_lease: Option<crate::directory_mode::DirectoryLease>,
 }
 
 impl JournalHandle {
     pub fn start(path: PathBuf) -> anyhow::Result<Self> {
+        Self::start_inner(path, None)
+    }
+
+    pub(crate) fn start_guarded(
+        path: PathBuf,
+        lease: crate::directory_mode::DirectoryLease,
+    ) -> anyhow::Result<Self> {
+        if !lease.allows_native() {
+            anyhow::bail!("legacy journal requires a native directory lease");
+        }
+        let parent = path
+            .parent()
+            .context("journal path has no data directory")?;
+        if std::fs::canonicalize(parent)? != lease.directory() {
+            anyhow::bail!("journal path does not match its native directory lease");
+        }
+        Self::start_inner(path, Some(lease))
+    }
+
+    fn start_inner(
+        path: PathBuf,
+        directory_lease: Option<crate::directory_mode::DirectoryLease>,
+    ) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create journal directory at {}", parent.display())
@@ -119,7 +143,11 @@ impl JournalHandle {
             .name("ccp-journal-writer".to_string())
             .spawn({
                 let last_error = Arc::clone(&last_error);
-                move || run_journal_writer(file, receiver, last_error)
+                let writer_lease = directory_lease.clone();
+                move || {
+                    let _directory_lease = writer_lease;
+                    run_journal_writer(file, receiver, last_error);
+                }
             })
             .context("failed to spawn journal writer thread")?;
 
@@ -127,6 +155,7 @@ impl JournalHandle {
             path,
             sender,
             last_error,
+            _directory_lease: directory_lease,
         })
     }
 

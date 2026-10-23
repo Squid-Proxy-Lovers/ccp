@@ -13,12 +13,11 @@ make test
 cargo test --workspace --locked -- --list
 ```
 
-The normal workspace run currently executes **67 Rust cases**: 53 server, eight
-client, and six integration tests. The quality suite adds **12 Python cases**,
-and the Docker installer suite adds **six Python cases**. The nightly suite checks
-artifact integrity, publication recovery, and real-installer channel selection.
-The CLI suite separately passes 59 assertions;
-MCP and persistence compatibility are two end-to-end smoke suites.
+Use `--list` for the current Rust case inventory as workspace features are added.
+The quality suite includes tool/accounting regressions and workspace MCP config,
+argument, child-process and selection-handle tests. The Docker installer suite is
+separate. The nightly suite checks artifact integrity, publication recovery and
+real-installer channel selection. The CLI suite separately checks 59 assertions.
 
 The workspace contains server and client library tests plus the Rust integration
 suite. Protocol and database compatibility are separate versioned contracts.
@@ -52,9 +51,22 @@ make mcp-smoke
 make compat
 ```
 
-The MCP smoke uses actual FastMCP transport, CLI processes, and the TLS server.
-It exercises discovery, help/session resources, enrollment, writes, append, read,
-and briefing. CI runs it across supported Python/FastMCP combinations.
+The MCP command runs both the native and workspace smoke suites using actual
+FastMCP transport, CLI processes and TLS servers. The native suite exercises
+discovery, help/session resources, enrollment, writes, append, read and briefing.
+The workspace suite exercises the stdio entry point, issued selection handles,
+independent callers even on one connection, explicit targets, scoped recovery,
+current revocation/disable, process restart and private-state cleanup. It also
+runs nine content readers through actual stdio/CLI/TLS, including historical
+and archived entry rules, large escaped snapshots and scoped recovery without
+authority union. CI runs both across supported Python/FastMCP combinations.
+It also runs private-file shelf/book creation through MCP, including pending
+entry guards, exact explicit targets across default changes, current denials,
+recovery isolation and temporary-file cleanup. Entry tests exercise all five
+actions, safe metadata projections, exact guarded retry after local save failure,
+read-only cancellation, large private payloads, recovered-profile resolution and
+refusal of stale CLI guards before action. SDK input/error privacy checks cover
+both creation and entry-intent envelopes.
 
 The compatibility smoke enrolls clients, verifies the existing wire codec,
 reads/appends context, and reopens persisted data. For a dependency update, test
@@ -113,3 +125,205 @@ in [recorded benchmarks](../docs/benchmarks.md).
 Report machine, revision, build settings, concurrency, and workload when sharing
 results. Interpret throughput using those run settings. Benchmarks and the opt-in
 load tests are outside the quick quality gate.
+
+Shelf lifecycle foundation tests cover scoped archive/restore, hidden descendant
+reads/history/writes, preserved ownership and individual archives, revision CAS,
+exact historical replay, name collisions and injected audit/receipt failures.
+They also check archive-summary paging, current key revocation, legacy refusal,
+schema-17 backfill, file reopen and independent stale database writers. Shelf
+CLI/MCP shelf state/archive-summary readers are also exercised; shelf transitions
+remain admin HTTPS only, and payload purge remains subsequent work.
+Six additional shelf HTTP cases use real HTTPS/mTLS to cover scoped transitions,
+historical retries, restore collisions, storage rollback, metadata privacy,
+current revocation/archive/disable, strict request types, listener separation,
+paging and unchanged body bounds.
+
+Shelf reader adapter tests validate known target/revision/name/page fields and
+drop unknown response additions before typed output. Real CLI/TLS and MCP flows
+check active-list omission, archive metadata privacy/paging, restoration without
+ownership/history changes, due renewal versus denied reads, pending-intent
+preservation, scoped recovery and global disable without permission union.
+
+Operation-ledger tests verify receipt immutability and retention after test-only
+payload removal, exact replay without recreating entries, current read/write
+checks, cancellation exclusion, genuine schema-18 foreign-key migration, reopen
+without recopy, rollback after a schema-record failure and enforced-FK migration.
+No production payload purge is introduced by these tests or the schema change.
+
+Guidance foundation tests cover live saves, source/precedence metadata, scoped
+publishers, current key revocation, archived-workspace freezes, exact historical
+retries, revision conflicts and explicit empty saves. Nine cases also exercise
+8192-byte UTF-8/control boundaries, immutable history/proofs, injected transaction
+failures, corrupted published heads, file reopen and independent stale writers.
+Migration failure also rolls back all new guidance tables and retains the old
+schema record and workspace data before a successful retry.
+These test the internal store; separate automatic MCP delivery tests are below.
+Desktop editors remain subsequent work.
+
+Eight guidance HTTP cases exercise actual HTTPS/mTLS reads and scoped saves,
+source/publisher labels, scoped admin demotion, cross-workspace privacy, current
+revocation/disable, archived-workspace behavior, historical retries and conflicts,
+empty clearing, malformed nested scope/identity claims, listener separation,
+8192-byte UTF-8/control bounds and unchanged encoded budgets. Injected audit and
+missing-published-version faults verify atomic rollback and sanitized failures.
+
+Client guidance tests validate known source/revision/publisher metadata, explicit
+empty versus unpublished states, exact UTF-8/control bounds, safe additive-field
+projection and malformed-response errors. Six real TLS/library/CLI cases cover
+profile/selection stability, current scope/disable/archive, scoped recovery,
+pending renewal/admission/entry preservation and due renewal only after an
+authorized workspace read. Global-only grantless reads never initiate renewal.
+Corrupt publisher metadata delivered over real TLS fails before renewal or output.
+
+Twelve entry-purge core cases cover scoped authority in active and archived
+workspaces, explicit confirmation, individual archive/revision checks, stale
+restore/rearchive requests, instance-key scope, exact historical retries/current
+revocation, maximum revision, legacy refusal, immutable purge proof and UUID
+reuse prevention. Abort and ignored-write faults verify rollback of proof,
+payload/history removal and audit. Earlier write receipts/cancellation fences,
+siblings and guidance survive; file reopen, stale independent writers and failed
+schema-21 migration are covered. The admin HTTPS adapter is covered below; client/MCP purge commands remain later.
+
+Six purge HTTP cases use actual HTTPS/mTLS to verify explicit confirmation and
+revision conflicts, exact historical receipts, scoped owner/admin authority in
+archived workspaces, current key revocation/demotion, unchanged client powers,
+strict inputs and request budgets, and audit abort/ignore rollback with sanitized
+errors. Original client mutation outcomes remain resolvable after purge without
+recreating payload; sibling content and retained proofs are checked.
+
+MCP guidance tests validate provenance, exact bounds/empty states, closed scope
+and publisher kinds, safe additive-field projection, UTF-8 failures, captured
+selection defaults and strict pre-SDK request guards. Real stdio/CLI/TLS exercises
+current publication/updates/clear/archive, profile/selection preservation, scoped
+recovery, grant revocation and global disable. Tool discovery now expects 24
+tools, preserving every existing capability and adding explicit guidance refresh.
+
+Guidance-context tests check credential-only snapshots, exact current instance/
+client/credential/grant IDs, unchanged guidance on re-admission with a new grant,
+revocation/disable/expiry/foreign scope, strict mTLS-only routing and no caller
+identity claims. Client units reject mismatched IDs, grant presence and unknown
+context formats. Actual TLS/library/CLI cases exercise opt-in output without
+changing the default shape, renewal and pending-renewal binding updates, and
+malformed guidance failing before new renewal or private-text output.
+
+Automatic MCP guidance tests verify initial/changed/cleared boards, fresh reads,
+independent/shared/stateless callers, captured operation scopes, credential/grant
+changes, equal/lower-revision replacement, bounded LRU state, scope limits,
+aggregate consistency and byte/deadline bounds. Errors/cancellation and successful
+primary results remain intact; partial failures or serialization faults do not
+advance stamps or expose cached prose. Real stdio/CLI/TLS checks model-visible
+extra text blocks alongside unchanged primary structured data, credential renewal,
+a fixture-seeded replacement grant for the same credential, scoped recovery, archived reads and
+disable. A malformed guidance publisher after a successful shelf creation yields
+a warning and exactly one committed shelf. Four supported SDK environments run
+the same bridge units and all five workspace smoke groups.
+
+
+Nineteen timed-retention core cases verify the manual default, current scoped
+administrators/keys, explicit confirmation, policy revision conflicts and exact
+historical retries, fresh full windows for existing archives, restore/rearchive,
+workspace pause/resume/restart, backward clock and signed maximum bounds. They
+also check shelf overlays, bounded due cleanup, issuer-key revocation without
+undoing workspace policy, stale clocks, protected disable at the final revision,
+retained receipts/siblings/guidance, immutable proofs and UUID tombstones. Abort
+and ignored-write faults in policy, head, clocks, audit, workspace state and purge
+steps roll back all captured changes. A schema-record fault rolls back every new
+table before retry. No public setting or running cleanup worker is claimed.
+
+
+Retention adapter tests use actual HTTPS/mTLS to verify current policy reads,
+scoped confirmed changes, strict required-null duration, CAS/exact historical
+receipts, archived configuration freeze, demotion/revocation, request bounds and
+audit-fault rollback. Four live-server worker cases enable through HTTPS and
+observe real asynchronous cleanup: manual default, fresh existing windows, old
+write receipts without resurrection, disable/re-enable, pause across restart,
+restore/rearchive and injected purge failure/retry. Runtime unit cases verify
+single-job budgeting, blocked-SQL shutdown/directory exclusion, per-workspace
+failure isolation and bounded cursor pagination. Scheduling metadata is not
+authority; the core still rechecks every deletion transaction.
+
+
+Browser-session tests cover per-session HMAC CSRF, origin binding, absolute expiry,
+replacement/logout isolation, table/key/workspace limits, reserved instance slots,
+expired pruning and poisoned-state failure. Eight actual TLS cases exercise
+key exchange/cookie attributes/no secret JSON, current owner/admin/instance scope,
+existing cookie-authenticated content/guidance/retention routes, CSRF/Origin denial,
+strict shapes/limits, mixed or duplicate credentials, old Bearer/mTLS separation,
+key expiry/revocation/demotion, logout and process restart with reusable keys.
+The login page and bookmark fragment exchange are built and covered by the
+Node/Rust suites below. Browser-engine verification is currently an ad-hoc
+development check, rather than a repository automation gate.
+
+
+### Workspace desktop panel
+
+`node --test tests/workspace_panel.mjs` is included in `make quality-tests`.
+It checks immutable entry intents and session bindings, scope/archive edit
+availability, fragment scrubbing, safe numeric revisions and sanitized no-retry
+transport failures using Node’s built-in runner (Node18+; no npm dependencies).
+The Rust workspace HTTP suite additionally checks bundled HTTPS-only assets,
+security headers and cookie-authenticated editing/history/conflict/archive
+privacy. These tests do not substitute for browser-engine testing. See the
+[desktop/session guide](../docs/workspace-browser-session.md#use-the-desktop-panel).
+
+
+The panel Node suite also checks guidance publisher scopes, immutable zero-base
+save intents, exact Unicode/empty text and UTF-8 limits, echoed receipt binding
+and global-first response scopes. Real cookie/TLS guidance cases cover live
+save/replay/stale CAS, publisher attribution, global versus workspace powers,
+archive freezing and empty-board clearing. Browser editor/draft/failure checks
+remain ad-hoc development verification.
+
+
+Settings model tests cover lifecycle owner/instance scope, one-shot endpoint
+binding without a fabricated nonce, explicit duration units/confirmation/mode
+transitions, policy validation and exact retention receipts. Cookie/TLS settings
+cases verify global read versus scoped configuration, owner/global lifecycle
+powers versus admin retention powers, archived freezes and historical receipts.
+
+Owner team/key browser-session cases cover scoped roster/creation, archived security
+and live cookie invalidation on role/key revocation; panel Node cases cover one-shot
+security actions, session binding and optional expiry.
+
+Owner-transfer browser-session tests cover all former-owner cookie invalidation,
+recipient role refresh on an existing session, scoped/archived refusal and global
+role preservation. Panel Node tests bind one-shot transfer intent to exact recipient,
+explicit delivery confirmation and the original browser session.
+
+Invitation inventory tests cover scoped UUID pagination, status parity, current
+issuer/key authority, no secret-bearing response fields, strict cookie/TLS request
+handling, terminal expiry under clock rollback, lookahead exclusion and atomic
+rollback of page observations. They add no browser-engine workflow claim.
+
+Panel invitation model checks cover exact-range metadata, scoped archive security,
+immutable one-shot deadlines/targets and session binding. The existing asset TLS
+test also verifies the bundled invitation module.
+
+Initial-window tests cover real persisted eligibility rather than inventory
+inference, revoked admission history, closure without a link, atomic rollback,
+clock rollback/capacity terminality and actual enrollment over cookie/TLS. Panel
+model tests cover explicit optional bounds, confirmation and one-shot session binding.
+
+Recovery inventory tests cover exact client and nullable scope paging, authority
+ceilings, status parity, terminal expiry, lookahead exclusion and page rollback.
+Client-access model tests distinguish credential recovery from fresh readmission,
+including archive/disable boundaries, frozen scope/body and session binding.
+
+The desktop archive tests cover immutable shelf/purge operations, exact receipt
+binding, unsafe revisions, scoped authority, archived-workspace manual purge and
+body-free shelf pagination. The bundled-asset TLS test includes the archive UI.
+
+The internal work-status tests cover authenticated client ownership, label/slot
+separation, fixed freshness boundaries without expiry deletion, exact historical
+retries after clear, current permissions, archive/disable/revocation, bounded
+paging and live-slot limits. SQL abort/ignore injection verifies whole-operation
+rollback; file reopen and concurrent CAS cases preserve tombstones and receipts.
+Schema migration tests cover preservation and atomic refusal; runtime adapters
+are not part of this core slice.
+
+Status HTTP/TLS tests cover strict set/clear variants, bounded reads, current
+client identity and read/write scope, real credential renewal, writer-grant
+revocation, archived reads, historical clear/replay and sanitized atomic faults.
+Cookie tests keep read authorization/CSRF separate from client publication.
+The reported-work model validates scoped pages, UTF-8 bounds and server-observed
+freshness without inferring contact or completion.

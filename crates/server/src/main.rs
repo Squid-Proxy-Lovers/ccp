@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 use std::io::{self, Write};
+use std::net::SocketAddr;
+use std::path::PathBuf;
+use uuid::Uuid;
 
 use anyhow::Context;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -10,7 +13,17 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server <session-name>
   server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
-  server health <session>"#;
+  server health <session>
+  server workspace-serve --data-dir <DIR> [--activate-workspace] [--https-listen <ADDR>] [--mtls-listen <ADDR>]
+  server workspace-init --data-dir <DIR> --operator <NAME> --workspace <NAME>
+  server workspace-tls-init --data-dir <DIR> --name <DNS_OR_IP> [--name <DNS_OR_IP>...]
+  server workspace-tls-info --data-dir <DIR>
+  server workspace-tls-renew --data-dir <DIR> [--name <DNS_OR_IP>...]
+  server legacy-inspect --data-dir <DIR>
+  server legacy-convert --data-dir <DIR> --destination <NEW_DIR> --expect-source-sha256 <HEX> --operator <NAME> --confirm-offline
+  server admin-info --data-dir <DIR>
+  server reset-instance-key --data-dir <DIR> --principal <UUID> [--ttl-seconds <SECONDS>]
+  server reset-owner-key --data-dir <DIR> --workspace <UUID> [--ttl-seconds <SECONDS>]"#;
 
 #[derive(Parser)]
 #[command(name = "server", args_conflicts_with_subcommands = true)]
@@ -25,6 +38,18 @@ struct Cli {
 enum Command {
     IssueToken(IssueTokenArgs),
     Health(HealthArgs),
+    WorkspaceInit(WorkspaceInitArgs),
+    WorkspaceServe(WorkspaceServeArgs),
+    AdminInfo(LocalDataArgs),
+    /// Observe a stopped native database; never converts or modifies its source.
+    LegacyInspect(LocalDataArgs),
+    /// Convert an offline native schema-2 source into a new workspace instance.
+    LegacyConvert(LegacyConvertArgs),
+    WorkspaceTlsInit(WorkspaceTlsArgs),
+    WorkspaceTlsInfo(LocalDataArgs),
+    WorkspaceTlsRenew(WorkspaceTlsRenewArgs),
+    ResetInstanceKey(ResetInstanceArgs),
+    ResetOwnerKey(ResetOwnerArgs),
 }
 
 #[derive(Args)]
@@ -41,6 +66,99 @@ struct IssueTokenArgs {
     access_level: AccessLevel,
     #[arg(long, value_name = "seconds")]
     ttl: Option<u64>,
+}
+
+#[derive(Args)]
+struct LocalDataArgs {
+    #[arg(long, value_name = "DIR")]
+    data_dir: PathBuf,
+}
+
+#[derive(Args)]
+struct LegacyConvertArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "NEW_DIR")]
+    destination: PathBuf,
+    #[arg(long, value_name = "HEX")]
+    expect_source_sha256: String,
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Create this new global administrator as the initial owner of every imported workspace"
+    )]
+    operator: String,
+    #[arg(
+        long,
+        help = "Confirm that the producing server and tools are stopped; retain the complete source and matching binary"
+    )]
+    confirm_offline: bool,
+}
+
+#[derive(Args)]
+struct WorkspaceServeArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(
+        long,
+        help = "Persist workspace mode; native access will then be refused"
+    )]
+    activate_workspace: bool,
+    #[arg(long, default_value = "127.0.0.1:8443")]
+    https_listen: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:8444")]
+    mtls_listen: SocketAddr,
+    #[arg(
+        long,
+        help = "Enable fixed-path WebSocket carriers for end-to-end CCP TLS on the HTTPS listener"
+    )]
+    websocket_tunnels: bool,
+}
+
+#[derive(Args)]
+struct WorkspaceInitArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "NAME")]
+    operator: String,
+    #[arg(long, value_name = "NAME")]
+    workspace: String,
+}
+
+#[derive(Args)]
+struct WorkspaceTlsArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long = "name", value_name = "DNS_OR_IP", required = true)]
+    names: Vec<String>,
+}
+
+#[derive(Args)]
+struct WorkspaceTlsRenewArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long = "name", value_name = "DNS_OR_IP")]
+    names: Vec<String>,
+}
+
+#[derive(Args)]
+struct ResetInstanceArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "UUID")]
+    principal: Uuid,
+    #[arg(long, value_name = "SECONDS")]
+    ttl_seconds: Option<u64>,
+}
+
+#[derive(Args)]
+struct ResetOwnerArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long, value_name = "UUID")]
+    workspace: Uuid,
+    #[arg(long, value_name = "SECONDS")]
+    ttl_seconds: Option<u64>,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -66,22 +184,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = parse_cli();
 
     if let Some(command) = cli.command {
-        match command {
-            Command::IssueToken(args) => {
-                let token = server::init::issue_enrollment_token(
-                    &args.session,
-                    args.access_level.as_str(),
-                    args.ttl,
-                )?;
-                println!("{}", serde_json::to_string_pretty(&token)?);
-                return Ok(());
-            }
-            Command::Health(args) => {
-                let health = server::init::check_server_health(&args.session)?;
-                println!("{}", serde_json::to_string_pretty(&health)?);
-                return Ok(());
-            }
-        }
+        return execute_command(command).await;
     }
 
     server::run_server(
@@ -90,6 +193,119 @@ async fn main() -> anyhow::Result<()> {
             .context("clap should require a session name when no subcommand is present")?,
     )
     .await
+}
+
+async fn execute_command(command: Command) -> anyhow::Result<()> {
+    match command {
+        Command::WorkspaceServe(args) => serve_workspace(args).await,
+        Command::IssueToken(args) => print_json(&server::init::issue_enrollment_token(
+            &args.session,
+            args.access_level.as_str(),
+            args.ttl,
+        )?),
+        Command::Health(args) => print_json(&server::init::check_server_health(&args.session)?),
+        Command::WorkspaceInit(args) => {
+            let result = server::local_admin::bootstrap(
+                &args.data.data_dir,
+                &args.operator,
+                &args.workspace,
+            )?;
+            print_json(&serde_json::json!({
+                "instance_id": result.instance_id.to_string(),
+                "workspace_id": result.workspace_id.to_string(),
+                "principal_id": result.instance_key.principal_id.to_string(),
+                "instance_admin_key": {"id": result.instance_key.id.to_string(), "secret": result.instance_key.secret()},
+                "workspace_owner_key": {"id": result.owner_key.id.to_string(), "secret": result.owner_key.secret()}
+            }))
+        }
+        Command::WorkspaceTlsInit(args) => print_json(&server::instance_tls::initialize(
+            &args.data.data_dir,
+            &args.names,
+        )?),
+        Command::WorkspaceTlsRenew(args) => {
+            let names = if args.names.is_empty() {
+                None
+            } else {
+                Some(args.names.as_slice())
+            };
+            print_json(&server::instance_tls::renew(&args.data.data_dir, names)?)
+        }
+        Command::WorkspaceTlsInfo(args) => print_json(&server::instance_tls::info(&args.data_dir)?),
+        Command::LegacyInspect(args) => {
+            print_json(&server::legacy_inspection::inspect(&args.data_dir)?)
+        }
+        Command::LegacyConvert(args) => print_conversion(server::native_conversion::convert(
+            &server::native_conversion::ConversionOptions {
+                data_dir: args.data.data_dir,
+                destination: args.destination,
+                expected_source_sha256: args.expect_source_sha256,
+                operator: args.operator,
+                confirm_offline: args.confirm_offline,
+            },
+        )?),
+        Command::AdminInfo(args) => print_json(&server::local_admin::info(&args.data_dir)?),
+        Command::ResetInstanceKey(args) => print_reset(server::local_admin::reset_key(
+            &args.data.data_dir,
+            server::foundation::LocalKeyTarget::InstancePrincipal(args.principal),
+            args.ttl_seconds,
+        )?),
+        Command::ResetOwnerKey(args) => print_reset(server::local_admin::reset_key(
+            &args.data.data_dir,
+            server::foundation::LocalKeyTarget::WorkspaceOwner(args.workspace),
+            args.ttl_seconds,
+        )?),
+    }
+}
+
+async fn serve_workspace(args: WorkspaceServeArgs) -> anyhow::Result<()> {
+    let server = server::workspace_http::WorkspaceServer::bind(server::workspace_http::Config {
+        data_dir: args.data.data_dir,
+        https_listen: args.https_listen,
+        mtls_listen: args.mtls_listen,
+        activate_workspace: args.activate_workspace,
+    })
+    .await?
+    .with_websocket_tunnels(args.websocket_tunnels);
+    print_json(&server.startup()?)?;
+    let report = server
+        .run_until(async {
+            tokio::signal::ctrl_c()
+                .await
+                .context("cannot listen for shutdown")
+        })
+        .await?;
+    print_json(&report)
+}
+
+fn print_reset(result: server::foundation::LocalKeyReset) -> anyhow::Result<()> {
+    let workspace = match result.scope {
+        server::foundation::AdminKeyScope::Instance => None,
+        server::foundation::AdminKeyScope::Workspace(id) => Some(id.to_string()),
+    };
+    print_json(&serde_json::json!({
+        "principal_id": result.key.principal_id.to_string(), "workspace_id": workspace,
+        "key_id": result.key.id.to_string(), "secret": result.key.secret(),
+        "expires_at": result.expires_at, "revoked_keys": result.revoked_keys
+    }))
+}
+
+fn print_conversion(result: server::native_conversion::ConversionResult) -> anyhow::Result<()> {
+    let workspaces=result.workspaces.iter().map(|w|serde_json::json!({
+        "workspace_id":w.id.to_string(),"name":w.name,"owner_key_id":w.owner_key.id.to_string(),"owner_key":w.owner_key.secret()
+    })).collect::<Vec<_>>();
+    print_json(&serde_json::json!({"receipt":result.receipt,
+        "principal_id":result.instance_key.principal_id.to_string(),
+        "instance_admin_key":{"id":result.instance_key.id.to_string(),"secret":result.instance_key.secret()},
+        "workspaces":workspaces
+    })).map_err(|_error|server::native_conversion::ConversionError::PublicationUnconfirmed.into())
+}
+
+fn print_json(value: &impl serde::Serialize) -> anyhow::Result<()> {
+    let serialized = serde_json::to_string_pretty(value)?;
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{serialized}")?;
+    stdout.flush()?;
+    Ok(())
 }
 
 fn parse_cli() -> Cli {

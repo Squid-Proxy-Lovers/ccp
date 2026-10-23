@@ -3,6 +3,14 @@
 Use CCP from Claude, Cursor, Codex, or another MCP-compatible host. The Python
 FastMCP bridge invokes the Rust client for data operations.
 
+This guide covers the supported native `ccp-mcp-server` entry point. The separate,
+unreleased [workspace MCP bridge](../docs/workspace-mcp.md) exposes workspace
+discovery, explicit caller selections, content reads (including shelf lifecycle
+state and archived summaries), shelf/book creation and
+durable entry mutations with guarded outcome recovery and
+[explicit status messages](../docs/workspace-status.md) through
+`ccp-workspace-mcp`.
+
 [Documentation index](../docs/README.md) · [Tool-call reference](../docs/tool-call-api.md)
 
 ## Install

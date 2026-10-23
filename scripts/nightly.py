@@ -11,6 +11,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import release_contract
+
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64")
 ASSETS = tuple(
@@ -51,7 +53,8 @@ def prepare(dist: Path, sha: str) -> None:
         "artifacts": list(ASSETS),
     }
     (dist / "build-info.json").write_text(json.dumps(metadata, indent=2) + "\n")
-    names = (*ASSETS, "build-info.json")
+    release_contract.prepare(ROOT, dist, sha)
+    names = (*ASSETS, "build-info.json", release_contract.MANIFEST)
     (dist / "SHA256SUMS").write_text("".join(f"{digest(dist / name)}  {name}\n" for name in names))
 
 
@@ -59,7 +62,7 @@ def verify(dist: Path, sha: str) -> None:
     validate_sha(sha)
     if json.loads((dist / "build-info.json").read_text())["source_sha"] != sha:
         raise ValueError("Release artifacts belong to another commit")
-    expected = set((*ASSETS, "build-info.json"))
+    expected = set((*ASSETS, "build-info.json", release_contract.MANIFEST))
     seen = set()
     for line in (dist / "SHA256SUMS").read_text().splitlines():
         match = re.fullmatch(r"([0-9a-f]{64})  ([a-zA-Z0-9_.-]+)", line)
@@ -72,6 +75,12 @@ def verify(dist: Path, sha: str) -> None:
         seen.add(name)
     if seen != expected:
         raise ValueError("Incomplete checksum manifest")
+    manifest = release_contract.decode(
+        release_contract.read_file(dist / release_contract.MANIFEST, 64 * 1024)
+    )
+    if manifest.source_sha != sha:
+        raise ValueError("Release contract belongs to another commit")
+    manifest.verify_files(dist, release_contract.ASSETS)
 
 
 def promote(image: str, tag: str) -> None:
@@ -94,7 +103,13 @@ def publish(dist: Path, archive: Path) -> None:  # noqa: C901
         raise ValueError("Nightlies can only be published by scheduled/manual main builds")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("Invalid GitHub repository")
+    if repo != release_contract.REPOSITORY:
+        raise ValueError("Nightly publication requires the official repository")
     verify(dist, sha)
+    manifest = release_contract.decode(
+        release_contract.read_file(dist / release_contract.MANIFEST, 64 * 1024)
+    )
+    release_contract.verify_provenance(dist, manifest, "refs/heads/main")
     pages = json.loads(
         run(
             "gh",
@@ -183,7 +198,16 @@ def publish(dist: Path, archive: Path) -> None:  # noqa: C901
         "--repo",
         repo,
         "--clobber",
-        *(str(dist / name) for name in (*ASSETS, "build-info.json", "SHA256SUMS")),
+        *(
+            str(dist / name)
+            for name in (
+                *ASSETS,
+                "build-info.json",
+                "SHA256SUMS",
+                release_contract.MANIFEST,
+                release_contract.PROVENANCE,
+            )
+        ),
     )
     run("docker", "tag", local, f"{image}:{tag}")
     run("docker", "push", f"{image}:{tag}")

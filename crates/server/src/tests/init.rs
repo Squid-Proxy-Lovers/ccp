@@ -307,3 +307,104 @@ fn common_name_prefers_comma_then_newline_terminators() {
     assert_eq!(extract_cn_from_pem("Subject: CN=unterminated"), None);
     assert_eq!(extract_cn_from_pem("no common name"), None);
 }
+
+#[test]
+fn runtime_session_can_start_when_a_new_workspace_has_the_same_name() {
+    use crate::foundation::{AccessStore, Actor};
+
+    let _env_guard = test_env_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let path = temp_db_path("runtime-name-collision");
+    init_sqlite(&path).unwrap();
+    let mut connection = Connection::open(&path).unwrap();
+    let mut store = AccessStore::new(&mut connection).unwrap();
+    let admin = store.bootstrap_admin("operator", 1).unwrap();
+    let new_workspace = store
+        .create_workspace(Actor::Admin(admin), "alpha", admin, 1)
+        .unwrap();
+    let session = ensure_runtime_session(&mut connection, "alpha").unwrap();
+    let mapped: String = connection
+        .query_row(
+            "SELECT id FROM ccp_workspaces WHERE legacy_session_id = ?1",
+            [session],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_ne!(mapped, new_workspace.to_string());
+    assert_eq!(
+        ensure_runtime_session(&mut connection, "alpha").unwrap(),
+        session
+    );
+    drop(connection);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn concurrent_session_startups_preserve_one_instance_and_schema_version() {
+    use std::sync::{Arc, Barrier};
+
+    let path = temp_db_path("concurrent-init");
+    init_sqlite(&path).unwrap();
+    let barrier = Arc::new(Barrier::new(8));
+    let workers: Vec<_> = (0..8)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..10 {
+                    init_sqlite(&path).unwrap();
+                }
+            })
+        })
+        .collect();
+    for worker in workers {
+        worker.join().unwrap();
+    }
+    let connection = Connection::open(&path).unwrap();
+    let instances: i64 = connection
+        .query_row("SELECT COUNT(*) FROM ccp_instance", [], |row| row.get(0))
+        .unwrap();
+    let versions: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM schema_version WHERE version = ?1",
+            [SCHEMA_VERSION],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(instances, 1);
+    assert_eq!(versions, 1);
+    drop(connection);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn current_schema_reopen_keeps_native_auth_tables_and_their_existing_guards() {
+    let path = temp_db_path("native-role-reopen");
+    init_sqlite(&path).unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TRIGGER retained_native_role_probe BEFORE INSERT ON auth_tokens BEGIN SELECT RAISE(ABORT,'owned role probe'); END;").unwrap();
+    let before: Vec<(String,String)> = db.prepare("SELECT name,sql FROM sqlite_master WHERE name IN ('auth_tokens','issued_client_certs','retained_native_role_probe') ORDER BY name").unwrap()
+        .query_map([],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert_eq!(before.len(), 3);
+    drop(db);
+    for _ in 0..3 {
+        init_sqlite(&path).unwrap();
+    }
+    let db = Connection::open(&path).unwrap();
+    let after: Vec<(String,String)> = db.prepare("SELECT name,sql FROM sqlite_master WHERE name IN ('auth_tokens','issued_client_certs','retained_native_role_probe') ORDER BY name").unwrap()
+        .query_map([],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert_eq!(after, before);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM schema_version WHERE version=?1",
+            [SCHEMA_VERSION],
+            |r| r.get::<_, u32>(0)
+        )
+        .unwrap(),
+        1
+    );
+    drop(db);
+    fs::remove_file(path).unwrap();
+}

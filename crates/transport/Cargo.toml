@@ -1,0 +1,17 @@
+[package]
+name = "ccp-transport"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tokio = { version = "1.48", features = ["io-util", "time"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+
+[dev-dependencies]
+tokio = { version = "1.48", features = ["full", "test-util"] }
+
+[lints]
+workspace = true
