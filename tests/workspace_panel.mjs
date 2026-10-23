@@ -81,6 +81,31 @@ test('wire never retries ambiguous writes and never echoes server-controlled err
   } finally { globalThis.fetch = original; }
 });
 
+test('rejected sign-in names the admin key while protected requests retain the session warning', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  try {
+    globalThis.fetch = async () => {
+      calls += 1;
+      return {ok: false, status: 401, json: async () => ({api_version: 1, error: {code: 'PRIVATE_SERVER_DETAIL'}})};
+    };
+    await assert.rejects(wire('/api/v1/admin/session/login', JSON.stringify({key: 'PRIVATE_ADMIN_KEY'}), 'login'), error => {
+      assert.equal(error.status, 401);
+      assert.match(error.message, /admin key was not accepted/);
+      assert.doesNotMatch(error.message, /unsaved|PRIVATE_ADMIN_KEY|PRIVATE_SERVER_DETAIL/);
+      return true;
+    });
+    assert.equal(calls, 1);
+    await assert.rejects(wire('/api/v1/admin/workspaces'), error => {
+      assert.equal(error.status, 401);
+      assert.match(error.message, /Copy unsaved work, then sign in again/);
+      assert.doesNotMatch(error.message, /PRIVATE_ADMIN_KEY|PRIVATE_SERVER_DETAIL/);
+      return true;
+    });
+    assert.equal(calls, 2);
+  } finally { globalThis.fetch = original; }
+});
+
 test('guidance publishing follows the key scope and active workspace independently of read access', () => {
   const owner = session();
   const ws = {id: 'workspace', archived: false};
