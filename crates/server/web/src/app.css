@@ -145,6 +145,53 @@
   }
 }
 
+/* Sign-in: a drifting dot grid, a pointer spotlight that brightens it, a staggered
+   entrance and a living logo. All motion stops under reduced motion. */
+.login-dots,
+.login-spot {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image: radial-gradient(circle at center, var(--dot) 1px, transparent 1.6px);
+  background-size: 22px 22px;
+}
+.login-dots {
+  --dot: color-mix(in oklch, var(--foreground) 16%, transparent);
+  mask-image: radial-gradient(ellipse 65% 60% at 50% 45%, #000 15%, transparent 80%);
+}
+.login-spot {
+  --dot: color-mix(in oklch, var(--foreground) 55%, transparent);
+  mask-image: radial-gradient(240px circle at var(--x, 50%) var(--y, -999px), #000, transparent 70%);
+  opacity: var(--spot, 0);
+  transition: opacity 0.5s ease;
+}
+@keyframes dots-drift {
+  to { background-position: 220px 110px; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); filter: blur(6px); }
+}
+@keyframes logo-blink {
+  0%, 93%, 100% { transform: scaleY(1); }
+  96% { transform: scaleY(0.1); }
+}
+@keyframes logo-sway {
+  0%, 100% { transform: rotate(-7deg); }
+  50% { transform: rotate(7deg); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .login-dots,
+  .login-spot { animation: dots-drift 90s linear infinite; }
+  .rise { animation: rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+  .rise-2 { animation-delay: 0.08s; }
+  .rise-3 { animation-delay: 0.16s; }
+  .rise-4 { animation-delay: 0.3s; }
+  .logo-alive .logo-eye { transform-box: fill-box; transform-origin: center; animation: logo-blink 5.5s ease-in-out infinite 1.2s; }
+  .logo-alive .logo-tentacle { transform-box: fill-box; transform-origin: top center; animation: logo-sway 3.4s ease-in-out infinite; }
+  .logo-alive .logo-tentacle-2 { animation-delay: -1.1s; }
+  .logo-alive .logo-tentacle-3 { animation-delay: -2.2s; }
+}
+
 /* Indeterminate request bar under the header; appears only after a short delay. */
 @keyframes progress-slide {
   from { transform: translateX(-100%); }

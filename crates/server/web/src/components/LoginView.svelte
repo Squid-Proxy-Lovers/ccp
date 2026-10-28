@@ -1,7 +1,7 @@
 <script lang="ts">
   // Sign-in. The key is cleared from the field as soon as it is submitted, and a
   // reusable link is only produced on request because it carries the key itself.
-  import {Eye, EyeOff, Link2, ShieldCheck, CircleAlert} from '@lucide/svelte';
+  import {Eye, EyeOff, Link2, ShieldCheck, CircleAlert, ArrowRight} from '@lucide/svelte';
   import Button from '../lib/ui/Button.svelte';
   import Input from '../lib/ui/Input.svelte';
   import Field from '../lib/ui/Field.svelte';
@@ -18,6 +18,36 @@
   let version = $state('');
   let keyInput = $state<HTMLInputElement | null>(null);
   let linkInput = $state<HTMLInputElement | null>(null);
+  let card = $state<HTMLDivElement | null>(null);
+  let backdrop = $state<HTMLDivElement | null>(null);
+  const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+
+  // Spotlight: the pointer position goes to CSS variables through the CSSOM
+  // (allowed by the CSP), at most once per frame. Off for touch and reduced motion.
+  $effect(() => {
+    if (!backdrop || reduced.matches) return;
+    const node = backdrop;
+    let frame = 0;
+    const move = (event: PointerEvent) => {
+      if (event.pointerType !== 'mouse') return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        node.style.setProperty('--x', `${event.clientX}px`);
+        node.style.setProperty('--y', `${event.clientY}px`);
+        node.style.setProperty('--spot', '1');
+      });
+    };
+    const leave = () => node.style.setProperty('--spot', '0');
+    window.addEventListener('pointermove', move);
+    document.documentElement.addEventListener('pointerleave', leave);
+    return () => { cancelAnimationFrame(frame); window.removeEventListener('pointermove', move); document.documentElement.removeEventListener('pointerleave', leave); };
+  });
+
+  function shake() {
+    if (reduced.matches) return;
+    card?.animate([{transform: 'translateX(0)'}, {transform: 'translateX(-7px)'}, {transform: 'translateX(6px)'}, {transform: 'translateX(-4px)'}, {transform: 'translateX(2px)'}, {transform: 'translateX(0)'}],
+      {duration: 420, easing: 'cubic-bezier(0.36, 0.07, 0.19, 0.97)'});
+  }
 
   $effect(() => { keyInput?.focus(); });
   // Public, authority-free metadata: which server this is.
@@ -30,7 +60,7 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
     const value = key.trim();
-    if (!value) { error = 'Enter an admin key.'; keyInput?.focus(); return; }
+    if (!value) { error = 'Enter an admin key.'; shake(); keyInput?.focus(); return; }
     key = '';
     link = '';
     error = '';
@@ -38,6 +68,7 @@
       try { await app.login(value); }
       catch (failure) {
         error = (failure as Error).message;
+        shake();
         keyInput?.focus();
       }
     }, 'login');
@@ -55,13 +86,17 @@
   }
 </script>
 
-<div class="relative flex min-h-svh flex-col items-center justify-center gap-6 bg-muted/40 p-6">
-  <div class="absolute top-4 right-4"><Appearance /></div>
-  <div class="flex items-center gap-2.5">
-    <Logo class="size-9" />
+<div class="relative isolate flex min-h-svh flex-col items-center justify-center gap-6 overflow-hidden bg-background p-6">
+  <div bind:this={backdrop} class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="login-dots"></div>
+    <div class="login-spot"></div>
+  </div>
+  <div class="absolute top-4 right-4 z-10"><Appearance /></div>
+  <div class="rise flex items-center gap-2.5">
+    <Logo class="size-9" alive />
     <span class="text-lg font-semibold tracking-tight">CCP</span>
   </div>
-  <div class="w-full max-w-sm rounded-xl border bg-card p-6 shadow-sm">
+  <div bind:this={card} class="rise rise-2 w-full max-w-sm rounded-xl border bg-card/90 p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-12px_rgb(0_0_0/0.18)] backdrop-blur-sm dark:shadow-[0_0_0_1px_rgb(255_255_255/0.02),0_16px_40px_-16px_rgb(0_0_0/0.9)]">
     <div class="mb-6 space-y-1.5">
       <h1 id="page-title" tabindex="-1" class="text-xl font-semibold tracking-tight outline-none">Sign in</h1>
       <p class="text-sm text-muted-foreground">Use an instance or workspace admin key. The key decides which workspaces and actions you can use.</p>
@@ -84,7 +119,9 @@
           </p>
         {/if}
       </div>
-      <Button type="submit" class="w-full" busy={app.working('login') || app.working('boot')}>Sign in</Button>
+      <Button type="submit" class="group w-full" busy={app.working('login') || app.working('boot')}>
+        Sign in <ArrowRight class="transition-transform duration-200 group-hover:translate-x-0.5" />
+      </Button>
       <Button variant="outline" class="w-full" onclick={copyLink}><Link2 /> Copy reusable login link</Button>
     </form>
     {#if link}
@@ -95,9 +132,9 @@
       </div>
     {/if}
   </div>
-  <p class="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
+  <p class="rise rise-3 max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
     <ShieldCheck class="mr-1 inline size-3.5 -translate-y-px align-middle text-destructive" aria-hidden="true" />
     A reusable link contains your key, so anyone with it has that key's access. Keep it private and revoke the key to invalidate it.
   </p>
-  {#if version}<p class="absolute bottom-4 font-mono text-[11px] text-muted-foreground">ccp-server {version}</p>{/if}
+  {#if version}<p class="rise rise-4 absolute bottom-4 font-mono text-[11px] text-muted-foreground">ccp-server {version}</p>{/if}
 </div>
