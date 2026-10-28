@@ -11,7 +11,8 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Empty from '../../lib/ui/Empty.svelte';
-  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
+  import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {notice, stamp} from '../../lib/notify.svelte';
@@ -122,7 +123,7 @@
     <CardHeader title="Administrators" />
     <CardContent class="px-0">
       {#if !admins}
-        {#if !error}<div class="space-y-2 px-5" aria-busy="true"><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-2/3" /></div>{/if}
+        {#if !error}<Delayed><SkeletonTable rows={2} columns={['w-36', 'w-20', 'w-24', 'w-28']} label="Loading administrators" /></Delayed>{/if}
       {:else if !admins.admins.length}
         <div class="px-5"><Empty icon={Users} title="No administrators on this page" /></div>
       {:else}
@@ -175,7 +176,7 @@
       description="Metadata contains no secret. Role activity does not mean an expired or revoked key works. Creating a key does not revoke older keys; deliver the new key privately before deliberately revoking an old one." />
     <CardContent class="px-0">
       {#if !keys}
-        {#if !error}<div class="space-y-2 px-5" aria-busy="true"><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-2/3" /></div>{/if}
+        {#if !error}<Delayed><SkeletonTable rows={3} columns={['w-32', 'w-24', 'w-28', 'w-16']} label="Loading keys" /></Delayed>{/if}
       {:else if !keys.keys.length}
         <div class="px-5"><Empty icon={KeyRound} title="No workspace keys on this page" /></div>
       {:else}

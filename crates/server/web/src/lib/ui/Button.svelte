@@ -44,7 +44,7 @@
   {type}
   aria-disabled={inert || undefined}
   aria-busy={busy || undefined}
-  class={cn('inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap font-medium transition-[color,background-color,box-shadow] outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*=size-])]:size-4',
+  class={cn('inline-flex shrink-0 cursor-pointer items-center justify-center whitespace-nowrap font-medium transition-[color,background-color,box-shadow] outline-none select-none focus-visible:ring-2 focus-visible:ring-ring aria-disabled:cursor-not-allowed aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*=size-])]:size-4',
     variants[variant], sizes[size], className)}
   onclick={click}
   {...rest}

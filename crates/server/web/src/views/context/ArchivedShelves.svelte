@@ -4,6 +4,7 @@
   import {RotateCcw} from '@lucide/svelte';
   import Button from '../../lib/ui/Button.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {archivedShelfPage} from '../../lib/model.js';
@@ -31,7 +32,7 @@
         <Button variant="outline" size="sm" busy={app.working('archived-shelves-retry')} onclick={() => app.run(() => pager.first(), 'archived-shelves-retry')}><RotateCcw /> Retry</Button>
       </div>
     {:else if !pager.loaded}
-      <Skeleton class="h-24 w-full" /><span class="sr-only">Loading archived shelves</span>
+      <span class="sr-only">Loading archived shelves</span><Delayed><div class="divide-y rounded-lg border" aria-hidden="true">{#each [0, 1, 2] as row (row)}<div class="flex items-center justify-between gap-4 px-3 py-3"><div class="space-y-1.5"><Skeleton class="h-3.5 w-28" /><Skeleton class="h-3 w-40 opacity-70" /></div><Skeleton class="h-7 w-16" /></div>{/each}</div></Delayed>
     {:else if !pager.items.length}
       <p class="rounded-lg border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">No archived shelves on this page.</p>
     {:else}

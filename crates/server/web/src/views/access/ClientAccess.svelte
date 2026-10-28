@@ -10,7 +10,8 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Empty from '../../lib/ui/Empty.svelte';
-  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
+  import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {notice, stamp} from '../../lib/notify.svelte';
@@ -95,7 +96,7 @@
     </Alert>
     <Button variant="outline" busy={app.working('recovery-retry')} onclick={() => reload(after, 'recovery-retry')}>Read client recovery history</Button>
   {:else if !page}
-    <div class="space-y-2" aria-busy="true"><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-2/3" /></div>
+    <Delayed><SkeletonTable flush rows={3} columns={['w-28', 'w-20', 'w-32']} label="Loading recovery history" /></Delayed>
   {:else}
     <Card>
       <CardHeader title="Recovery invitations"

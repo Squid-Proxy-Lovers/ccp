@@ -26,7 +26,7 @@
 <svelte:window onpointerdown={outside} />
 <div bind:this={root} class="relative" role="presentation" onkeydown={keydown}>
   <button bind:this={button} type="button" aria-haspopup="menu" aria-expanded={open} aria-label={label}
-    class={cn('cursor-pointer outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50', triggerClass)} onclick={() => (open = !open)}>
+    class={cn('cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring', triggerClass)} onclick={() => (open = !open)}>
     {@render trigger()}
   </button>
   {#if open}

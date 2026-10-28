@@ -4,7 +4,7 @@
   import Input from '../lib/ui/Input.svelte';
   import Field from '../lib/ui/Field.svelte';
   import Logo from './Logo.svelte';
-  import ThemeToggle from './ThemeToggle.svelte';
+  import Appearance from './Appearance.svelte';
   import {app} from '../lib/app.svelte';
   import {notice, copyText} from '../lib/notify.svelte';
 
@@ -33,7 +33,7 @@
 </script>
 
 <div class="relative flex min-h-svh flex-col items-center justify-center gap-6 bg-muted/40 p-6">
-  <div class="absolute top-4 right-4"><ThemeToggle /></div>
+  <div class="absolute top-4 right-4"><Appearance /></div>
   <div class="flex items-center gap-2.5">
     <Logo class="size-9" />
     <span class="text-lg font-semibold tracking-tight">CCP</span>

@@ -6,6 +6,7 @@
   import Badge from '../../lib/ui/Badge.svelte';
   import Button from '../../lib/ui/Button.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import {confirmAction} from '../../lib/ui/confirm.svelte';
   import {app} from '../../lib/app.svelte';
   import {ContentAdminIntent, canManageInvitations, shelfState} from '../../lib/model.js';
@@ -66,7 +67,7 @@
         <Button variant="outline" size="sm" busy={app.working('shelf-state-retry')} onclick={() => app.run(load, 'shelf-state-retry')}><RotateCcw /> Retry</Button>
       </div>
     {:else if !observed}
-      <Skeleton class="h-5 w-48" /><span class="sr-only">Loading shelf state</span>
+      <span class="sr-only">Loading shelf state</span><Delayed><div class="space-y-3" aria-hidden="true"><Skeleton class="h-5 w-48" /><Skeleton class="h-3.5 w-72 max-w-full opacity-70" /><Skeleton class="h-9 w-36" /></div></Delayed>
     {:else}
       <p class="text-sm text-muted-foreground">This is an observation, not future authority.</p>
     {/if}

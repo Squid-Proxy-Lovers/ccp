@@ -35,6 +35,10 @@ class App {
   busy = $state(false);
   busyKey = $state('');
   booted = $state(false);
+  /** True while a new session loads its workspaces and opens the first view. */
+  activating = $state(false);
+  /** Requests in flight, for the header progress bar. */
+  inflight = $state(0);
   /** Bumped by the header refresh to remount the current view. */
   refreshTick = $state(0);
   /** Workspace deletion tracking survives sign-out until explicitly cleared. */
@@ -137,6 +141,7 @@ class App {
     await this.verify();
     const generation = this.generation;
     const session = this.session as Session;
+    this.inflight += 1;
     try {
       const data = await wire(path, body === undefined ? undefined : JSON.stringify(body), session.csrf_token);
       try { await this.verify(); }
@@ -151,7 +156,7 @@ class App {
       const status = (error as {status?: number}).status;
       if (status === 401 || status === 403) this.lock((error as Error).message);
       throw error;
-    }
+    } finally { this.inflight -= 1; }
   }
 
   /** Serialises user actions. Controls stay focusable; `busyKey` marks which one is working. */
@@ -166,6 +171,11 @@ class App {
   working(key: string): boolean { return this.busy && this.busyKey === key; }
 
   async activate(session: Session): Promise<void> {
+    this.activating = true;
+    try { await this.#activate(session); } finally { this.activating = false; }
+  }
+
+  async #activate(session: Session): Promise<void> {
     this.generation += 1;
     this.session = session;
     this.locked = false;
@@ -205,6 +215,7 @@ class App {
 
   async openWorkspace(workspace: Workspace, view: View = this.view === 'workspaces' || this.view === 'global-guidance' ? 'overview' : this.view): Promise<void> {
     this.generation += 1;
+    if (workspace.id !== this.workspace?.id) this.inspection = null;
     this.workspace = workspace;
     this.view = view;
     await this.inspectWorkspace();

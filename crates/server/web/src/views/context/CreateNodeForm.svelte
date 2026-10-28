@@ -39,7 +39,7 @@
 </script>
 
 <details bind:open class="group">
-  <summary class="flex cursor-pointer list-none items-center gap-1.5 rounded-md text-sm font-medium outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50 [&::-webkit-details-marker]:hidden">
+  <summary class="flex cursor-pointer list-none items-center gap-1.5 rounded-md text-sm font-medium outline-none select-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
     <Plus class="size-4 text-muted-foreground transition-transform group-open:rotate-45" aria-hidden="true" />
     New {kind}
     {#if !open && (draft.name || draft.description)}<span class="text-xs font-normal text-muted-foreground">(draft kept)</span>{/if}

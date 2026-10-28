@@ -5,6 +5,7 @@
   import Button from '../../lib/ui/Button.svelte';
   import Badge from '../../lib/ui/Badge.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import {app} from '../../lib/app.svelte';
   import type {Pager} from './pager.svelte';
 
@@ -51,10 +52,17 @@
         <Button variant="outline" size="sm" busy={app.working(`${id}-retry`)} onclick={onretry}><RotateCcw /> Retry</Button>
       </div>
     {:else if !pager.loaded}
-      <div class="space-y-2 p-2">
-        <Skeleton class="h-8 w-full" /><Skeleton class="h-8 w-4/5" /><Skeleton class="h-8 w-3/5" />
-        <span class="sr-only">Loading {title.toLowerCase()}</span>
-      </div>
+      <span class="sr-only" role="status">Loading {title.toLowerCase()}</span>
+      <Delayed>
+        <div class="space-y-0.5" aria-hidden="true">
+          {#each ['w-32', 'w-24', 'w-40', 'w-28'] as width, index (index)}
+            <div class="flex items-center gap-2 px-2.5 py-2.5">
+              <div class="flex-1 space-y-1.5"><Skeleton class={['h-3.5', width]} />{#if detail}<Skeleton class="h-3 w-16 opacity-70" />{/if}</div>
+              <Skeleton class="size-4" />
+            </div>
+          {/each}
+        </div>
+      </Delayed>
     {:else if !rows.length}
       <p class="px-2 py-6 text-center text-sm text-muted-foreground">{emptyText}</p>
     {:else}
@@ -65,7 +73,7 @@
           <li>
             <button type="button" data-row={`${kind}:${item.id}`} aria-current={selected ? 'true' : undefined}
               onclick={() => onselect(item)}
-              class={['flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm outline-none transition-colors focus-visible:ring-[3px] focus-visible:ring-ring/50',
+              class={['flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring',
                 selected ? 'bg-accent font-medium text-accent-foreground' : 'hover:bg-muted/60']}>
               <span class="min-w-0 flex-1">
                 <span class="block truncate" title={label(item)}>{label(item)}</span>

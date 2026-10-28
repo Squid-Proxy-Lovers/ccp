@@ -22,6 +22,8 @@
   const role = $derived(identity?.scope.kind === 'instance' ? 'Instance admin' : `Workspace ${identity?.scope.role ?? ''}`);
   const initials = $derived((identity?.principal_name ?? '?').split(/\s+/).map(part => part[0]).join('').slice(0, 2).toUpperCase());
 
+  const navItem = 'flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2 text-left text-sm outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-ring aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium [&_svg]:size-4 [&_svg]:text-muted-foreground aria-[current=page]:[&_svg]:text-primary';
+
   function go(view: View) {
     void app.run(async () => { await app.navigate(view); onnavigate?.(); }, `nav:${view}`);
   }
@@ -81,7 +83,7 @@
         <p class="px-2 pb-1 text-xs font-medium text-muted-foreground">Workspace</p>
         {#each workspaceNav as item (item.view)}
           <button type="button" aria-current={app.view === item.view ? 'page' : undefined} onclick={() => go(item.view)}
-            class="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2 text-left text-sm outline-none hover:bg-sidebar-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium [&_svg]:size-4 [&_svg]:text-muted-foreground aria-[current=page]:[&_svg]:text-foreground">
+            class={navItem}>
             <item.icon /> {item.label}
           </button>
         {/each}
@@ -91,12 +93,12 @@
       <p class="px-2 pb-1 text-xs font-medium text-muted-foreground">Instance</p>
       {#if app.instanceScope}
         <button type="button" aria-current={app.view === 'workspaces' ? 'page' : undefined} onclick={() => go('workspaces')}
-          class="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2 text-left text-sm outline-none hover:bg-sidebar-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium [&_svg]:size-4 [&_svg]:text-muted-foreground">
+          class={navItem}>
           <Building2 /> Workspaces
         </button>
       {/if}
       <button type="button" aria-current={app.view === 'global-guidance' ? 'page' : undefined} onclick={() => go('global-guidance')}
-        class="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-md px-2 text-left text-sm outline-none hover:bg-sidebar-accent focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-[current=page]:bg-sidebar-accent aria-[current=page]:font-medium [&_svg]:size-4 [&_svg]:text-muted-foreground">
+        class={navItem}>
         <Globe /> Global guidance
       </button>
     </div>

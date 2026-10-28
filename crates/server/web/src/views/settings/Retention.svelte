@@ -13,6 +13,7 @@
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app} from '../../lib/app.svelte';
   import {copyText, stamp} from '../../lib/notify.svelte';
@@ -45,8 +46,14 @@
     {/if}
 
     {#if ctl.loading}
-      <div class="space-y-2" aria-hidden="true"><Skeleton class="h-4 w-3/4" /><Skeleton class="h-4 w-1/2" /></div>
       <p class="sr-only" role="status">Loading current policy</p>
+      <Delayed>
+        <div class="space-y-5" aria-hidden="true">
+          <div class="space-y-2"><Skeleton class="h-4 w-3/4" /><Skeleton class="h-3 w-48 opacity-70" /></div>
+          <div class="flex flex-wrap items-end gap-4"><Skeleton class="h-9 w-48" /><Skeleton class="h-9 w-40" /></div>
+          <Skeleton class="h-9 w-44" />
+        </div>
+      </Delayed>
     {:else if !policy}
       <Alert tone="warning" title="Retention policy unavailable" live>
         <p>{ctl.policyError}</p>

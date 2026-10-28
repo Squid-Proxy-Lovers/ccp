@@ -1,5 +1,6 @@
 <script lang="ts">
   import {cn} from './cn';
-  let {class: className = ''}: {class?: string} = $props();
+  import type {ClassValue} from './cn';
+  let {class: className = ''}: {class?: ClassValue} = $props();
 </script>
-<div aria-hidden="true" class={cn('animate-pulse rounded-md bg-accent', className)}></div>
+<div aria-hidden="true" class={cn('skeleton rounded-md', className)}></div>

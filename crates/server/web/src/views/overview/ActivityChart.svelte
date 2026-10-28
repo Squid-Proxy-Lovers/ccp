@@ -76,7 +76,7 @@
   <!-- A focusable chart region: arrow keys move the readout, announced via the live region below. -->
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
   <div role="group" tabindex="0" aria-label="Daily writes chart. Use the left and right arrow keys to read each day."
-    class="rounded-md outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    class="rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
     onkeydown={keydown} onfocus={() => { active ??= days.length - 1; }} onblur={() => { active = null; }}
     onpointerleave={() => { active = null; }}>
     {#if width > 0}

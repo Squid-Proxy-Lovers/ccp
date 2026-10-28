@@ -5,6 +5,7 @@
   import Button from '../../lib/ui/Button.svelte';
   import Badge from '../../lib/ui/Badge.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app} from '../../lib/app.svelte';
@@ -50,7 +51,7 @@
         <Button variant="outline" size="sm" onclick={() => load(after)}><RotateCcw /> Retry</Button>
       </div>
     {:else if !page}
-      <div class="space-y-2"><Skeleton class="h-12 w-full" /><Skeleton class="h-12 w-full" /><span class="sr-only">Loading revisions</span></div>
+      <span class="sr-only">Loading revisions</span><Delayed><div class="divide-y rounded-lg border" aria-hidden="true">{#each [0, 1, 2] as row (row)}<div class="flex items-center justify-between gap-4 px-3 py-3"><div class="space-y-1.5"><Skeleton class="h-3.5 w-28" /><Skeleton class="h-3 w-40 opacity-70" /></div><Skeleton class="h-7 w-16" /></div>{/each}</div></Delayed>
     {:else if !page.items.length}
       <p class="text-sm text-muted-foreground">No recorded revisions on this page.</p>
     {:else}

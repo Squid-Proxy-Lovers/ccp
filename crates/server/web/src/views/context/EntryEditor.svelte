@@ -205,7 +205,7 @@
   {#if entry && writable}
     <Separator />
     <details bind:open={noteOpen} class="group rounded-lg border">
-      <summary id="entry-note-summary" class="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50">
+      <summary id="entry-note-summary" class="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium outline-none select-none focus-visible:ring-2 focus-visible:ring-ring">
         Append a note {#if note.trim()}<span class="font-normal text-muted-foreground">(unsaved)</span>{/if}
       </summary>
       <form class="grid gap-3 px-4 pb-4" onsubmit={append} oninput={sync}>

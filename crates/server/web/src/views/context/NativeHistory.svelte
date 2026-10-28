@@ -7,6 +7,7 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {copyText, stamp} from '../../lib/notify.svelte';
@@ -76,7 +77,7 @@
         <Button variant="outline" size="sm" busy={app.working('source-retry')} onclick={() => app.run(() => load(after), 'source-retry')}><RotateCcw /> Retry source history</Button>
       </div>
     {:else if !page}
-      <Skeleton class="h-16 w-full" /><span class="sr-only">Loading source records</span>
+      <span class="sr-only">Loading source records</span><Delayed><div class="divide-y rounded-lg border" aria-hidden="true">{#each [0, 1] as row (row)}<div class="flex items-center justify-between gap-4 px-3 py-3"><div class="space-y-1.5"><Skeleton class="h-3.5 w-28" /><Skeleton class="h-3 w-40 opacity-70" /></div><Skeleton class="h-7 w-16" /></div>{/each}</div></Delayed>
     {:else if page.source === null}
       <p class="text-sm text-muted-foreground">No original native source records are attached to this entry.</p>
     {:else}
@@ -90,7 +91,7 @@
       <div class="space-y-2">
         {#each page.items as item (item.ordinal)}
           <details class="rounded-md border" bind:open={open[item.ordinal]}>
-            <summary class="cursor-pointer px-3 py-2 text-sm outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50">Record {item.ordinal} · {labels[item.source_table]}</summary>
+            <summary class="cursor-pointer px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring">Record {item.ordinal} · {labels[item.source_table]}</summary>
             {#if open[item.ordinal]}
               <div class="space-y-2 border-t px-3 py-2">
                 <p class="text-xs break-all text-muted-foreground">Source table {item.source_table} · Original row key {item.source_key}</p>

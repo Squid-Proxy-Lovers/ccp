@@ -11,7 +11,8 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
-  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
+  import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {canTransferOwnership} from '../../lib/model.js';
@@ -67,8 +68,7 @@
         </div>
       </form>
     {:else if ctl.rosterLoading && !ctl.roster.length}
-      <div class="space-y-2" aria-hidden="true"><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-full" /></div>
-      <p class="sr-only" role="status">Loading administrators</p>
+      <div class="-mx-5 border-y"><Delayed><SkeletonTable rows={2} columns={['w-48', 'w-16', 'w-32']} label="Loading administrators" /></Delayed></div>
     {:else if ctl.rosterError}
       <Alert tone="warning" title="Administrators unavailable" live>{ctl.rosterError}</Alert>
       <Button variant="outline" disabled={ctl.frozen} busy={app.working('roster')}

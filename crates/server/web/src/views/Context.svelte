@@ -5,6 +5,8 @@
   // even when it is not on the page currently shown.
   import {onMount} from 'svelte';
   import {Archive, ChevronLeft, Library, Plus} from '@lucide/svelte';
+  import Delayed from '../lib/ui/Delayed.svelte';
+  import EntrySkeleton from './context/EntrySkeleton.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
   import Button from '../lib/ui/Button.svelte';
@@ -27,6 +29,7 @@
   type Stage = 'shelves' | 'books' | 'entries' | 'detail';
   type Detail =
     | {kind: 'none'}
+    | {kind: 'loading'}
     | {kind: 'entry'; snapshot: Snapshot}
     | {kind: 'new-entry'; bookId: string}
     | {kind: 'archived-entry'; entry: EntrySummary}
@@ -103,7 +106,11 @@
     void app.run(async () => {
       if (!app.mayLeave()) return;
       if (next.archived) { entry = next; show({kind: 'archived-entry', entry: next}, 'entries'); }
-      else await openEntry(next.id);
+      else {
+        detail = {kind: 'loading'};
+        detailSerial += 1;
+        try { await openEntry(next.id); } catch (error) { closeDetail(); throw error; }
+      }
     }, 'select-entry');
   }
 
@@ -264,11 +271,11 @@
   </PageHeader>
 
   <nav aria-label="Context location" class="flex min-w-0 flex-wrap items-center gap-1 text-sm text-muted-foreground">
-    <button type="button" class="cursor-pointer rounded px-1 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50" onclick={() => back('shelves')}>Shelves</button>
+    <button type="button" class="cursor-pointer rounded px-1 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onclick={() => back('shelves')}>Shelves</button>
     {#if shelf}<span aria-hidden="true">/</span>
-      <button type="button" class="max-w-48 cursor-pointer truncate rounded px-1 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50" onclick={() => back('books')}>{shelf.name}</button>{/if}
+      <button type="button" class="max-w-48 cursor-pointer truncate rounded px-1 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onclick={() => back('books')}>{shelf.name}</button>{/if}
     {#if book}<span aria-hidden="true">/</span>
-      <button type="button" class="max-w-48 cursor-pointer truncate rounded px-1 outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50" onclick={() => back('entries')}>{book.name}</button>{/if}
+      <button type="button" class="max-w-48 cursor-pointer truncate rounded px-1 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onclick={() => back('entries')}>{book.name}</button>{/if}
     {#if entry}<span aria-hidden="true">/</span><span class="max-w-48 truncate px-1 text-foreground" aria-current="location">{entry.name}</span>{/if}
   </nav>
 
@@ -323,7 +330,7 @@
         {#snippet footer()}
           {#if writable && !archivedEntries}
             <button type="button" aria-disabled={app.busy || undefined} onclick={() => { if (!app.busy) newEntry(); }}
-              class="flex cursor-pointer items-center gap-1.5 rounded-md text-sm font-medium outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 aria-disabled:opacity-60">
+              class="flex cursor-pointer items-center gap-1.5 rounded-md text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring aria-disabled:opacity-60">
               <Plus class="size-4 text-muted-foreground" aria-hidden="true" /> New entry
             </button>
           {:else if archivedEntries}
@@ -344,7 +351,9 @@
       <ChevronLeft /> {{shelves: 'Shelves', books: 'Books', entries: 'Entries', detail: 'Back'}[detailFrom]}
     </Button>
     {#key detailSerial}
-      {#if detail.kind === 'entry'}
+      {#if detail.kind === 'loading'}
+        <Delayed><EntrySkeleton /></Delayed>
+      {:else if detail.kind === 'entry'}
         <EntryEditor snapshot={detail.snapshot} bookId={detail.snapshot.entry.book_id} onwritten={written} onreload={reloadEntry} />
       {:else if detail.kind === 'new-entry'}
         <EntryEditor snapshot={null} bookId={detail.bookId} onwritten={written} onreload={reloadEntry} />

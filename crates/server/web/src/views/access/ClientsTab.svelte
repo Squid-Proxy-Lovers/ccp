@@ -10,7 +10,8 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Empty from '../../lib/ui/Empty.svelte';
-  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
+  import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {notice} from '../../lib/notify.svelte';
@@ -81,7 +82,7 @@
           <Button class="mt-3" variant="outline" busy={app.working('grants-retry')} onclick={() => turn(after, 'grants-retry')}>Read client grants</Button>
         </div>
       {:else if !page}
-        <div class="space-y-2 px-5" aria-busy="true"><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-2/3" /></div>
+        <Delayed><SkeletonTable rows={4} columns={['w-40', 'w-20', 'w-28', 'w-16']} label="Loading client grants" /></Delayed>
       {:else if !page.grants.length}
         <div class="px-5"><Empty icon={Users} title="No client grants on this page" /></div>
       {:else}

@@ -7,6 +7,7 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
   import {app} from '../../lib/app.svelte';
   import {stamp} from '../../lib/notify.svelte';
   import {confirmAction} from '../../lib/ui/confirm.svelte';
@@ -41,7 +42,12 @@
         <p>No unused, open or closed state was assumed. Read the current state again before an initial-group action.</p>
       </Alert>
     {:else if !enrollment}
-      <div class="space-y-2" aria-busy="true"><Skeleton class="h-5 w-48" /><Skeleton class="h-5 w-full" /></div>
+      <Delayed>
+        <div class="grid gap-3 sm:grid-cols-[10rem_1fr]" role="status" aria-busy="true">
+          <span class="sr-only">Loading enrollment state</span>
+          {#each ['w-24', 'w-48', 'w-36'] as width, index (index)}<Skeleton class="h-3.5 w-20 opacity-70" /><Skeleton class={['h-3.5', width]} />{/each}
+        </div>
+      </Delayed>
     {:else}
       {@const current = enrollment}
       <div class="flex flex-wrap items-center gap-2 text-sm">

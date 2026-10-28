@@ -25,6 +25,6 @@
       {#if footer}<div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">{@render footer()}</div>{/if}
     </div>
     <button type="button" aria-label="Close" onclick={() => (open = false)}
-      class="absolute top-4 right-4 cursor-pointer rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"><X class="size-4" /></button>
+      class="absolute top-4 right-4 cursor-pointer rounded-sm p-1 text-muted-foreground opacity-70 transition-opacity hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"><X class="size-4" /></button>
   {/if}
 </dialog>

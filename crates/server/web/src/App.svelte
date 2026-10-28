@@ -5,6 +5,7 @@
   import Toaster from './components/Toaster.svelte';
   import LoginView from './components/LoginView.svelte';
   import LockedView from './components/LockedView.svelte';
+  import ShellSkeleton from './components/ShellSkeleton.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
   import Overview from './views/Overview.svelte';
   import Context from './views/Context.svelte';
@@ -51,10 +52,12 @@
   }
 </script>
 
-{#if !app.booted && !app.session}
-  <div class="flex min-h-svh items-center justify-center" aria-busy="true"><span class="sr-only">Loading</span></div>
-{:else if app.locked}
+{#if app.locked}
   <LockedView />
+{:else if app.activating}
+  <ShellSkeleton />
+{:else if !app.booted && !app.session}
+  <div class="min-h-svh" role="status" aria-busy="true"><span class="sr-only">Loading</span></div>
 {:else if !app.session}
   <LoginView />
 {:else}

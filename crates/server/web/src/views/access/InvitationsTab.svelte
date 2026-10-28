@@ -10,7 +10,8 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Empty from '../../lib/ui/Empty.svelte';
-  import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import Delayed from '../../lib/ui/Delayed.svelte';
+  import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app} from '../../lib/app.svelte';
   import {stamp} from '../../lib/notify.svelte';
@@ -100,7 +101,7 @@
         </div>
       {/if}
       {#if !page && !error}
-        <div class="space-y-2 px-5" aria-busy="true"><Skeleton class="h-9 w-full" /><Skeleton class="h-9 w-2/3" /></div>
+        <Delayed><SkeletonTable rows={3} columns={['w-32', 'w-20', 'w-28', 'w-16']} label="Loading invitations" /></Delayed>
       {:else if page && !page.invitations.length}
         <div class="px-5"><Empty icon={Mail} title="No invitations on this page" /></div>
       {:else if page}

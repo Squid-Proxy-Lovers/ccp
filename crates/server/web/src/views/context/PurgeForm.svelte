@@ -49,7 +49,7 @@
 </script>
 
 <details bind:open class="rounded-lg border border-destructive/35">
-  <summary id="purge-summary" class="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium text-destructive outline-none select-none focus-visible:ring-[3px] focus-visible:ring-ring/50">Permanently purge archived entry</summary>
+  <summary id="purge-summary" class="cursor-pointer rounded-lg px-4 py-3 text-sm font-medium text-destructive outline-none select-none focus-visible:ring-2 focus-visible:ring-ring">Permanently purge archived entry</summary>
   <form class="grid gap-4 px-4 pb-4" onsubmit={submit} oninput={sync} onchange={sync}>
     <p class="text-sm text-muted-foreground">
       Permanently removes entry <span class="font-mono text-xs break-all text-foreground">{entry.id}</span> at revision {entry.revision}, including every payload and revision row. It cannot be restored. Retained operation proofs and audit records remain. Separate backups, SQLite free pages and journals are not securely erased. Purge is allowed while the workspace is archived.

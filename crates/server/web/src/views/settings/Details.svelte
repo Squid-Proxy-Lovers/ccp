@@ -8,6 +8,7 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import {app} from '../../lib/app.svelte';
   import {copyText} from '../../lib/notify.svelte';
+  import Skeleton from '../../lib/ui/Skeleton.svelte';
   import type {Session, Workspace} from '../../lib/types';
 
   let {workspace, session}: {workspace: Workspace; session: Session} = $props();
@@ -29,7 +30,9 @@
       </dd>
       <dt class="text-muted-foreground">Owner</dt>
       <dd class="min-w-0">
-        {#if owner}
+        {#if !app.inspection}
+          <Skeleton class="mt-0.5 h-4 w-72 max-w-full" /><span class="sr-only">Loading owner</span>
+        {:else if owner}
           <code class="font-mono text-[13px] break-all">{owner}</code>
           {#if ownSession}<span class="text-muted-foreground"> (you)</span>{/if}
         {:else}

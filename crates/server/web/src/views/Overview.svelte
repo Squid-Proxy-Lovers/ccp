@@ -12,6 +12,8 @@
   import CardHeader from '../lib/ui/CardHeader.svelte';
   import CardContent from '../lib/ui/CardContent.svelte';
   import Skeleton from '../lib/ui/Skeleton.svelte';
+  import Delayed from '../lib/ui/Delayed.svelte';
+  import OverviewSkeleton from './overview/OverviewSkeleton.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import StatTile from './overview/StatTile.svelte';
   import Sparkline from './overview/Sparkline.svelte';
@@ -124,20 +126,11 @@
       </div>
     </div>
   {:else if !overviewError}
-    <div class="grid gap-6" aria-busy="true">
-      <span class="sr-only">Loading workspace activity</span>
-      <div class="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        {#each [0, 1, 2, 3] as index (index)}<Skeleton class="h-[7.5rem] rounded-xl" />{/each}
-      </div>
-      <div class="grid gap-6 lg:grid-cols-3">
-        <Skeleton class="h-96 rounded-xl lg:col-span-2" />
-        <Skeleton class="h-96 rounded-xl" />
-      </div>
-    </div>
+    <Delayed><OverviewSkeleton /></Delayed>
   {/if}
 
   <div class="grid gap-6 lg:grid-cols-3">
-    <AttentionCard items={attention} onopen={open} />
+    <AttentionCard items={attention} onopen={open} loading={(!overview && !overviewError) || (!reports && !reportsError)} />
     <Card class="min-w-0 lg:col-span-2">
       <CardHeader title="Reported work" description="Latest client status messages. They don't prove an agent is online or finished.">
         {#snippet action()}
@@ -148,7 +141,17 @@
         {#if reportsError}
           <p class="text-sm text-destructive">{reportsError}</p>
         {:else if !reports}
-          <div class="grid gap-3">{#each [0, 1, 2] as index (index)}<Skeleton class="h-12" />{/each}</div>
+          <Delayed>
+            <span class="sr-only" role="status">Loading reported work</span>
+            <ul class="-my-1 divide-y" aria-hidden="true">
+              {#each ['w-3/4', 'w-1/2', 'w-2/3'] as width, index (index)}
+                <li class="flex items-start gap-4 py-3" aria-hidden="true">
+                  <div class="flex-1 space-y-2"><Skeleton class="h-3.5 w-32" /><Skeleton class={['h-3 opacity-70', width]} /></div>
+                  <div class="flex flex-col items-end gap-2"><Skeleton class="h-5 w-12" /><Skeleton class="h-3 w-16 opacity-70" /></div>
+                </li>
+              {/each}
+            </ul>
+          </Delayed>
         {:else if recent.length}
           <ul class="-my-1 divide-y">
             {#each recent as report (report.status_id)}

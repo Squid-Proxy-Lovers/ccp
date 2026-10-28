@@ -14,7 +14,8 @@
   import CardHeader from '../lib/ui/CardHeader.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import Field from '../lib/ui/Field.svelte';
-  import Skeleton from '../lib/ui/Skeleton.svelte';
+  import Delayed from '../lib/ui/Delayed.svelte';
+  import SkeletonTable from '../lib/ui/skeleton/SkeletonTable.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
   import {table} from '../lib/ui/table';
   import {confirmAction} from '../lib/ui/confirm.svelte';
@@ -253,11 +254,7 @@
       <CardHeader title="Status messages"
         description={page ? `Freshness labels describe the server read at ${stamp(page.observed_at)}, not the present moment. Read again to observe current age.` : 'Loading status messages.'} />
       {#if !page}
-        <CardContent class="pb-5">
-          <div class="space-y-2" aria-busy="true">
-            <Skeleton class="h-10 w-full" /><Skeleton class="h-10 w-full" /><Skeleton class="h-10 w-full" />
-          </div>
-        </CardContent>
+        <Delayed><SkeletonTable rows={4} columns={['w-40', 'w-72', 'w-24']} label="Loading status messages" /></Delayed>
       {:else if !page.items.length}
         <CardContent class="pb-5">
           <Empty icon={ListChecks} title="No uncleared status messages on this page" description="Silence isn't a completion or offline signal." />

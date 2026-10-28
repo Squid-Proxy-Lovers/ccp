@@ -1,7 +1,7 @@
 <script lang="ts">
   import {PanelLeft, RefreshCw, ChevronRight} from '@lucide/svelte';
   import Button from '../lib/ui/Button.svelte';
-  import ThemeToggle from './ThemeToggle.svelte';
+  import Appearance from './Appearance.svelte';
   import {app} from '../lib/app.svelte';
   let {onmenu, onrefresh}: {onmenu: () => void; onrefresh: () => void} = $props();
   const labels: Record<string, string> = {
@@ -22,5 +22,8 @@
     </ol>
   </nav>
   <Button variant="ghost" size="icon-sm" aria-label="Refresh" busy={app.working('refresh')} onclick={onrefresh} class="text-muted-foreground"><RefreshCw /></Button>
-  <ThemeToggle />
+  <Appearance />
+  {#if app.inflight > 0}
+    <div class="progress-bar pointer-events-none absolute inset-x-0 -bottom-px h-0.5 overflow-hidden" aria-hidden="true"><span class="block h-full w-2/5 rounded-full bg-primary"></span></div>
+  {/if}
 </header>

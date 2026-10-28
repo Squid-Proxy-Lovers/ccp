@@ -8,6 +8,8 @@
   import Alert from '../lib/ui/Alert.svelte';
   import Button from '../lib/ui/Button.svelte';
   import Skeleton from '../lib/ui/Skeleton.svelte';
+  import Delayed from '../lib/ui/Delayed.svelte';
+  import SkeletonCard from '../lib/ui/skeleton/SkeletonCard.svelte';
   import Board from './guidance/Board.svelte';
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
@@ -65,10 +67,18 @@
       <p>{failed}</p>
     </Alert>
   {:else if !bundle}
-    <div class={['grid gap-6', !global && 'xl:grid-cols-2']} aria-busy="true">
-      <Skeleton class="h-96 w-full rounded-xl" />
-      {#if !global}<Skeleton class="h-96 w-full rounded-xl" />{/if}
-    </div>
+    <Delayed>
+      <div class={['grid gap-6', !global && 'xl:grid-cols-2']}>
+        {#each global ? [0] : [0, 1] as index (index)}
+          <SkeletonCard action label={index === 0 ? 'Loading guidance' : undefined}>
+            <div class="space-y-3 px-5">
+              <Skeleton class="h-64 w-full" />
+              <div class="flex items-center justify-between"><Skeleton class="h-3 w-28 opacity-70" /><Skeleton class="h-9 w-32" /></div>
+            </div>
+          </SkeletonCard>
+        {/each}
+      </div>
+    </Delayed>
   {:else}
     {#key bundle}
       <div class={['grid items-start gap-6', boards.length > 1 && 'xl:grid-cols-2']}>
