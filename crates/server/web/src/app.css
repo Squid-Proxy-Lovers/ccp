@@ -153,20 +153,20 @@
   inset: 0;
   pointer-events: none;
   background-image: radial-gradient(circle at center, var(--dot) 1px, transparent 1.5px);
-  background-size: 14px 14px;
+  background-size: 16px 16px;
 }
 .login-dots {
-  --dot: color-mix(in oklch, var(--foreground) 26%, transparent);
-  mask-image: radial-gradient(ellipse 70% 65% at 50% 45%, #000 20%, transparent 85%);
+  --dot: color-mix(in oklch, var(--foreground) 15%, transparent);
+  mask-image: radial-gradient(ellipse 42% 48% at 50% 46%, #000 10%, transparent 75%);
 }
 .login-spot {
-  --dot: color-mix(in oklch, var(--foreground) 70%, transparent);
-  mask-image: radial-gradient(240px circle at var(--x, 50%) var(--y, -999px), #000, transparent 70%);
+  --dot: color-mix(in oklch, var(--foreground) 42%, transparent);
+  mask-image: radial-gradient(170px circle at var(--x, 50%) var(--y, -999px), #000, transparent 70%);
   opacity: var(--spot, 0);
   transition: opacity 0.5s ease;
 }
 @keyframes dots-drift {
-  to { background-position: 140px 70px; }
+  to { background-position: 160px 80px; }
 }
 @keyframes rise {
   from { opacity: 0; transform: translateY(12px); filter: blur(6px); }
