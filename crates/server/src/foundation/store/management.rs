@@ -108,7 +108,7 @@ impl AccessStore<'_> {
     }
 }
 
-fn require_reader(
+pub(super) fn require_reader(
     connection: &Connection,
     actor: Actor,
     workspace: Uuid,

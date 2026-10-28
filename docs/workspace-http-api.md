@@ -129,6 +129,7 @@ inner TLS peer.
 | HTTPS | `GET /api/v1/admin/workspaces` | Current scoped admin Bearer key; accessible workspace metadata only |
 | HTTPS | `POST /api/v1/admin/workspaces/create` or `/first-owner` | Current instance key; atomic workspace/first-owner key provisioning |
 | HTTPS | `POST /api/v1/admin/workspaces/inspect` or `/grants` | Current admin read authority in the exact workspace; metadata or paged grant history |
+| HTTPS | `POST /api/v1/admin/workspaces/overview` | Same authority as `/inspect`; aggregate-only dashboard counts for 1–90 UTC days (`days`): content totals, daily actions, top eight writers, access counts. No entry content or names |
 | Client mTLS | `POST /api/v1/guidance/context` | Current client identity and optional workspace read grant; guidance and delivery-context IDs in one snapshot |
 | HTTPS or client mTLS | `POST /api/v1/guidance/get` | Authenticated global guidance plus an optional workspace board under current context-read access |
 | HTTPS | `POST /api/v1/admin/guidance/save` | Current global key for global guidance, or scoped workspace owner/admin key for its workspace; immediate revision-bound live save |

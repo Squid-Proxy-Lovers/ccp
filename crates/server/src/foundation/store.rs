@@ -15,6 +15,7 @@ mod keys;
 mod local;
 mod management;
 mod native_provenance;
+mod overview;
 mod peer;
 mod provisioning;
 mod readmission;

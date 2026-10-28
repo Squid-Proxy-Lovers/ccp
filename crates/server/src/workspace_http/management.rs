@@ -13,12 +13,15 @@ use crate::foundation::{
 use hyper::Method;
 use protocol::workspace as api;
 
+mod overview;
+
 pub(super) fn handles(path: &str) -> bool {
     matches!(
         path,
         "/api/v1/admin/workspaces/create"
             | "/api/v1/admin/workspaces/first-owner"
             | "/api/v1/admin/workspaces/inspect"
+            | overview::PATH
             | "/api/v1/admin/workspaces/grants"
             | "/api/v1/admin/workspaces/archive"
             | "/api/v1/admin/workspaces/reactivate"
@@ -69,6 +72,7 @@ pub(super) fn dispatch(
                 owner_id: info.owner_id.map(|id| id.to_string()),
             })
         }
+        overview::PATH => overview::read(store, actor, input, now),
         "/api/v1/admin/workspaces/grants" => grants(store, actor, input, now),
         "/api/v1/admin/workspaces/archive" | "/api/v1/admin/workspaces/reactivate" => {
             let body: api::WorkspaceTarget = decode(&input.body)?;
