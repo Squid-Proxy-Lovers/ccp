@@ -7,8 +7,6 @@
   }
   var mode = read('ccp-theme', ['light', 'dark']);
   root.classList.toggle('dark', mode === 'dark' || (mode !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches));
-  var base = read('ccp-base', ['zinc', 'slate', 'stone']);
-  if (base) root.setAttribute('data-base', base);
-  var accent = read('ccp-accent', ['blue', 'violet', 'green', 'orange', 'rose']);
+  var accent = read('ccp-accent', ['cobalt', 'forest', 'oxblood', 'ochre', 'plum']);
   if (accent) root.setAttribute('data-accent', accent);
 })();

@@ -13,13 +13,12 @@ async fn panel_assets_are_bundled_public_https_only_and_locked_down() {
         ("/admin/app.css", "text/css"),
         ("/admin/app.js", "text/javascript"),
         ("/admin/theme.js", "text/javascript"),
-        ("/admin/fonts/geist-latin-wght-normal.woff2", "font/woff2"),
         (
-            "/admin/fonts/geist-latin-ext-wght-normal.woff2",
+            "/admin/fonts/fragment-mono-latin-400-normal.woff2",
             "font/woff2",
         ),
         (
-            "/admin/fonts/geist-mono-latin-wght-normal.woff2",
+            "/admin/fonts/fragment-mono-latin-ext-400-normal.woff2",
             "font/woff2",
         ),
     ] {

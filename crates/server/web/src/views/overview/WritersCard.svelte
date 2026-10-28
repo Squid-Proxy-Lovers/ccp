@@ -24,7 +24,7 @@
               <span class="tabular shrink-0 font-medium">{whole.format(writer.writes)}</span>
             </div>
             <div class="h-1.5 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-              <div class="h-full rounded-full bg-chart-1" use:css={{width: `${(writer.writes / peak) * 100}%`}}></div>
+              <div class="h-full rounded-full bg-foreground" use:css={{width: `${(writer.writes / peak) * 100}%`}}></div>
             </div>
             <p class="text-xs text-muted-foreground">
               Last write <time datetime={new Date(writer.last_write_at * 1000).toISOString()} title={stamp(writer.last_write_at)}>{relative(writer.last_write_at)}</time>

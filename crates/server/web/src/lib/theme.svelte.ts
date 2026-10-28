@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Appearance preferences: mode, base tint and accent. These are the only values
+// Appearance preferences: mode and accent. These are the only values
 // this panel stores in the browser; public/theme.js applies them before first paint.
 export type ThemeMode = 'light' | 'dark' | 'system';
-export const BASES = ['neutral', 'zinc', 'slate', 'stone'] as const;
-export const ACCENTS = ['neutral', 'blue', 'violet', 'green', 'orange', 'rose'] as const;
-export type Base = (typeof BASES)[number];
+export const ACCENTS = ['ink', 'cobalt', 'forest', 'oxblood', 'ochre', 'plum'] as const;
 export type Accent = (typeof ACCENTS)[number];
 
 const query = matchMedia('(prefers-color-scheme: dark)');
@@ -24,8 +22,7 @@ function store(key: string, value: string, fallback: string): void {
 
 class Theme {
   mode = $state<ThemeMode>(read('ccp-theme', ['light', 'dark'] as ThemeMode[], 'system'));
-  base = $state<Base>(read('ccp-base', BASES, 'neutral'));
-  accent = $state<Accent>(read('ccp-accent', ACCENTS, 'neutral'));
+  accent = $state<Accent>(read('ccp-accent', ACCENTS, 'ink'));
   systemDark = $state(query.matches);
   dark = $derived(this.mode === 'dark' || (this.mode === 'system' && this.systemDark));
 
@@ -34,17 +31,15 @@ class Theme {
     this.#apply();
   }
   set(mode: ThemeMode): void { this.mode = mode; store('ccp-theme', mode, 'system'); this.#apply(); }
-  setBase(base: Base): void { this.base = base; store('ccp-base', base, 'neutral'); this.#apply(); }
-  setAccent(accent: Accent): void { this.accent = accent; store('ccp-accent', accent, 'neutral'); this.#apply(); }
-  reset(): void { this.set('system'); this.setBase('neutral'); this.setAccent('neutral'); }
+  setAccent(accent: Accent): void { this.accent = accent; store('ccp-accent', accent, 'ink'); this.#apply(); }
+  reset(): void { this.set('system'); this.setAccent('ink'); }
 
   #apply(): void {
     const root = document.documentElement;
     // Swap every colour in one frame rather than animating hover/border transitions.
     root.classList.add('theme-switching');
     root.classList.toggle('dark', this.dark);
-    if (this.base === 'neutral') delete root.dataset.base; else root.dataset.base = this.base;
-    if (this.accent === 'neutral') delete root.dataset.accent; else root.dataset.accent = this.accent;
+    if (this.accent === 'ink') delete root.dataset.accent; else root.dataset.accent = this.accent;
     requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('theme-switching')));
   }
 }

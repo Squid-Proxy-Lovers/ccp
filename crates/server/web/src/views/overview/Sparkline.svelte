@@ -12,5 +12,5 @@
 
 <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} aria-hidden="true" class="overflow-visible">
   <polyline points={points.map(point => point.join(',')).join(' ')} fill="none" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" class="stroke-muted-foreground/40" vector-effect="non-scaling-stroke" />
-  {#if last}<circle cx={last[0]} cy={last[1]} r="4" stroke-width="2" class="fill-chart-1 stroke-card" />{/if}
+  {#if last}<circle cx={last[0]} cy={last[1]} r="4" stroke-width="2" class="fill-foreground stroke-card" />{/if}
 </svg>

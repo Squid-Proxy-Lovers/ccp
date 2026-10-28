@@ -24,7 +24,7 @@
       tabindex={item.value === value ? 0 : -1} onclick={() => select(item.value)}
       class="inline-flex h-full cursor-pointer items-center gap-1.5 rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm dark:aria-selected:bg-input/40">
       {item.label}
-      {#if item.count !== undefined}<span class="tabular rounded bg-foreground/[0.07] px-1.5 text-xs">{item.count}</span>{/if}
+      {#if item.count !== undefined}<span class="tabular text-xs text-muted-foreground">{item.count}</span>{/if}
     </button>
   {/each}
 </div>

@@ -10,8 +10,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "devDependencies": {
-    "@fontsource-variable/geist": "5.3.0",
-    "@fontsource-variable/geist-mono": "5.3.0",
+    "@fontsource/fragment-mono": "5.3.0",
     "@lucide/svelte": "1.62.0",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tailwindcss/vite": "4.3.3",

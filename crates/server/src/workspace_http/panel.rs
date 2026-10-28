@@ -69,17 +69,13 @@ fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
         ),
         "/admin/app.js" => (JS, include_bytes!("../../web/dist/app.js")),
         "/admin/theme.js" => (JS, include_bytes!("../../web/dist/theme.js")),
-        "/admin/fonts/geist-latin-wght-normal.woff2" => (
+        "/admin/fonts/fragment-mono-latin-400-normal.woff2" => (
             FONT,
-            include_bytes!("../../web/dist/fonts/geist-latin-wght-normal.woff2"),
+            include_bytes!("../../web/dist/fonts/fragment-mono-latin-400-normal.woff2"),
         ),
-        "/admin/fonts/geist-latin-ext-wght-normal.woff2" => (
+        "/admin/fonts/fragment-mono-latin-ext-400-normal.woff2" => (
             FONT,
-            include_bytes!("../../web/dist/fonts/geist-latin-ext-wght-normal.woff2"),
-        ),
-        "/admin/fonts/geist-mono-latin-wght-normal.woff2" => (
-            FONT,
-            include_bytes!("../../web/dist/fonts/geist-mono-latin-wght-normal.woff2"),
+            include_bytes!("../../web/dist/fonts/fragment-mono-latin-ext-400-normal.woff2"),
         ),
         _ => return Err(Error::NotFound),
     };
