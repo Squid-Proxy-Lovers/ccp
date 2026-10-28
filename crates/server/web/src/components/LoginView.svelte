@@ -93,7 +93,7 @@
   </div>
   <div class="absolute top-4 right-4 z-10"><Appearance /></div>
   <div class="rise flex items-center gap-2.5">
-    <Logo class="size-9" alive />
+    <Logo class="size-9" motion="once" />
     <span class="text-lg font-semibold tracking-tight">CCP</span>
   </div>
   <div bind:this={card} class="rise rise-2 w-full max-w-sm rounded-xl border bg-card/90 p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-12px_rgb(0_0_0/0.18)] backdrop-blur-sm dark:shadow-[0_0_0_1px_rgb(255_255_255/0.02),0_16px_40px_-16px_rgb(0_0_0/0.9)]">
