@@ -191,6 +191,15 @@
 @keyframes unfold {
   from { grid-template-columns: 0fr; opacity: 0; filter: blur(4px); }
 }
+/* A closed eye: the open eye squeezes shut, then the lid with lashes settles in. */
+.logo-closed .logo-eye { opacity: 0; }
+@keyframes logo-shut {
+  from { opacity: 1; transform: scaleY(1); }
+  to { opacity: 0; transform: scaleY(0.1); }
+}
+@keyframes logo-lid {
+  from { opacity: 0; transform: translateY(-2px); }
+}
 @keyframes logo-blink {
   0%, 100% { transform: scaleY(1); }
   50% { transform: scaleY(0.08); }
@@ -210,6 +219,8 @@
   /* The mark blinks only at launch (once, after the entrance) or while loading. */
   .logo-once .logo-eye { transform-box: fill-box; transform-origin: center; animation: logo-blink 0.32s ease-in-out 1.1s 1 both; }
   .unfold { animation: unfold 0.9s cubic-bezier(0.65, 0, 0.35, 1) 1.5s both; }
+  .logo-closed .logo-eye { transform-box: fill-box; transform-origin: center; animation: logo-shut 0.28s cubic-bezier(0.5, 0, 0.75, 0) 0.7s both; }
+  .logo-closed .logo-lid { animation: logo-lid 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) 0.95s both; }
   .logo-loading .logo-eye { transform-box: fill-box; transform-origin: center; animation: logo-blink-rest 1.6s ease-in-out infinite; }
 }
 

@@ -197,7 +197,7 @@ export async function wire(path, body, proof) {
       400: 'The request was refused. Check the fields and active session.',
       401: path === '/api/v1/admin/session/login'
         ? 'This admin key was not accepted. Reopen your saved login link or use a current admin key.'
-        : 'This session is no longer authorized. Copy unsaved work, then sign in again.',
+        : 'This session is no longer authorized. Sign in again to continue.',
       403: 'The current key cannot perform this action, or its session changed.',
       404: 'This item is unavailable. Refresh its parent list.',
       409: 'The content changed or needs conversion. Keep your draft and compare the current revision.',

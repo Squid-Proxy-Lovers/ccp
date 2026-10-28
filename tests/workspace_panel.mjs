@@ -98,7 +98,7 @@ test('rejected sign-in names the admin key while protected requests retain the s
     assert.equal(calls, 1);
     await assert.rejects(wire('/api/v1/admin/workspaces'), error => {
       assert.equal(error.status, 401);
-      assert.match(error.message, /Copy unsaved work, then sign in again/);
+      assert.match(error.message, /no longer authorized\. Sign in again to continue/);
       assert.doesNotMatch(error.message, /PRIVATE_ADMIN_KEY|PRIVATE_SERVER_DETAIL/);
       return true;
     });
