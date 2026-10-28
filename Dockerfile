@@ -16,6 +16,7 @@ COPY crates/transport/Cargo.toml /app/crates/transport/Cargo.toml
 COPY crates/transport/src /app/crates/transport/src
 COPY crates/server/Cargo.toml /app/crates/server/Cargo.toml
 COPY crates/server/src /app/crates/server/src
+COPY crates/server/web/dist /app/crates/server/web/dist
 COPY crates/client/Cargo.toml /app/crates/client/Cargo.toml
 RUN mkdir -p /app/crates/client/src && echo "" > /app/crates/client/src/lib.rs && echo "fn main(){}" > /app/crates/client/src/main.rs
 COPY tests/Cargo.toml /app/tests/Cargo.toml

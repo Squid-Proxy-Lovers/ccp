@@ -10,24 +10,18 @@ async fn panel_assets_are_bundled_public_https_only_and_locked_down() {
     for (path, mime) in [
         ("/admin", "text/html"),
         ("/admin/", "text/html"),
-        ("/admin/panel.css", "text/css"),
+        ("/admin/app.css", "text/css"),
         ("/admin/app.js", "text/javascript"),
-        ("/admin/model.js", "text/javascript"),
-        ("/admin/view.js", "text/javascript"),
-        ("/admin/context.js", "text/javascript"),
-        ("/admin/native_history.js", "text/javascript"),
-        ("/admin/native_values.js", "text/javascript"),
-        ("/admin/access.js", "text/javascript"),
-        ("/admin/guidance.js", "text/javascript"),
-        ("/admin/settings.js", "text/javascript"),
-        ("/admin/deletion.js", "text/javascript"),
-        ("/admin/team.js", "text/javascript"),
-        ("/admin/transfer.js", "text/javascript"),
-        ("/admin/invitations.js", "text/javascript"),
-        ("/admin/enrollment.js", "text/javascript"),
-        ("/admin/reported.js", "text/javascript"),
-        ("/admin/archives.js", "text/javascript"),
-        ("/admin/client_access.js", "text/javascript"),
+        ("/admin/theme.js", "text/javascript"),
+        ("/admin/fonts/geist-latin-wght-normal.woff2", "font/woff2"),
+        (
+            "/admin/fonts/geist-latin-ext-wght-normal.woff2",
+            "font/woff2",
+        ),
+        (
+            "/admin/fonts/geist-mono-latin-wght-normal.woff2",
+            "font/woff2",
+        ),
     ] {
         let response = f.public_client().get(f.url(path)).send().await.unwrap();
         assert_eq!(response.status(), 200);
