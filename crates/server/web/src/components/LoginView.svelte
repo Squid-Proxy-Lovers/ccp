@@ -95,8 +95,8 @@
       </div>
     {/if}
   </div>
-  <p class="flex max-w-sm items-start gap-2 text-xs leading-relaxed text-muted-foreground">
-    <ShieldCheck class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+  <p class="max-w-sm text-center text-xs leading-relaxed text-muted-foreground">
+    <ShieldCheck class="mr-1 inline size-3.5 -translate-y-px align-middle text-destructive" aria-hidden="true" />
     A reusable link contains your key, so anyone with it has that key's access. Keep it private and revoke the key to invalidate it.
   </p>
   {#if version}<p class="absolute bottom-4 font-mono text-[11px] text-muted-foreground">ccp-server {version}</p>{/if}
