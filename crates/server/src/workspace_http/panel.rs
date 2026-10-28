@@ -69,13 +69,9 @@ fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
         ),
         "/admin/app.js" => (JS, include_bytes!("../../web/dist/app.js")),
         "/admin/theme.js" => (JS, include_bytes!("../../web/dist/theme.js")),
-        "/admin/fonts/work-sans-latin-wght-normal.woff2" => (
+        "/admin/fonts/OverusedGroteskRoman-VF.woff2" => (
             FONT,
-            include_bytes!("../../web/dist/fonts/work-sans-latin-wght-normal.woff2"),
-        ),
-        "/admin/fonts/work-sans-latin-ext-wght-normal.woff2" => (
-            FONT,
-            include_bytes!("../../web/dist/fonts/work-sans-latin-ext-wght-normal.woff2"),
+            include_bytes!("../../web/dist/fonts/OverusedGroteskRoman-VF.woff2"),
         ),
         "/admin/fonts/fragment-mono-latin-400-normal.woff2" => (
             FONT,
