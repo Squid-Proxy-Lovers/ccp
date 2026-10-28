@@ -20,6 +20,7 @@
   let linkInput = $state<HTMLInputElement | null>(null);
   let card = $state<HTMLDivElement | null>(null);
   let backdrop = $state<HTMLDivElement | null>(null);
+  const NAME = [{initial: 'C', rest: 'ephalopod '}, {initial: 'C', rest: 'oordination '}, {initial: 'P', rest: 'rotocol'}];
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
 
   // Spotlight: the pointer position goes to CSS variables through the CSSOM
@@ -92,15 +93,15 @@
     <div class="login-spot"></div>
   </div>
   <div class="absolute top-4 right-4 z-10"><Appearance /></div>
-  <div class="rise flex flex-col items-center gap-4">
+  <div class="rise flex flex-col items-center gap-5">
     <div class="relative">
       <div class="login-halo pointer-events-none absolute -inset-10 -z-10" aria-hidden="true"></div>
       <Logo class="size-14 drop-shadow-[0_8px_18px_rgb(0_0_0/0.18)]" motion="once" watch />
     </div>
-    <div class="text-center">
-      <p class="text-[2rem] leading-none font-semibold tracking-[-0.045em]">CCP</p>
-      <p class="mt-2 font-mono text-xs text-muted-foreground">Cephalopod Coordination Protocol</p>
-    </div>
+    <!-- The name unfolds from its initials once the mark has blinked. -->
+    <p class="text-xl leading-none tracking-[-0.03em] whitespace-nowrap sm:text-2xl">
+      {#each NAME as {initial, rest} (rest)}<span class="font-semibold">{initial}</span><span class="unfold text-muted-foreground"><span>{rest}</span></span>{/each}
+    </p>
   </div>
   <div bind:this={card} class="rise rise-2 w-full max-w-sm rounded-xl border bg-card/90 p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-12px_rgb(0_0_0/0.18)] backdrop-blur-sm dark:shadow-[0_0_0_1px_rgb(255_255_255/0.02),0_16px_40px_-16px_rgb(0_0_0/0.9)]">
     <div class="mb-6 space-y-1.5">

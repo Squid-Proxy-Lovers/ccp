@@ -178,6 +178,19 @@
 .login-halo {
   background: radial-gradient(closest-side, color-mix(in oklch, var(--foreground) 9%, transparent), transparent);
 }
+/* Collapsible run of letters: animating the column from 0fr unfolds it in place. */
+.unfold {
+  display: inline-grid;
+  grid-template-columns: 1fr;
+}
+.unfold > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: pre;
+}
+@keyframes unfold {
+  from { grid-template-columns: 0fr; opacity: 0; filter: blur(4px); }
+}
 @keyframes logo-blink {
   0%, 100% { transform: scaleY(1); }
   50% { transform: scaleY(0.08); }
@@ -196,6 +209,7 @@
   .rise-4 { animation-delay: 0.3s; }
   /* The mark blinks only at launch (once, after the entrance) or while loading. */
   .logo-once .logo-eye { transform-box: fill-box; transform-origin: center; animation: logo-blink 0.32s ease-in-out 1.1s 1 both; }
+  .unfold { animation: unfold 0.9s cubic-bezier(0.65, 0, 0.35, 1) 1.5s both; }
   .logo-loading .logo-eye { transform-box: fill-box; transform-origin: center; animation: logo-blink-rest 1.6s ease-in-out infinite; }
 }
 
