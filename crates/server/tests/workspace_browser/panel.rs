@@ -14,6 +14,14 @@ async fn panel_assets_are_bundled_public_https_only_and_locked_down() {
         ("/admin/app.js", "text/javascript"),
         ("/admin/theme.js", "text/javascript"),
         (
+            "/admin/fonts/work-sans-latin-wght-normal.woff2",
+            "font/woff2",
+        ),
+        (
+            "/admin/fonts/work-sans-latin-ext-wght-normal.woff2",
+            "font/woff2",
+        ),
+        (
             "/admin/fonts/fragment-mono-latin-400-normal.woff2",
             "font/woff2",
         ),
