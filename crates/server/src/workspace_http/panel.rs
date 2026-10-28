@@ -40,7 +40,7 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
         ("x-frame-options", "DENY"),
         (
             "content-security-policy",
-            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+            "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
         ),
         ("cross-origin-opener-policy", "same-origin"),
         (

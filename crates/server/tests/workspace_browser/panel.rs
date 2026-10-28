@@ -39,6 +39,7 @@ async fn panel_assets_are_bundled_public_https_only_and_locked_down() {
             "default-src 'none'",
             "script-src 'self'",
             "style-src 'self'",
+            "font-src 'self'",
             "connect-src 'self'",
             "frame-ancestors 'none'",
             "base-uri 'none'",
