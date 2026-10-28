@@ -15,8 +15,7 @@
   import Delayed from '../lib/ui/Delayed.svelte';
   import OverviewSkeleton from './overview/OverviewSkeleton.svelte';
   import Empty from '../lib/ui/Empty.svelte';
-  import StatTile from './overview/StatTile.svelte';
-  import Sparkline from './overview/Sparkline.svelte';
+  import MetricBand from './overview/MetricBand.svelte';
   import ActivityCard from './overview/ActivityCard.svelte';
   import WritersCard from './overview/WritersCard.svelte';
   import AttentionCard from './overview/AttentionCard.svelte';
@@ -32,6 +31,8 @@
   type Range = '7' | '30' | '90';
   let range = $state<Range>('30');
   let overview = $state.raw<Overview | null>(null);
+  /** Writes in the window before this one, when twice the range fits the 90-day limit. */
+  let previous = $state.raw<number | null>(null);
   let overviewError = $state('');
   let loading = $state(false);
   let reports = $state.raw<ReportPage | null>(null);
@@ -44,7 +45,14 @@
     if (!workspace) return;
     loading = true;
     try {
-      overview = await app.request<Overview>('/api/v1/admin/workspaces/overview', {workspace_id: workspace.id, days});
+      const path = '/api/v1/admin/workspaces/overview';
+      const [current, wide] = await Promise.all([
+        app.request<Overview>(path, {workspace_id: workspace.id, days}),
+        days * 2 <= 90 ? app.request<Overview>(path, {workspace_id: workspace.id, days: days * 2}) : null,
+      ]);
+      overview = current;
+      // The wider read is oldest first, so its first half is the previous window.
+      previous = wide ? wide.activity.slice(0, days).reduce((sum, day) => sum + total(day), 0) : null;
       overviewError = '';
     } catch (error) {
       if (!app.locked) overviewError = (error as Error).message;
@@ -68,7 +76,6 @@
 
   const recent = $derived(reports ? [...reports.items].sort((a, b) => b.updated_at - a.updated_at).slice(0, 5) : []);
   const stale = $derived(reports?.items.filter(report => report.stale).length ?? 0);
-  const writes = $derived(overview ? overview.activity.reduce((sum, day) => sum + total(day), 0) : 0);
 
   const attention = $derived.by(() => {
     const items: AttentionItem[] = [];
@@ -110,15 +117,7 @@
 
   {#if overview}
     <div class={['grid gap-6 transition-opacity', loading && 'opacity-60']} aria-busy={loading}>
-      <div class="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        <StatTile label="Entries" value={whole.format(overview.totals.entries)} detail={`${whole.format(overview.totals.archived_entries)} archived`} />
-        <StatTile label="Books" value={whole.format(overview.totals.books)} detail={`On ${plural(overview.totals.shelves, 'active shelf', 'active shelves')}`} />
-        <StatTile label="Active clients" value={whole.format(overview.access.active_clients)}
-          detail={overview.access.pending_invitations ? `${plural(overview.access.pending_invitations, 'invitation')} pending` : 'No pending invitations'} />
-        <StatTile label="Entry writes" value={whole.format(writes)} detail={`Last ${days} days`}>
-          {#snippet trend()}<Sparkline values={overview?.activity.map(total) ?? []} />{/snippet}
-        </StatTile>
-      </div>
+      <MetricBand {overview} {days} {previous} />
 
       <div class="grid gap-6 lg:grid-cols-3">
         <div class="min-w-0 lg:col-span-2"><ActivityCard days={overview.activity} range={days} /></div>
