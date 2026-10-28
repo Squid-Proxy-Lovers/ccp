@@ -1,4 +1,5 @@
 <script lang="ts">
+  import WorkspaceAvatar from '../components/WorkspaceAvatar.svelte';
   // Instance-admin workspace list, paged 32 at a time, with workspace creation.
   // The new owner key is shown once and kept only in memory until dismissed.
   import {Building2, ChevronLeft, ChevronRight, Plus} from '@lucide/svelte';
@@ -75,7 +76,8 @@
             {#each app.workspaces as workspace (workspace.id)}
               <tr class={table.row}>
                 <td class={[table.cell, 'font-medium']}>
-                  <span class="flex items-center gap-2">
+                  <span class="flex items-center gap-2.5">
+                    <WorkspaceAvatar id={workspace.id} class="size-6" />
                     {workspace.name}
                     {#if workspace.id === app.workspace?.id}<Badge tone="info">Current</Badge>{/if}
                   </span>

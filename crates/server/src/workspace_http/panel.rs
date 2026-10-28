@@ -40,7 +40,7 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
         ("x-frame-options", "DENY"),
         (
             "content-security-policy",
-            "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+            "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
         ),
         ("cross-origin-opener-policy", "same-origin"),
         (
@@ -69,6 +69,10 @@ fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
         ),
         "/admin/app.js" => (JS, include_bytes!("../../web/dist/app.js")),
         "/admin/theme.js" => (JS, include_bytes!("../../web/dist/theme.js")),
+        "/admin/favicon.svg" => (
+            "image/svg+xml",
+            include_bytes!("../../web/dist/favicon.svg"),
+        ),
         "/admin/fonts/OverusedGroteskRoman-VF.woff2" => (
             FONT,
             include_bytes!("../../web/dist/fonts/OverusedGroteskRoman-VF.woff2"),

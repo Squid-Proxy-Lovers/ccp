@@ -4,6 +4,7 @@
   import Menu from '../lib/ui/Menu.svelte';
   import MenuItem from '../lib/ui/MenuItem.svelte';
   import Logo from './Logo.svelte';
+  import WorkspaceAvatar from './WorkspaceAvatar.svelte';
   import {app} from '../lib/app.svelte';
   import {stamp} from '../lib/notify.svelte';
   import type {View, Workspace} from '../lib/types';
@@ -44,7 +45,7 @@
   <Menu label="Switch workspace" class="w-[15.5rem]"
     triggerClass="flex w-full items-center gap-2.5 rounded-lg p-2 text-left hover:bg-sidebar-accent aria-expanded:bg-sidebar-accent">
     {#snippet trigger()}
-      <Logo class="size-8 shrink-0" />
+      {#if app.workspace}<WorkspaceAvatar id={app.workspace.id} class="size-8" />{:else}<Logo class="size-8 shrink-0" />{/if}
       <span class="grid min-w-0 flex-1 leading-tight">
         <span class="truncate text-sm font-semibold">{app.workspace?.name ?? 'CCP'}</span>
         <span class="truncate text-xs text-muted-foreground">{app.workspace ? (app.workspace.archived ? 'Archived workspace' : 'Workspace') : 'Choose a workspace'}</span>
@@ -55,7 +56,7 @@
       <p class="px-2 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">Workspaces</p>
       {#each app.workspaces as workspace (workspace.id)}
         <MenuItem onselect={() => choose(workspace, close)}>
-          <span class="flex size-6 items-center justify-center rounded-md border text-xs font-medium">{workspace.name.slice(0, 1).toUpperCase()}</span>
+          <WorkspaceAvatar id={workspace.id} class="size-6" />
           <span class="min-w-0 flex-1 truncate">{workspace.name}</span>
           {#if workspace.archived}<Archive />{/if}
           {#if workspace.id === app.workspace?.id}<Check />{/if}

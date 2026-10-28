@@ -1,4 +1,5 @@
 <script lang="ts">
+  import WorkspaceAvatar from '../components/WorkspaceAvatar.svelte';
   // Signed in, but no workspace is open.
   import {Building2, ChevronRight, Globe} from '@lucide/svelte';
   import PageHeader from '../components/PageHeader.svelte';
@@ -22,7 +23,7 @@
       description="Select a workspace to manage access or read shared context.">
       {#each app.workspaces.slice(0, 6) as workspace (workspace.id)}
         <Button variant="outline" size="sm" busy={app.working(`open:${workspace.id}`)} onclick={() => open(workspace)}>
-          {workspace.name}{#if workspace.archived}<span class="text-muted-foreground"> · Archived</span>{/if} <ChevronRight />
+          <WorkspaceAvatar id={workspace.id} class="size-4" />{workspace.name}{#if workspace.archived}<span class="text-muted-foreground"> · Archived</span>{/if} <ChevronRight />
         </Button>
       {/each}
       {#if app.instanceScope}

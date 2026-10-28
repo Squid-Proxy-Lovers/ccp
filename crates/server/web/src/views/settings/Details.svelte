@@ -9,6 +9,7 @@
   import {app} from '../../lib/app.svelte';
   import {copyText} from '../../lib/notify.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
+  import WorkspaceAvatar from '../../components/WorkspaceAvatar.svelte';
   import type {Session, Workspace} from '../../lib/types';
 
   let {workspace, session}: {workspace: Workspace; session: Session} = $props();
@@ -22,7 +23,7 @@
   <CardContent>
     <dl class="grid gap-x-6 gap-y-4 text-sm sm:grid-cols-[10rem_1fr]">
       <dt class="text-muted-foreground">Name</dt>
-      <dd class="font-medium break-words">{workspace.name}</dd>
+      <dd class="flex min-w-0 items-center gap-2 font-medium break-words"><WorkspaceAvatar id={workspace.id} class="size-5" />{workspace.name}</dd>
       <dt class="self-center text-muted-foreground">Workspace ID</dt>
       <dd class="flex min-w-0 items-center gap-2">
         <code class="truncate font-mono text-[13px]">{workspace.id}</code>
