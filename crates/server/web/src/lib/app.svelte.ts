@@ -86,7 +86,8 @@ class App {
     this.locked = true;
     this.lockMessage = message;
     this.generation += 1;
-    notice(message, 'destructive');
+    // The locked screen states the reason; older toasts no longer apply.
+    clearToasts();
   }
 
   get lockAdvice(): string {
@@ -165,7 +166,7 @@ class App {
     this.busy = true;
     this.busyKey = key;
     try { await action(); }
-    catch (error) { notice((error as Error).message, 'destructive'); }
+    catch (error) { if (!this.locked) notice((error as Error).message, 'destructive'); }
     finally { this.busy = false; this.busyKey = ''; }
   }
   working(key: string): boolean { return this.busy && this.busyKey === key; }
