@@ -1,12 +1,12 @@
 <script lang="ts">
   import {LayoutDashboard, BookOpen, KeyRound, ListChecks, ScrollText, Settings, Globe, Building2,
-    ChevronsUpDown, Check, LogOut, ChevronLeft, ChevronRight, Archive} from '@lucide/svelte';
+    ChevronsUpDown, Check, LogOut, ChevronLeft, ChevronRight, Archive, Copy} from '@lucide/svelte';
   import Menu from '../lib/ui/Menu.svelte';
   import MenuItem from '../lib/ui/MenuItem.svelte';
   import Logo from './Logo.svelte';
   import WorkspaceAvatar from './WorkspaceAvatar.svelte';
   import {app} from '../lib/app.svelte';
-  import {stamp} from '../lib/notify.svelte';
+  import {stamp, relative, copyText} from '../lib/notify.svelte';
   import type {View, Workspace} from '../lib/types';
 
   let {onnavigate}: {onnavigate?: () => void} = $props();
@@ -106,7 +106,7 @@
   </nav>
 
   {#if identity}
-    <Menu label="Account" side="top" class="w-[15.5rem]"
+    <Menu label="Account" side="top" class="right-0 p-0"
       triggerClass="flex w-full items-center gap-2.5 rounded-lg p-2 text-left hover:bg-sidebar-accent aria-expanded:bg-sidebar-accent">
       {#snippet trigger()}
         <span class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-xs font-semibold">{initials}</span>
@@ -117,12 +117,24 @@
         <ChevronsUpDown class="size-4 shrink-0 text-muted-foreground" />
       {/snippet}
       {#snippet children(close)}
-        <div class="space-y-1 px-2 py-1.5 text-xs text-muted-foreground">
-          <p><span class="text-foreground">{identity.key_name}</span> · {role}</p>
-          {#if app.session}<p>Session ends {stamp(app.session.expires_at)}</p>{/if}
-          <p class="font-mono break-all" title="Key and principal labels don't identify the individual using a shared key.">Key {identity.key_id}</p>
-        </div>
-        <div class="mt-1 border-t pt-1">
+        <dl class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-1.5 px-3 py-2.5 text-xs">
+          <dt class="text-muted-foreground">Key</dt>
+          <dd class="truncate text-right" title={identity.key_name}>{identity.key_name}</dd>
+          <dt class="text-muted-foreground">Key ID</dt>
+          <dd class="flex justify-end">
+            <button type="button" role="menuitem" tabindex="-1" title="Copy key ID. Key and principal labels don't identify who is using a shared key."
+              aria-label={`Copy key ID ${identity.key_id}`} onclick={() => void copyText(identity.key_id)}
+              class="group -my-0.5 -mr-1 flex cursor-pointer items-center gap-1.5 rounded px-1 py-0.5 font-mono text-[11px] outline-none hover:bg-accent focus-visible:bg-accent">
+              {identity.key_id.slice(0, 8)}…{identity.key_id.slice(-4)}
+              <Copy class="size-3 text-muted-foreground group-hover:text-foreground" aria-hidden="true" />
+            </button>
+          </dd>
+          {#if app.session}
+            <dt class="text-muted-foreground">Session</dt>
+            <dd class="text-right"><time datetime={new Date(app.session.expires_at * 1000).toISOString()} title={stamp(app.session.expires_at)}>Ends {relative(app.session.expires_at)}</time></dd>
+          {/if}
+        </dl>
+        <div class="border-t p-1">
           <MenuItem onselect={() => { close(); void app.run(() => app.signOut(), 'signout'); }}><LogOut /> Sign out</MenuItem>
         </div>
       {/snippet}
