@@ -2,7 +2,10 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #[cfg(test)]
+#[path = "."]
 mod tests {
+    #[path = "first_boot/links.rs"]
+    mod links;
     use serde_json::{Value, json};
     use server::workspace_http::{UpConfig, WorkspaceServer};
     use std::{path::PathBuf, sync::Arc};
@@ -11,6 +14,7 @@ mod tests {
     struct Fixture {
         root: PathBuf,
         base: String,
+        mtls_port: u16,
         code: String,
         client: reqwest::Client,
         trust: server::instance_tls::TrustInfo,
@@ -39,7 +43,9 @@ mod tests {
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap();
-            let base = format!("https://{}", server.startup().unwrap().https_address);
+            let startup = server.startup().unwrap();
+            let base = format!("https://{}", startup.https_address);
+            let mtls_port = startup.mtls_address.port();
             let (stop, rx) = oneshot::channel();
             let task = tokio::spawn(server.run_until(async {
                 rx.await?;
@@ -48,6 +54,7 @@ mod tests {
             Self {
                 root,
                 base,
+                mtls_port,
                 code: code.unwrap_or_default(),
                 client,
                 trust,

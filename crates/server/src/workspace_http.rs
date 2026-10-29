@@ -8,6 +8,7 @@ mod browser;
 mod content;
 mod dispatch;
 mod guidance;
+mod invitation_link;
 mod invitations;
 mod management;
 mod panel;
@@ -76,6 +77,7 @@ struct State {
     database: PathBuf,
     browser_sessions: browser::Sessions,
     setup: Option<crate::setup_code::SetupCode>,
+    mtls_port: u16,
 }
 
 #[derive(Clone, Copy)]
@@ -122,6 +124,7 @@ impl WorkspaceServer {
             database: lease.directory().join("ccp.sqlite3"),
             browser_sessions,
             setup: None,
+            mtls_port: mtls.local_addr()?.port(),
         });
         Ok(Self {
             https,

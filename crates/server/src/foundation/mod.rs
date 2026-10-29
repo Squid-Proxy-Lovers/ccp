@@ -16,6 +16,8 @@ mod content;
 mod entry;
 mod guidance;
 mod invitation;
+mod invitation_links;
+mod invitation_migration;
 mod model;
 mod native_provenance;
 mod operation_ledger;
@@ -56,6 +58,9 @@ pub use invitation::{
     InitialInvitationRequest, InvitationKind, InvitationPage, InvitationStatus, InvitationSummary,
     IssuedInvitation, ReadmissionInvitationRequest,
 };
+pub use invitation_links::{
+    DEFAULT_LINK_LIFETIME_SECONDS, LinkAdmission, LinkInvitationRequest, LinkLifetime,
+};
 pub use model::{
     Action, Actor, Admission, ClientRegistration, DataRole, Enrollment, GrantPage, GrantSummary,
     WorkspaceAdministration, WorkspacePage, WorkspaceSummary,
@@ -95,6 +100,7 @@ use uuid::Uuid;
 const SCHEMA: &str = include_str!("schema.sql");
 
 pub(crate) fn migrate(transaction: &Transaction<'_>) -> anyhow::Result<()> {
+    invitation_migration::migrate(transaction)?;
     transaction.execute_batch(SCHEMA)?;
     transaction.execute_batch(include_str!("content.sql"))?;
     transaction.execute_batch(include_str!("entry.sql"))?;

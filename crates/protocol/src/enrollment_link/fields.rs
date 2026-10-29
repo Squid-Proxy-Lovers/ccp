@@ -17,7 +17,8 @@ pub struct LinkTarget {
     pub workspace_name: String,
 }
 impl LinkTarget {
-    pub(super) fn validated(mut self) -> Result<Self, LinkError> {
+    /// Normalize routing hints only; this does not establish trust or permission.
+    pub fn validated(mut self) -> Result<Self, LinkError> {
         self.https_origin = origin(&self.https_origin)?;
         self.mtls_origin = origin(&self.mtls_origin)?;
         id(&self.instance_id.to_string())?;

@@ -24,38 +24,7 @@ impl AccessStore<'_> {
     ) -> anyhow::Result<IssuedInvitation> {
         validate_bounds(request.max_clients.map(u64::from), request.expires_at, now)?;
         self.mutate(|tx| {
-            authorize(
-                tx,
-                actor,
-                Action::AdmitClient,
-                Some(request.workspace_id),
-                now,
-            )?;
-            let started: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM ccp_initial_enrollment WHERE workspace_id = ?1)
-                 OR EXISTS(SELECT 1 FROM ccp_grants WHERE workspace_id = ?1)",
-                [request.workspace_id.to_string()],
-                |row| row.get(0),
-            )?;
-            if started {
-                bail!("initial enrollment has already started or closed");
-            }
-            let issued = insert_invitation(
-                tx,
-                actor,
-                InvitationInsert {
-                    workspace: request.workspace_id,
-                    role: request.role,
-                    kind: "initial_group",
-                    max_uses: request.max_clients.map(u64::from),
-                    expires_at: request.expires_at,
-                },
-            )?;
-            tx.execute(
-                "INSERT INTO ccp_initial_enrollment(workspace_id, invitation_id) VALUES (?1, ?2)",
-                params![request.workspace_id.to_string(), issued.id.to_string()],
-            )?;
-            enrollment_event(tx, request.workspace_id, "opened", now)?;
+            let issued = insert_initial(tx, actor, request, now)?;
             audit(
                 tx,
                 actor,
@@ -155,6 +124,48 @@ impl AccessStore<'_> {
     }
 }
 
+pub(super) fn insert_initial(
+    tx: &Connection,
+    actor: Actor,
+    request: InitialInvitationRequest,
+    now: i64,
+) -> anyhow::Result<IssuedInvitation> {
+    validate_bounds(request.max_clients.map(u64::from), request.expires_at, now)?;
+    authorize(
+        tx,
+        actor,
+        Action::AdmitClient,
+        Some(request.workspace_id),
+        now,
+    )?;
+    let started: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM ccp_initial_enrollment WHERE workspace_id = ?1)
+         OR EXISTS(SELECT 1 FROM ccp_grants WHERE workspace_id = ?1)",
+        [request.workspace_id.to_string()],
+        |row| row.get(0),
+    )?;
+    if started {
+        bail!("initial enrollment has already started or closed");
+    }
+    let issued = insert_invitation(
+        tx,
+        actor,
+        InvitationInsert {
+            workspace: request.workspace_id,
+            role: request.role,
+            kind: "initial_group",
+            max_uses: request.max_clients.map(u64::from),
+            expires_at: request.expires_at,
+        },
+    )?;
+    tx.execute(
+        "INSERT INTO ccp_initial_enrollment(workspace_id, invitation_id) VALUES (?1, ?2)",
+        params![request.workspace_id.to_string(), issued.id.to_string()],
+    )?;
+    enrollment_event(tx, request.workspace_id, "opened", now)?;
+    Ok(issued)
+}
+
 fn status(
     tx: &Connection,
     workspace: Uuid,
@@ -201,7 +212,11 @@ fn status(
     })
 }
 
-fn validate_bounds(max_uses: Option<u64>, expires_at: Option<i64>, now: i64) -> anyhow::Result<()> {
+pub(super) fn validate_bounds(
+    max_uses: Option<u64>,
+    expires_at: Option<i64>,
+    now: i64,
+) -> anyhow::Result<()> {
     if now < 0
         || max_uses == Some(0)
         || (max_uses.is_none() && expires_at.is_none())
@@ -321,31 +336,43 @@ pub(super) fn insert_individual(
     {
         bail!("individual invitation lifetime cannot exceed seven days");
     }
-    authorize(
+    insert_individual_options(
         tx,
         actor,
-        Action::AdmitClient,
-        Some(request.workspace_id),
+        request.workspace_id,
+        request.role,
+        Some(request.expires_at),
         now,
-    )?;
-    refresh_initial(tx, request.workspace_id, now)?;
+    )
+}
+pub(super) fn insert_individual_options(
+    tx: &Connection,
+    actor: Actor,
+    workspace: Uuid,
+    role: DataRole,
+    expires: Option<i64>,
+    now: i64,
+) -> anyhow::Result<IssuedInvitation> {
+    validate_bounds(Some(1), expires, now)?;
+    authorize(tx, actor, Action::AdmitClient, Some(workspace), now)?;
+    refresh_initial(tx, workspace, now)?;
     let open: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM ccp_initial_enrollment WHERE workspace_id = ?1 AND closed_at IS NULL)",
-        [request.workspace_id.to_string()], |row| row.get(0),
+        [workspace.to_string()], |row| row.get(0),
     )?;
     if open {
         bail!("close initial group enrollment before individual admission");
     }
-    close_initial(tx, request.workspace_id, "manual_close", now)?;
+    close_initial(tx, workspace, "manual_close", now)?;
     insert_invitation(
         tx,
         actor,
         InvitationInsert {
-            workspace: request.workspace_id,
-            role: request.role,
+            workspace,
+            role,
             kind: "individual",
             max_uses: Some(1),
-            expires_at: Some(request.expires_at),
+            expires_at: expires,
         },
     )
 }

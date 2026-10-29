@@ -109,6 +109,7 @@ fn https(
     }
     if input.path != "/api/v1/admin/workspaces"
         && !invitations::handles(&input.path)
+        && !super::invitation_link::handles(&input.path)
         && !management::handles(&input.path)
         && !team::handles(&input.path)
         && !content::handles(&input.path)
@@ -120,6 +121,9 @@ fn https(
         return Err(Error::NotFound);
     }
     let actor = browser::authenticate(state, store, &input, now)?;
+    if super::invitation_link::handles(&input.path) {
+        return super::invitation_link::dispatch(state, store, actor, &input, now);
+    }
     if work_status::admin_handles(&input.path) {
         return work_status::dispatch(store, actor, &input, now);
     }

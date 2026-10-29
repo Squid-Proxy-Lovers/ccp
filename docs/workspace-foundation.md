@@ -140,7 +140,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 26. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 27. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -385,3 +385,20 @@ contains that leaf. Compare it to **Server leaf SHA-256**, not to **CA SHA-256**
 retrieval/trust instructions must compare the DER CA digest against the separately
 trusted host output before using it as an anchor. No OS trust installation or
 browser-warning bypass is performed by the server.
+
+
+## Explicit link invitation policy (schema 27, unreleased)
+
+Schema 27 permits a single-use individual invitation without a deadline when an
+authorized issuer explicitly confirms that choice through the link API. The
+positive-use bound remains enforced by SQLite and domain policy. An initial
+group can omit a deadline only with a positive client cap; initial enrollment
+cannot be reopened after individual admission.
+
+The private initialization transaction rebuilds only the known invitation table,
+preserving its exact column values, hashes, receipt references, indexes and
+triggers. The old table definition is unchanged from its original introduction
+through schema 26. Unknown table definitions are refused. A failed copy,
+integrity check or schema-version write rolls the upgrade back. Keep a matching
+complete backup and binary for rollback; older schema-aware servers refuse 27.
+See [link issuance](invitation-link-issuance.md) for the API and warning policy.

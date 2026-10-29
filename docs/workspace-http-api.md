@@ -152,6 +152,7 @@ inner TLS peer.
 | HTTPS | `POST /api/v1/admin/workspaces/transfer-owner` | Current owner key; transfer to an eligible provisioned scoped admin |
 | HTTPS | `POST /api/v1/admin/invitations/initial` | Current workspace owner/admin key; bounded initial group link |
 | HTTPS | `POST /api/v1/admin/invitations/individual` | Current workspace owner/admin key; individual link under existing window/expiry policy |
+| HTTPS | `POST /api/v1/admin/invitations/link` | Current workspace owner/admin admission authority; [versioned link](invitation-link-issuance.md) with finite default/custom lifetime or explicitly confirmed, bounded no-expiry policy |
 | HTTPS | `POST /api/v1/admin/enrollment/status` or `/close` | Scoped security authority; current initial-phase metadata or terminal closure |
 | HTTPS | `POST /api/v1/admin/invitations/list`, `/status` or `/revoke` | Scoped security authority; paged metadata, individual status or revocation |
 | HTTPS | `POST /api/v1/admin/invitations/readmission` | Current workspace owner/admin key; fresh targeted admission after revoked membership |

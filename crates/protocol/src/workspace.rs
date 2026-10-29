@@ -9,6 +9,7 @@ pub mod browser;
 pub mod content;
 pub mod deletion;
 pub mod guidance;
+pub mod invitation_links;
 pub mod overview;
 pub mod retention;
 pub mod work_status;

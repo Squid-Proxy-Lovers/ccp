@@ -61,6 +61,7 @@ the other guides describe the supported native interface.
 | Inspect a stopped native database without conversion or source changes | [Native conversion inventory](native-conversion-inventory.md) |
 | Start a workspace instance and complete first-boot setup | [One-command setup](workspace-foundation.md#start-an-instance-in-one-command) |
 | Inspect the versioned enrollment link and its trust boundary | [Enrollment link format](enrollment-links.md) |
+| Issue a scoped link with a default, custom or explicitly confirmed lifetime | [Link issuance](invitation-link-issuance.md) |
 | Understand the unreleased workspace migration, permissions and guidance foundation | [Workspace access foundation](workspace-foundation.md) |
 | Create shelves/books and read workspace context and shelf lifecycle metadata through the normal client | [Workspace content client](workspace-content-client.md) |
 | Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |

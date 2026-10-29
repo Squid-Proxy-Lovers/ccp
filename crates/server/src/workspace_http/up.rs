@@ -52,6 +52,7 @@ impl WorkspaceServer {
         let mtls_tls = TlsAcceptor::from(identity.client_mtls_config()?);
         let browser_sessions = browser::Sessions::new()
             .map_err(|_entropy| anyhow::anyhow!("cannot initialize browser sessions"))?;
+        let mtls_port = mtls.local_addr()?.port();
         Ok((
             Self {
                 https,
@@ -63,6 +64,7 @@ impl WorkspaceServer {
                     database,
                     browser_sessions,
                     setup,
+                    mtls_port,
                 }),
                 cleanup_budget: Arc::new(Semaphore::new(1)),
                 websocket_tunnels: false,

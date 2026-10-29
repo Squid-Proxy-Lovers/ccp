@@ -10,6 +10,7 @@ mod content;
 mod discovery;
 mod entries;
 mod guidance;
+mod invitation_links;
 mod invitations;
 mod keys;
 mod local;
