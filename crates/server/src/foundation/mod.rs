@@ -166,7 +166,7 @@ fn parse_id(id: String) -> anyhow::Result<Uuid> {
     Uuid::parse_str(&id).context("invalid persisted foundation identity")
 }
 
-fn validate_name(name: &str) -> anyhow::Result<&str> {
+pub(crate) fn validate_name(name: &str) -> anyhow::Result<&str> {
     let name = name.trim();
     if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
         bail!("name must contain 1..256 bytes without control characters");

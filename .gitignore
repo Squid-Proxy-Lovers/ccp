@@ -48,3 +48,6 @@ runtime-journal.jsonl
 # Untracked local agent notes
 /AGENTS.local.md
 /CLAUDE.local.md
+
+# Frontend output is built from source and embedded at compile time.
+/crates/server/web/dist/

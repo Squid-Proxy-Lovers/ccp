@@ -17,11 +17,16 @@ binary protocol over mutually authenticated TLS (mTLS) for data operations.
 
 The [root README](../README.md#install) covers binary and Docker installation.
 Binaries install to `~/.local/bin`; change this with `--install-dir`. For an explicit
-source build, install Rust through rustup, Git, and Make, then run:
+source build, install Rust through rustup, Git, Make, and Node.js 24 or newer
+with npm, then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --from-source
 ```
+
+The source installer installs locked frontend build dependencies before compiling
+the server. A client-only source install (`--client --from-source`) builds only the
+client and does not require Node.js. Installed binaries do not require Node.js.
 
 For a native local server, keep the process running while clients use it:
 

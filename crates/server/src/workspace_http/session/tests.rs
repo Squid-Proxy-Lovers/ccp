@@ -59,6 +59,7 @@ async fn one_deadline_covers_outer_tls_upgrade_and_inner_http_without_renewing()
         identity,
         database: directory.join("ccp.sqlite3"),
         browser_sessions: browser::Sessions::new().unwrap(),
+        setup: None,
     });
     let (a, b) = tokio::io::duplex(65536);
     let (stop, receiver) = watch::channel(false);

@@ -31,6 +31,89 @@ Other panel workflows remain subsequent work as documented there.
 also exposed through scoped admin HTTPS, with state/archive summaries available
 to current readers.
 
+
+## Start an instance in one command
+
+```bash
+ccp-server up --data-dir ./ccp-data
+```
+
+On an empty directory, this starts HTTPS at `https://localhost:8443` and the
+client mTLS listener on `127.0.0.1:8444`. It prints a setup link and certificate
+fingerprints. Open the link, verify its prefilled setup code, name your first
+workspace and save both one-time admin keys. The workspace owner key manages
+that workspace; the instance admin key creates workspaces and manages the instance.
+
+The setup code is a bearer capability. Anyone who can read the startup output or
+container logs can use it before setup finishes. It expires after one hour and
+changes on restart. Its URL fragment is removed immediately by the panel and is
+sent only in protected HTTPS setup requests. Setup creates the first owner once;
+reopening the old link cannot create another owner. If the claim response is
+lost, check its state before retrying. A completed claim never returns its keys
+again: use the existing local key-reset commands with the server stopped. If the
+admin role records themselves are missing, restore a matching backup.
+
+Running the same command again serves the existing instance and prints its panel
+URL. It preserves the instance identity and CA. It refuses native, foreign or
+ambiguous data rather than treating them as a fresh installation. A leftover
+`.ccp-setup-*.sqlite3` file after a failed reservation needs operator inspection;
+startup names the file and does not delete or overwrite it automatically.
+
+Use `--name` for each DNS name or IP address clients will use, and
+`--https-listen` / `--mtls-listen` to change listener addresses. Names become part
+of the pinned TLS identity. Choose all names before the first start: later starts
+with different names are refused. Repeated starts without `--name` reuse stored
+names. To change names on an initialized instance, stop it and use the explicit
+[server certificate renewal](server-certificate-renewal.md) command, preserving
+the CA and stored data. Do not delete a populated volume to change its names.
+For example:
+
+```bash
+ccp-server up --data-dir ./ccp-data --name ccp.example.com --name localhost \
+  --https-listen 0.0.0.0:8443 --mtls-listen 0.0.0.0:8444
+```
+
+### Docker
+
+The image's default command runs the same setup flow and binds both listeners
+inside the container:
+
+```bash
+docker run -p 8443:8443 -p 8444:8444 -v ccp:/var/lib/ccp/server <image>
+```
+
+Replace `<image>` with your reviewed CCP image reference. Read the setup link in
+the container log. On a remote host, open its configured DNS name instead of the
+printed `localhost`. For a **fresh** remote instance, choose its names explicitly:
+
+```bash
+docker run -p 8443:8443 -p 8444:8444 -v ccp-remote:/var/lib/ccp/server <image> \
+  server up --data-dir /var/lib/ccp/server \
+  --name ccp.example.com --name localhost \
+  --https-listen 0.0.0.0:8443 --mtls-listen 0.0.0.0:8444
+```
+
+Replace the example DNS name with one you control before the first start. Keep the
+volume for subsequent starts. Publishing these ports makes them reachable on the
+host's interfaces; use `-p 127.0.0.1:8443:8443 -p 127.0.0.1:8444:8444` for a local-only
+Docker instance. Existing explicit native-session commands remain supported;
+`server -- up` addresses a native session literally named `up`.
+
+### Browser certificate trust
+
+The instance uses its own CA, so a first browser visit reports an untrusted
+certificate until you trust that CA. Obtain the public CA from the host's
+`workspace-tls-info` output with the server stopped, or fetch `/api/v1/ca.pem` and
+verify its DER SHA-256 against the independently obtained startup fingerprint.
+Install only that public certificate in your browser's trusted authorities if
+you want repeated visits without a warning. CCP does not install OS trust.
+
+If you choose your browser's one-time certificate exception instead, inspect the
+certificate first and compare its SHA-256 with **Server leaf SHA-256** from the
+host. A browser normally displays the leaf fingerprint, which differs from
+**CA SHA-256**. Do not send setup or admin secrets when either identity cannot
+be verified. Public CA discovery grants no workspace or administrator access.
+
 ## Database upgrade
 
 Schema 5 adds an instance UUID, workspace UUIDs, administrative principals and
@@ -57,7 +140,7 @@ Legacy table rebuilds run with foreign keys temporarily disabled on the private
 initialization connection; normal runtime/access-store connections enforce them.
 
 This phase supports the stable native database line through schema 2 and its
-own schemas 5 through 25. Versions 3 and 4 are reserved for the historical HTTP holding
+own schemas 5 through 26. Versions 3 and 4 are reserved for the historical HTTP holding
 draft, including its different journal/checkpoint recovery behavior. Those
 databases are explicitly refused before migration; this phase does not provide
 an automatic conversion from that implementation. Keep their database, journal
@@ -274,3 +357,31 @@ workspace provenance follows confirmed whole-workspace cleanup. Migration starts
 no import and leaves the legacy-content gate in place. The explicit
 [native converter](native-conversion.md) builds an independent new instance from
 supported native2 sources. External provenance read adapters remain subsequent work.
+
+## First-boot reservation (schema 26, unreleased)
+
+Schema 26 adds local setup-reservation provenance and a durable completion marker.
+A fresh instance can reserve its UUID and workspace mode and provision TLS before
+creating an administrator. No owner, admin key or client grant is created by that
+reservation. The runtime requires a separate host-generated setup capability for
+its first owner transaction. Completion is recorded atomically with the owner and
+keys; losing global role records never reopens first-boot claiming.
+
+Database publication does not replace an existing file. Native sessions, dirty
+native journals, foreign or corrupt data and ambiguous unpublished staging files
+are refused. An ambiguous staging-only directory requires host inspection; it is
+not automatically erased or treated as a fresh identity. The explicit `up` flow
+can finish a prior local `workspace-init` sequence with no native sessions or dirty
+journal. Existing `workspace-tls-init` still requires local administration first.
+
+Older schema-aware servers that support at most schema 25 refuse this database.
+Keep a complete matching backup and binary for rollback. The native wire protocol
+and workspace API version are unchanged. Reservation and code guard tests are
+separate from end-to-end acceptance of the setup wizard and enrollment-link flow.
+
+The new `up` startup output distinguishes CA and server certificate fingerprints.
+Browser certificate viewers may show only the server leaf, since the served chain
+contains that leaf. Compare it to **Server leaf SHA-256**, not to **CA SHA-256**. CA
+retrieval/trust instructions must compare the DER CA digest against the separately
+trusted host output before using it as an anchor. No OS trust installation or
+browser-warning bypass is performed by the server.

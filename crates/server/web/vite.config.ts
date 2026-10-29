@@ -4,7 +4,8 @@ import {svelte} from '@sveltejs/vite-plugin-svelte';
 import tailwindcss from '@tailwindcss/vite';
 import basicSsl from '@vitejs/plugin-basic-ssl';
 
-// The server embeds dist/ with include_bytes!, so file names must be stable
+// Cargo embeds the source build from OUT_DIR/panel (or an explicit prebuild),
+// so file names must be stable
 // and the bundle must satisfy its CSP: no inline scripts, styles or hosts.
 const upstream = process.env.CCP_PANEL_UPSTREAM ?? 'https://127.0.0.1:8443';
 

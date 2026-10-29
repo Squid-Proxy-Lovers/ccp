@@ -29,6 +29,25 @@ Two integration load tests are excluded from normal CI. Run them explicitly:
 cargo test -p ccp-tests --locked -- --ignored --test-threads=1
 ```
 
+## First-boot onboarding
+
+`cargo test -p server --test first_boot --locked` exercises actual HTTPS setup,
+current code authorization, concurrent claims, error handling and restart safety.
+`node --test tests/onboarding_panel.mjs` checks fragment handling, request privacy
+and uncertain claim responses. The normal quality suite includes these Node cases.
+
+After building an image, run:
+
+```bash
+docker build -t ccp-onboarding-test .
+python3 tests/docker_first_boot.py --image ccp-onboarding-test
+```
+
+This uses the image's default command and named volume, completes setup over
+CA-pinned HTTPS, refuses a repeated claim and verifies the saved owner key after
+restarting on the same volume. Host ports are ephemeral so an existing server
+can stay running. Only the test's unique container and volume are removed.
+
 ## CLI integration
 
 ```bash

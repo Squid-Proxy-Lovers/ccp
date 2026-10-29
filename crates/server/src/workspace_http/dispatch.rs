@@ -20,6 +20,26 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 pub(super) fn dispatch(context: &Context, input: Input) -> Result<Reply, Error> {
+    if super::setup::handles(&input.path) {
+        return super::setup::dispatch(context, input);
+    }
+    if input.path == "/api/v1/ca.pem" && matches!(context.surface, Surface::Https) {
+        if input.method != Method::GET || input.query.is_some() {
+            return Err(Error::BadRequest);
+        }
+        let mut reply = hyper::Response::new(http_body_util::Full::new(hyper::body::Bytes::from(
+            context.state.identity.trust().ca_certificate_pem.clone(),
+        )));
+        reply.headers_mut().insert(
+            "content-type",
+            hyper::header::HeaderValue::from_static("application/x-pem-file"),
+        );
+        reply.headers_mut().insert(
+            "cache-control",
+            hyper::header::HeaderValue::from_static("no-store"),
+        );
+        return Ok(reply);
+    }
     if matches!(context.surface, Surface::Bootstrap)
         && !super::tunnel::bootstrap_allows(&input.method, &input.path)
     {

@@ -12,8 +12,10 @@ use crate::foundation::{
 };
 
 impl AccessStore<'_> {
-    /// Trusted local operator only. Never expose this as first-visitor signup.
-    /// The local_admin wrapper enforces exclusive data-directory maintenance.
+    /// Trusted host operator or verified one-use startup capability only.
+    /// Local CLI wrappers enforce maintenance access. The setup route must hold
+    /// the runtime directory lease and validate the host-issued capability first;
+    /// a remote visitor without that proof must never reach this operation.
     pub fn bootstrap_instance(
         &mut self,
         operator_name: &str,
@@ -26,6 +28,8 @@ impl AccessStore<'_> {
             bail!("invalid server time");
         }
         self.mutate(|tx| {
+            let claimed: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM ccp_setup_reservation WHERE singleton=1 AND claimed_at IS NOT NULL)", [], |row| row.get(0))?;
+            if claimed { bail!("setup was already claimed; use saved keys or restore a matching backup"); }
             let principal = bootstrap_principal(tx, operator_name, now)?;
             let workspace = Uuid::new_v4();
             tx.execute(
@@ -50,6 +54,9 @@ impl AccessStore<'_> {
                 [],
                 |row| row.get(0),
             )?)?;
+            if tx.execute("UPDATE ccp_setup_reservation SET claimed_at=?1 WHERE singleton=1 AND claimed_at IS NULL", [now])? > 0 {
+                audit_operator_scope(tx, "complete_setup", None, instance, now)?;
+            }
             Ok(BootstrappedInstance {
                 instance_id: instance,
                 workspace_id: workspace,

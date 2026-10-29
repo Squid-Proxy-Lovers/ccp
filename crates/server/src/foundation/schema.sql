@@ -256,3 +256,11 @@ CREATE TABLE IF NOT EXISTS ccp_instance_tls (
     bundle_hash BLOB NOT NULL CHECK (length(bundle_hash) = 32),
     ca_fingerprint BLOB NOT NULL CHECK (length(ca_fingerprint) = 32)
 );
+
+-- Local-only provenance for a first-boot instance with no owner yet (schema26).
+CREATE TABLE IF NOT EXISTS ccp_setup_reservation (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    instance_id TEXT NOT NULL UNIQUE REFERENCES ccp_instance(instance_id) ON DELETE RESTRICT,
+    created_at INTEGER NOT NULL CHECK (created_at >= 0),
+    claimed_at INTEGER CHECK (claimed_at >= 0)
+);

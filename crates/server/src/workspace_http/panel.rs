@@ -53,37 +53,66 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
     Ok(reply)
 }
 
-/// The Svelte build in `crates/server/web/dist`, committed so the server builds
-/// without Node. File names are fixed by `vite.config.ts`.
+/// Embed the locked source build (or Docker/CI prebuild), never a stale tracked
+/// distribution. Installed binaries need no frontend toolchain.
 fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
     const JS: &str = "text/javascript; charset=utf-8";
     const FONT: &str = "font/woff2";
     let value: (&'static str, &'static [u8]) = match path {
-        "/admin" | "/admin/" => (
+        "/admin" | "/admin/" | "/admin/setup" => (
             "text/html; charset=utf-8",
-            include_bytes!("../../web/dist/index.html"),
+            include_bytes!(concat!(env!("OUT_DIR"), "/panel/index.html")),
         ),
         "/admin/app.css" => (
             "text/css; charset=utf-8",
-            include_bytes!("../../web/dist/app.css"),
+            include_bytes!(concat!(env!("OUT_DIR"), "/panel/app.css")),
         ),
-        "/admin/app.js" => (JS, include_bytes!("../../web/dist/app.js")),
-        "/admin/theme.js" => (JS, include_bytes!("../../web/dist/theme.js")),
+        "/admin/app.js" => (
+            JS,
+            include_bytes!(concat!(env!("OUT_DIR"), "/panel/app.js")),
+        ),
+        "/admin/theme.js" => (
+            JS,
+            include_bytes!(concat!(env!("OUT_DIR"), "/panel/theme.js")),
+        ),
         "/admin/favicon.svg" => (
             "image/svg+xml",
-            include_bytes!("../../web/dist/favicon.svg"),
+            include_bytes!(concat!(env!("OUT_DIR"), "/panel/favicon.svg")),
+        ),
+        "/admin/fonts/FragmentMono-OFL.txt" => (
+            "text/plain; charset=utf-8",
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/panel/fonts/FragmentMono-OFL.txt"
+            )),
+        ),
+        "/admin/fonts/OverusedGrotesk-OFL.txt" => (
+            "text/plain; charset=utf-8",
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/panel/fonts/OverusedGrotesk-OFL.txt"
+            )),
         ),
         "/admin/fonts/OverusedGroteskRoman-VF.woff2" => (
             FONT,
-            include_bytes!("../../web/dist/fonts/OverusedGroteskRoman-VF.woff2"),
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/panel/fonts/OverusedGroteskRoman-VF.woff2"
+            )),
         ),
         "/admin/fonts/fragment-mono-latin-400-normal.woff2" => (
             FONT,
-            include_bytes!("../../web/dist/fonts/fragment-mono-latin-400-normal.woff2"),
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/panel/fonts/fragment-mono-latin-400-normal.woff2"
+            )),
         ),
         "/admin/fonts/fragment-mono-latin-ext-400-normal.woff2" => (
             FONT,
-            include_bytes!("../../web/dist/fonts/fragment-mono-latin-ext-400-normal.woff2"),
+            include_bytes!(concat!(
+                env!("OUT_DIR"),
+                "/panel/fonts/fragment-mono-latin-ext-400-normal.woff2"
+            )),
         ),
         _ => return Err(Error::NotFound),
     };

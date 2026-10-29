@@ -13,6 +13,8 @@ pub mod legacy_inspection;
 pub mod local_admin;
 pub mod message;
 pub mod native_conversion;
+pub mod setup_code;
+pub mod setup_reservation;
 pub mod state;
 pub mod workspace_http;
 

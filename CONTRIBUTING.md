@@ -8,7 +8,7 @@ features before implementing them.
 
 ## Setup
 
-Install Rust through rustup, Python 3.13, Git, and Make. The MCP package also
+Install Rust through rustup, Node.js 24, Python 3.13, Git, and Make. The MCP package also
 supports Python 3.10+; CI tests both the minimum and current supported environments.
 
 ```bash
@@ -18,6 +18,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ./mcp
 make tools
+npm ci --prefix crates/server/web --ignore-scripts
 ```
 
 `make tools` installs exact Python tool versions from `requirements-lint.txt` and
@@ -38,6 +39,13 @@ cargo check --workspace --locked
 make help          # available build, test, and quality commands
 ```
 
+The server build checks frontend dependencies and compiles the locked Svelte
+sources into Cargo's output directory. Install its Node dependencies once before
+Rust server/workspace builds. Docker and CI prebuild the same assets in a Node
+stage and pass `CCP_PANEL_DIST`; that path is a build-time input, not a runtime
+setting. Generated `web/dist` is not committed. Installed server binaries embed
+the panel and do not need Node.js.
+
 Cargo-built binaries are named `server` and `client`; the installer names them
 `ccp-server` and `ccp-client`. See the [test guide](tests/README.md) to select suites.
 
@@ -50,6 +58,7 @@ make nightly-tests
 make mcp-smoke
 make compat
 make security         # needs network
+npm --prefix crates/server/web audit  # includes the build dependency graph
 ```
 
 Run `make hooks` once to check formatting, Python, and secrets before each commit.
@@ -84,7 +93,7 @@ producing release artifacts.
 | Shell | ShellCheck for Git-visible Bash and POSIX scripts, including extensionless scripts |
 | Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
 | Secrets | Gitleaks CLI on working source and Git history, with redacted output |
-| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit |
+| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit; npm audit |
 
 The Rust policy lives in the workspace manifest and `clippy.toml`, and every
 crate inherits it. Tests may unwrap, expect, panic, and index. Python targets

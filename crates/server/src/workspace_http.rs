@@ -16,6 +16,9 @@ mod response;
 mod retention;
 mod retention_worker;
 mod session;
+mod setup;
+mod up;
+pub use up::UpConfig;
 mod team;
 mod tunnel;
 mod work_status;
@@ -72,6 +75,7 @@ struct State {
     identity: InstanceTls,
     database: PathBuf,
     browser_sessions: browser::Sessions,
+    setup: Option<crate::setup_code::SetupCode>,
 }
 
 #[derive(Clone, Copy)]
@@ -93,6 +97,16 @@ impl WorkspaceServer {
             .await
             .context("cannot bind workspace mTLS listener")?;
         crate::instance_tls::info(&config.data_dir)?;
+        let existing = rusqlite::Connection::open_with_flags(
+            config.data_dir.join("ccp.sqlite3"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        if !setup::owned(&existing)
+            .map_err(|_database| anyhow::anyhow!("cannot inspect workspace initialization"))?
+        {
+            bail!("setup is pending; use server up to obtain a setup link");
+        }
+        drop(existing);
         let browser_sessions = browser::Sessions::new()
             .map_err(|_entropy| anyhow::anyhow!("cannot initialize browser sessions"))?;
         let lease = if config.activate_workspace {
@@ -107,6 +121,7 @@ impl WorkspaceServer {
             identity,
             database: lease.directory().join("ccp.sqlite3"),
             browser_sessions,
+            setup: None,
         });
         Ok(Self {
             https,

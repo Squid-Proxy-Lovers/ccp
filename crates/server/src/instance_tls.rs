@@ -144,10 +144,62 @@ pub fn initialize(directory: &Path, names: &[String]) -> anyhow::Result<TrustInf
     let names = bundle::normalize_names(names)?;
     require_database(directory)?;
     let lease = DirectoryLease::maintenance(directory)?;
-    let mut connection = database(&lease, true)?;
+    initialize_leased(&lease, &names, false)
+}
+
+pub(crate) fn initialize_setup(directory: &Path, names: &[String]) -> anyhow::Result<TrustInfo> {
+    require_database(directory)?;
+    let lease = DirectoryLease::maintenance(directory)?;
+    initialize_setup_leased(&lease, names)
+}
+
+pub(crate) fn initialize_setup_leased(
+    lease: &DirectoryLease,
+    names: &[String],
+) -> anyhow::Result<TrustInfo> {
+    if !lease.allows_maintenance() {
+        bail!("setup TLS requires an exclusive maintenance lease");
+    }
+    let defaults;
+    let names = if names.is_empty() {
+        let connection = database(lease, true)?;
+        defaults = if let Some(pin) = anchor(&connection)? {
+            let bytes = files::read_pinned(lease.directory(), &pin.hash)?;
+            validate(&bytes, pinnable_instance(&connection)?, now()?)?
+                .1
+                .names
+        } else if files::exists(lease.directory())? {
+            validate(
+                &files::read(lease.directory())?,
+                pinnable_instance(&connection)?,
+                now()?,
+            )?
+            .1
+            .names
+        } else {
+            vec!["localhost".to_owned(), "127.0.0.1".to_owned()]
+        };
+        &defaults
+    } else {
+        names
+    };
+    initialize_leased(lease, names, true)
+}
+
+fn initialize_leased(
+    lease: &DirectoryLease,
+    names: &[String],
+    setup: bool,
+) -> anyhow::Result<TrustInfo> {
+    let names = bundle::normalize_names(names)?;
+    let mut connection = database(lease, true)?;
     connection.pragma_update(None, "synchronous", "FULL")?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let instance = initialized_instance(&transaction)?;
+    let instance = if setup {
+        pinnable_instance(&transaction)?
+    } else {
+        initialized_instance(&transaction)?
+    };
     let pinned = anchor(&transaction)?;
     let timestamp = now()?;
     let bytes = if let Some(pin) = &pinned {
@@ -226,6 +278,20 @@ fn initialized_instance(connection: &Connection) -> anyhow::Result<Uuid> {
     Uuid::parse_str(&id).context("invalid stored instance UUID")
 }
 
+fn pinnable_instance(connection: &Connection) -> anyhow::Result<Uuid> {
+    let admins: u64 =
+        connection.query_row("SELECT COUNT(*) FROM ccp_server_admins", [], |row| {
+            row.get(0)
+        })?;
+    if admins > 0 {
+        return initialized_instance(connection);
+    }
+    let id: String = connection.query_row(
+        "SELECT r.instance_id FROM ccp_setup_reservation r JOIN ccp_instance i ON i.instance_id=r.instance_id JOIN ccp_runtime_mode m ON m.singleton=1 AND m.mode='workspace' WHERE r.singleton=1 AND i.singleton=1", [], |row|row.get(0),
+    ).context("local administration or an explicit setup reservation is required")?;
+    Uuid::parse_str(&id).context("invalid reserved instance UUID")
+}
+
 struct Pin {
     instance: String,
     hash: Vec<u8>,
@@ -250,7 +316,7 @@ fn load_pinned(
     connection: &Connection,
     timestamp: i64,
 ) -> anyhow::Result<(PrivateBundle, TrustInfo)> {
-    let instance = initialized_instance(connection)?;
+    let instance = pinnable_instance(connection)?;
     let pin = anchor(connection)?.context("TLS identity is not pinned; run workspace-tls-init")?;
     let bytes = files::read_pinned(lease.directory(), &pin.hash)?;
     let (bundle, trust) = validate(&bytes, instance, timestamp)?;

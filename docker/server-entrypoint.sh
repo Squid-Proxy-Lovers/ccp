@@ -26,6 +26,13 @@ if [ "${1:-}" = "issue-token" ] || [ "${1:-}" = "health" ]; then
     exec "$SERVER_BIN" "$@"
 fi
 
+# A new image with no native session requested starts the workspace setup flow.
+# Explicit legacy session arguments and CCP_SESSION_NAME retain their old path.
+if [ "$#" -eq 0 ] && [ -z "${CCP_SESSION_NAME:-}" ]; then
+    exec "$SERVER_BIN" up --data-dir "$DATA_DIR" \
+        --https-listen 0.0.0.0:8443 --mtls-listen 0.0.0.0:8444
+fi
+
 SESSION_NAME="${1:-${CCP_SESSION_NAME:-}}"
 if [ -z "$SESSION_NAME" ]; then
     echo "Provide a session name as the first argument or set CCP_SESSION_NAME." >&2
@@ -48,4 +55,4 @@ export CCP_MTLS_BASE_URL="$MTLS_BASE_URL"
 export CCP_TLS_SERVER_NAMES="$TLS_SERVER_NAMES"
 export CCP_ALLOW_NON_LOOPBACK_AUTH_LISTENER="${CCP_ALLOW_NON_LOOPBACK_AUTH_LISTENER:-1}"
 
-exec "$SERVER_BIN" "$SESSION_NAME"
+exec "$SERVER_BIN" -- "$SESSION_NAME"

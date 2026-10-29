@@ -1422,6 +1422,7 @@ dependencies = [
  "sha2",
  "socket2 0.5.10",
  "strsim",
+ "subtle",
  "time",
  "tokio",
  "tokio-rustls",

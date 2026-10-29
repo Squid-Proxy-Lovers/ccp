@@ -266,6 +266,17 @@ build_from_source() {
         exit 1
     fi
 
+    if [ "$MODE" != "client" ]; then
+        if ! command -v npm &>/dev/null || ! command -v node &>/dev/null; then
+            err "Server source builds require Node.js 24 or newer and npm."
+            exit 1
+        fi
+        if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+            err "Server source builds require Node.js 24 or newer."
+            exit 1
+        fi
+    fi
+
     local build_dir="$REPO_ROOT"
 
     if [ -z "$build_dir" ] || [ ! -f "$build_dir/Cargo.toml" ]; then
@@ -277,8 +288,17 @@ build_from_source() {
         fi
     fi
 
+    local packages=(-p client)
+    if [ "$MODE" != "client" ]; then
+        step "Installing locked frontend build dependencies..."
+        if ! npm ci --prefix "$build_dir/crates/server/web" --ignore-scripts; then
+            err "Frontend dependency installation failed. No binaries installed."
+            exit 1
+        fi
+        packages+=(-p server)
+    fi
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release --locked); then
+    if ! (cd "$build_dir" && cargo build --release --locked "${packages[@]}"); then
         err "Build failed."
         exit 1
     fi
