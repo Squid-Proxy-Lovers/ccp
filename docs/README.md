@@ -60,6 +60,7 @@ the other guides describe the supported native interface.
 | Read reported work and use explicit client status messages | [Work-status storage](workspace-status.md) |
 | Inspect a stopped native database without conversion or source changes | [Native conversion inventory](native-conversion-inventory.md) |
 | Start a workspace instance and complete first-boot setup | [One-command setup](workspace-foundation.md#start-an-instance-in-one-command) |
+| Inspect the versioned enrollment link and its trust boundary | [Enrollment link format](enrollment-links.md) |
 | Understand the unreleased workspace migration, permissions and guidance foundation | [Workspace access foundation](workspace-foundation.md) |
 | Create shelves/books and read workspace context and shelf lifecycle metadata through the normal client | [Workspace content client](workspace-content-client.md) |
 | Edit entries and resume uncertain client mutations | [Workspace entry mutations](workspace-content-mutations.md) |
