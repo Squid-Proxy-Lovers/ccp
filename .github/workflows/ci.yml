@@ -199,6 +199,7 @@ jobs:
       - name: Audit the complete locked frontend build dependency graph
         run: |
           npm ci --prefix crates/server/web --ignore-scripts
+          node --test tests/frontend_dependency.mjs
           npm --prefix crates/server/web audit
 
   compat:

@@ -29,6 +29,14 @@ Two integration load tests are excluded from normal CI. Run them explicitly:
 cargo test -p ccp-tests --locked -- --ignored --test-threads=1
 ```
 
+## Frontend build dependency security
+
+`node --test tests/frontend_dependency.mjs` checks the merge package actually
+resolved by the Svelte plugin, including CJS and UMD artifacts. It covers poisoned
+source/target shapes, nested placeholders, array cloning, adjacent keys and normal
+configuration semantics. `make quality-tests` and the frontend audit job run it;
+these runtime assertions complement the complete `npm audit` policy.
+
 ## First-boot onboarding
 
 `cargo test -p server --test first_boot --locked` exercises actual HTTPS setup,

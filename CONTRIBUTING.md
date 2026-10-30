@@ -125,6 +125,18 @@ A change is ready for review when:
 Every pull request needs approval from the code owner in `.github/CODEOWNERS`
 and passing required checks before it merges into `main`.
 
+The frontend pins `@oss-cve-patches/deepmerge@4.3.2` for the Svelte Vite plugin's
+`deepmerge` dependency until an official fixed dependency is available. This is
+a temporary npm override, locked by tarball integrity, for
+[GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4).
+The [fork's targeted fix](https://github.com/oss-cve-patches/deepmerge/pull/1)
+rejects `__proto__` in both merge loops. Its MIT license is unchanged and it adds
+no runtime dependencies or install hooks. Review future publisher/version changes
+rather than widening this override. Remove it after validating an official
+Svelte plugin/dependency release. `tests/frontend_dependency.mjs` resolves the
+actual package from the consuming plugin and tests its CJS and UMD artifacts;
+the complete dependency audit remains enforced.
+
 Dependency vulnerabilities fail the audit. Existing maintenance notices and
 duplicate versions receive separate dependency review. The license allowlist records
 accepted dependencies; new licenses or sources need explicit review. Bincode 1.3 is retained for wire-format
