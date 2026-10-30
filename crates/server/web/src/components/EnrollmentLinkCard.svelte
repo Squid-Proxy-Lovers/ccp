@@ -1,48 +1,68 @@
 <script lang="ts">
+  // A one-time enrollment link. `issued` frames it for the admin who just created
+  // it; `join` is the recipient's step on the public join page. The link itself
+  // stays masked; the safe default is `ccp enroll` plus a hidden paste.
   import {tick} from 'svelte';
+  import {ShieldAlert} from '@lucide/svelte';
   import Button from '../lib/ui/Button.svelte';
   import Input from '../lib/ui/Input.svelte';
+  import SecretField from '../lib/ui/SecretField.svelte';
+  import Command from '../lib/ui/Command.svelte';
   import {parseEnrollmentLink, enrollmentCommand} from '../lib/enrollment_link.js';
-  let {value, ondismiss}: {value: string; ondismiss?: () => void} = $props();
-  let shown = $state(false);
-  let command = $state(false);
+  let {value, ondismiss, variant = 'issued'}: {value: string; ondismiss?: () => void; variant?: 'issued' | 'join'} = $props();
   let message = $state('');
-  let field: HTMLInputElement | null = $state(null);
-  const displayed = $derived(command ? enrollmentCommand(parseEnrollmentLink(value)) : value);
-  async function copy(asCommand = false) {
-    command = asCommand;
+  let posix = $state('');
+  let posixField = $state<HTMLInputElement | null>(null);
+
+  function copied(ok: boolean) {
+    message = ok ? (variant === 'join' ? 'Link copied. Paste it at the ccp enroll prompt.' : 'Enrollment link copied. Share it privately.')
+      : 'Clipboard access failed. The link is shown and selected; copy it manually.';
+  }
+  async function copyCommand() {
+    const command = enrollmentCommand(parseEnrollmentLink(value));
     try {
-      await navigator.clipboard.writeText(asCommand ? enrollmentCommand(parseEnrollmentLink(value)) : value);
-      message = asCommand ? 'POSIX command copied. It includes the secret link.' : 'Enrollment link copied. Share it privately.';
+      await navigator.clipboard.writeText(command);
+      posix = '';
+      message = 'Command copied. It contains the secret link.';
     } catch {
-      shown = true;
-      message = 'Clipboard access failed. The value is shown and selected; copy it manually.';
-      await tick(); field?.focus(); field?.select();
+      posix = command;
+      message = 'Clipboard access failed. The command is shown and selected; copy it manually.';
+      await tick();
+      posixField?.focus();
+      posixField?.select();
     }
   }
 </script>
 
-<section aria-label="Private enrollment link" class="grid gap-4 rounded-lg border border-warning/35 bg-warning/[0.06] p-4">
-  <div class="space-y-1">
-    <h3 class="text-base font-semibold">Save the enrollment link privately</h3>
-    <p class="text-sm text-muted-foreground">Anyone holding this link can use its remaining admissions until it expires or is revoked. The server cannot show it again.</p>
-  </div>
-  <div class="space-y-2">
-    <label for="enrollment-link-value" class="text-sm font-medium">{command ? 'POSIX enrollment command' : 'Enrollment link'}</label>
-    <Input id="enrollment-link-value" bind:ref={field} type={shown ? 'text' : 'password'} readonly value={displayed} autocomplete="off" spellcheck="false" class="font-mono text-xs" />
-    <div class="flex flex-wrap gap-2">
-      <Button variant="outline" onclick={() => void copy()}>Copy enrollment link</Button>
-      <Button variant="ghost" aria-pressed={shown} onclick={() => shown = !shown}>{shown ? 'Hide' : 'Show'} {command ? 'command' : 'link'}</Button>
+<section aria-label="Private enrollment link" class={['grid gap-4', variant === 'issued' && 'rounded-lg border bg-card p-4']}>
+  {#if variant === 'issued'}
+    <div class="flex gap-2.5">
+      <ShieldAlert class="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden="true" />
+      <div class="space-y-0.5">
+        <h3 class="text-sm font-semibold">Enrollment link · shown once</h3>
+        <p class="text-sm text-muted-foreground">Anyone with this link can join until it expires or you revoke it. Share it privately.</p>
+      </div>
     </div>
-  </div>
-  <div class="space-y-2 text-sm">
-    <p>Run <code class="rounded border bg-background px-1.5 py-0.5 font-mono">ccp enroll</code>, then paste the link at the hidden prompt.</p>
-    <details class="space-y-2">
-      <summary class="cursor-pointer rounded outline-none focus-visible:ring-2 focus-visible:ring-ring">Optional command for sh, bash or zsh</summary>
-      <p class="pt-2 text-muted-foreground">This includes the secret in command arguments, which may be saved in shell history or visible in process listings. Use hidden paste in other shells.</p>
-      <Button variant="outline" size="sm" onclick={() => void copy(true)}>Copy POSIX enrollment command</Button>
-    </details>
-  </div>
-  {#if message}<p role="status" class="text-sm">{message}</p>{/if}
-  {#if ondismiss}<div><Button variant="ghost" size="sm" onclick={ondismiss}>I've saved the link, dismiss</Button></div>{/if}
+    <SecretField id="enrollment-link-value" label="Enrollment link" {value} oncopy={copied} />
+    <div class="grid gap-1.5">
+      <p class="text-sm text-muted-foreground">The recipient runs this and pastes the link at the hidden prompt:</p>
+      <Command command="ccp enroll" />
+    </div>
+  {:else}
+    <Command command="ccp enroll" />
+    <SecretField id="enrollment-link-value" label="Your enrollment link" {value} oncopy={copied}
+      hint="Paste it at the hidden prompt. It never appears in your shell history." />
+  {/if}
+  <details class="group text-sm">
+    <summary class="cursor-pointer rounded text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">One-line command for sh, bash or zsh</summary>
+    <div class="mt-2 grid gap-2 border-l-2 pl-3">
+      <p class="text-muted-foreground">This puts the secret in the command itself, where shell history and process listings can see it. Prefer the hidden prompt.</p>
+      <div><Button variant="outline" size="sm" onclick={() => void copyCommand()}>Copy one-line command</Button></div>
+      {#if posix}<Input id="enrollment-link-command" bind:ref={posixField} readonly value={posix} aria-label="One-line enrollment command" class="font-mono text-xs" />{/if}
+    </div>
+  </details>
+  <p role="status" class="text-sm text-muted-foreground empty:hidden">{message}</p>
+  {#if ondismiss}
+    <div><Button variant="ghost" size="sm" class="-ml-2" onclick={ondismiss}>{variant === 'join' ? 'Remove the link from this page' : "I've saved the link, dismiss"}</Button></div>
+  {/if}
 </section>
