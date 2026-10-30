@@ -134,6 +134,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install locked frontend test dependencies
+        run: npm ci --prefix crates/server/web --ignore-scripts
       - run: make tools
       - run: python -m pip install -e ./mcp
       - run: make lint-python lint-types lint-deadcode lint-deps lint-shell lint-workflows lint-secrets
