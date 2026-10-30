@@ -25,7 +25,7 @@
   let phase = $state.raw<Phase>(untrack(() => initial));
   let observation = $state('');
   const title = $derived({
-    confirmed: 'Archive operation acknowledged',
+    confirmed: intent.action === 'purge' ? 'Entry purged' : 'Shelf state changed',
     unconfirmed: 'Archive operation outcome unconfirmed',
     forgotten: 'Original archive operation kept as a local copy',
     discarded: 'Local archive work discarded',
@@ -84,9 +84,12 @@
 
   {#if phase.state === 'confirmed'}
     <Alert tone="success" live>
-      <p class="break-all">{phase.text}</p>
-      <p>This receipt records the original operation, not current visibility or a guarantee of forensic erasure.</p>
+      <p>{phase.text} The receipt records the original operation, not current visibility or a guarantee of forensic erasure.</p>
     </Alert>
+    <details class="text-sm">
+      <summary class="cursor-pointer rounded text-muted-foreground outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring">Historical receipt</summary>
+      <pre class="mt-2 overflow-x-auto rounded-md border bg-muted/40 p-3 font-mono text-xs">{phase.receipt}</pre>
+    </details>
     <Button variant="outline" busy={app.working('archive-read')} onclick={read}><Eye /> Read current metadata</Button>
   {:else if phase.state === 'unconfirmed'}
     <Alert tone="warning" live>

@@ -278,6 +278,9 @@ export async function changeClientAccess(report: Report, workspace: Workspace, c
 // ---- administrators and keys ------------------------------------------------------
 
 export type SecurityAction = 'team/appoint' | 'team/revoke' | 'keys/issue' | 'keys/revoke';
+const SECURITY_DONE: Record<SecurityAction, string> = {
+  'team/appoint': 'Administrator appointed', 'team/revoke': 'Administrator removed', 'keys/issue': 'Admin key issued', 'keys/revoke': 'Admin key revoked',
+};
 
 export async function changeSecurity(report: Report, action: SecurityAction, body: Record<string, any>): Promise<void> {
   const attempt = new SecurityAttempt(app.session, action, body) as Attempt;
@@ -297,7 +300,7 @@ export async function changeSecurity(report: Report, action: SecurityAction, bod
     return;
   }
   const {result} = sent;
-  const confirmed = `Confirmed ${action} in workspace ${body.workspace_id}. ` + (result.key_id
+  const confirmed = `${SECURITY_DONE[action]}. ` + (result.key_id
     ? `Principal ${result.principal_id}; new key ${result.key_id}. ` : `Target ${body.key_id || body.principal_id}. `);
   if (body.key_id && body.key_id === app.session?.identity.key_id) {
     app.lock(confirmed + 'Your current login key was revoked. Sign in using another owner key, or ask the host operator for local owner-key recovery.');
@@ -309,7 +312,7 @@ export async function changeSecurity(report: Report, action: SecurityAction, bod
   report({phase: 'done', title: 'Security action acknowledged', message: confirmed.trim(), reread: wording.security.reread,
     secret: result.key_id ? {title: 'Workspace admin key · ' + result.key_id, value: result.secret} : undefined,
     note: 'This acknowledges the action; current roles and key state may have changed since. No secret is stored by this panel.'});
-  notice(confirmed + (result.key_id ? 'Copy the secret privately before leaving.' : ''), 'success');
+  notice((confirmed + (result.key_id ? 'Copy the secret privately before leaving.' : '')).trimEnd(), 'success');
 }
 
 

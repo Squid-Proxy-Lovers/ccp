@@ -4,7 +4,7 @@
   // initial group window; only its owner manages administrators and keys.
   // After a write, the outcome replaces the sections until the user reads
   // current state again, so nothing else can be sent while it is unresolved.
-  import {onMount} from 'svelte';
+  import {onMount, tick} from 'svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
   import Tabs from '../lib/ui/Tabs.svelte';
@@ -81,6 +81,9 @@
     configuring = false;
     generation += 1;
     await Promise.all([readGrants(grantsAfter), readWindow()]);
+    // The button that asked for this read was removed with the outcome.
+    await tick();
+    document.getElementById('page-title')?.focus();
   }
 
   const report = (next: Result) => { outcome = next; };

@@ -2,7 +2,7 @@
   // Instruction boards. Global guidance needs an instance key; a workspace board
   // needs this active workspace's owner or admin key. Global guidance is
   // read-only inside a workspace view.
-  import {onMount} from 'svelte';
+  import {onMount, tick} from 'svelte';
   import {RefreshCw} from '@lucide/svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Alert from '../lib/ui/Alert.svelte';
@@ -49,6 +49,12 @@
     if (global) return 'Read-only with a workspace key. Saving global guidance needs an instance key.';
     return 'Read-only. Saving needs this workspace’s owner or admin key while the workspace is active.';
   }
+  // Replacing the bundle remounts the boards; return focus to the board just saved or reloaded.
+  async function replace(next: Bundle, kind: string) {
+    bundle = next;
+    await tick();
+    document.getElementById(`guidance-${kind}`)?.focus();
+  }
 </script>
 
 <div class="space-y-6">
@@ -83,7 +89,7 @@
     {#key bundle}
       <div class={['grid items-start gap-6', boards.length > 1 && 'xl:grid-cols-2']}>
         {#each boards as board (board.scope.kind)}
-          <Board {board} {workspaceId} editable={editable(board)} note={note(board)} onreplace={next => (bundle = next)} />
+          <Board {board} {workspaceId} editable={editable(board)} note={note(board)} onreplace={next => replace(next, board.scope.kind)} />
         {/each}
       </div>
     {/key}

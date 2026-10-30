@@ -33,12 +33,11 @@
       {/snippet}
     </PageHeader>
 
-    {#if ctl.uncertain}<PendingRequest {ctl} uncertain={ctl.uncertain} />{/if}
-    {#if ctl.frozen && !ctl.uncertain && !ctl.preview}
-      <p class="text-sm text-muted-foreground" role="status">Controls are paused until the current state is read again. Use Refresh.</p>
-    {/if}
-
     <div class="grid max-w-4xl gap-6">
+      {#if ctl.uncertain}<PendingRequest {ctl} uncertain={ctl.uncertain} />{/if}
+      {#if ctl.frozen && !ctl.uncertain && !ctl.preview}
+        <p class="text-sm text-muted-foreground" role="status">Controls are paused until the current state is read again. Use Refresh.</p>
+      {/if}
       <Details {workspace} {session} />
       <Lifecycle {ctl} {workspace} {session} />
       <Retention {ctl} {workspace} />
