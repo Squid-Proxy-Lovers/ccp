@@ -54,6 +54,8 @@ jobs:
         run: make installer-tests
       - name: Nightly packaging and publication regressions
         run: make nightly-tests
+      - name: Hidden enrollment paste on a real isolated terminal
+        run: python3 tests/client_link_prompt.py --client target/release/client
       - name: CLI integration
         run: bash tests/run.sh --skip-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

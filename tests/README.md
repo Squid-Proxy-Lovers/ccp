@@ -36,6 +36,11 @@ current code authorization, concurrent claims, error handling and restart safety
 `node --test tests/onboarding_panel.mjs` checks fragment handling, request privacy
 and uncertain claim responses. The normal quality suite includes these Node cases.
 
+`cargo test -p client --test workspace tests::links --locked` exercises link
+enrollment, actual TLS secret-send boundaries, profile reuse and durable recovery.
+`python3 tests/client_link_prompt.py --client target/release/client` verifies hidden
+paste with a real isolated Unix terminal; CI runs it after building the binaries.
+
 After building an image, run:
 
 ```bash

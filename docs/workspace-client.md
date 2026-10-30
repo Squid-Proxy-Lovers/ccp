@@ -19,6 +19,70 @@ Use `workspace software-info` to read package/wire/API/profile software contract
 without opening a profile or contacting a server. The
 [managed launcher](managed-client.md) uses this check before activation.
 
+## Enroll from a link
+
+Use a matching CCP client build from the official release/source distribution.
+The installer adds `ccp` as an alias of `ccp-client`; it preserves any existing
+tool named `ccp`. In that case, use `ccp-client` in the commands below.
+
+```bash
+ccp enroll
+```
+
+Paste the complete enrollment link at the hidden prompt. The client first fetches
+only the public CA, checks its DER SHA-256 against the link's independently
+received pin, then verifies normal TLS/name and instance UUID before sending an
+invitation or CSR. No OS/browser trust is installed. A malformed link, pin, TLS hostname
+or instance mismatch creates no profile and sends no invitation.
+
+For noninteractive input, use a private file or stdin:
+
+```bash
+ccp enroll - < ./private-enrollment-link.txt
+```
+
+Use stdin for unusually long links: terminal line limits can truncate hidden
+paste. If interrupting a paste leaves terminal echo disabled, run `stty echo`.
+
+A positional link is also supported: `ccp enroll '<link>'`. This may expose the
+secret through shell history and process listings. The quoted form is for POSIX
+sh/bash/zsh; use hidden paste in other shells. Parsing errors do not echo links.
+
+A new managed profile is created under `~/.ccp-client/workspaces/<workspace-slug>`
+(or `CCP_CLIENT_HOME/workspaces`). If that name already belongs to a different
+instance, an instance-UUID prefix is appended. `--profile /absolute/private/path`
+overrides it.
+If exactly one managed profile has the same pinned instance, the command reuses
+its registration when joining another workspace. Its saved endpoints and caller
+selections stay unchanged. Multiple matching identities require `--profile`;
+disabled clients, trust mismatches and pending operations never cause a fallback
+to a fresh identity. Custom profiles outside this managed directory must be
+selected explicitly on later commands.
+
+Existing files, symlinks and unsupported/private-permission failures are refused
+rather than overwritten. Keep the original link and profile if enrollment loses
+its response or local activation fails: retrying resumes the exact request UUID,
+key and CSR. A completed local invitation is not sent again as a new admission.
+The command verifies current workspace access before reporting success. A stale
+display-name hint produces a warning; it never grants access to another UUID.
+If access verification fails after enrollment commits, the saved registration
+remains available for inspection or recovery.
+
+A refused first enrollment retains its pending request. A different invitation
+cannot replace that request: retry the original link, or ask an administrator to
+confirm it was never accepted before moving the profile directory aside. Using
+a new explicit `--profile` preserves both profiles; later links then need an
+explicit profile to choose between those identities.
+
+The summary prints the verified workspace, client identity and profile path,
+followed by the [workspace MCP setup](workspace-mcp.md) next step. Joining does not
+select the new workspace for existing callers. Targeted readmission and recovery
+retain their separate commands and identity-proof rules below; there is no
+automatic recovery/new-identity fallback on a denied join.
+
+This link mode currently uses direct HTTPS/mTLS endpoints. Client WSS transport
+and real Cloudflare acceptance are separate work.
+
 ## Inspect update compatibility without changing a profile
 
 Run this command with the candidate client executable and an existing absolute
@@ -55,8 +119,9 @@ command itself never activates software or updates the server.
 
 Obtain the instance UUID and public CA certificate from the host operator through
 a trusted channel. Verify the CA file's SHA-256 fingerprint against the operator's
-public trust output before sending an invitation. Do not download trust from an
-invitation's unverified server response or install the CA as an OS/browser root.
+public trust output before sending an invitation. Do not trust an unverified
+downloaded CA; the link command above accepts fetched bytes only after checking
+the independent pin. Do not install that CA as an OS/browser root for CLI use.
 The operator must already have started the workspace HTTPS and mTLS listeners.
 
 Choose an explicit private profile directory. Replace the UUID and origins below
@@ -82,7 +147,8 @@ implementation does not inspect or install Windows ACLs.
 
 Trust setup prints public profile metadata, including `ca_sha256`. An existing
 profile is never replaced, even when setup is repeated with different settings.
-There is no implicit default workspace profile or fallback to a native session.
+The manual `workspace` commands require an explicit profile. Link enrollment
+uses its managed-directory rules above; neither mode falls back to a native session.
 `CCP_CLIENT_HOME` does not override the explicit workspace profile path.
 
 ## Redeem an invitation

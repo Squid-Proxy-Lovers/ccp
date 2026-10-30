@@ -318,6 +318,24 @@ build_from_source() {
     fi
 }
 
+install_ccp_alias() {
+    local alias_path="$INSTALL_DIR/ccp"
+    if [ -e "$alias_path" ] || [ -L "$alias_path" ]; then
+        if [ -L "$alias_path" ] && [ "$(readlink "$alias_path")" = "ccp-client" ]; then
+            return
+        fi
+        warn "An existing ccp path was retained. Use ccp-client for CCP."
+        return
+    fi
+    if command -v ccp &>/dev/null; then
+        warn "An existing ccp command was retained. Use ccp-client for CCP."
+        return
+    fi
+    if ! ln -s ccp-client "$alias_path"; then
+        warn "The ccp alias could not be created. Use ccp-client for CCP."
+    fi
+}
+
 ensure_path() {
     if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then
         echo ""
@@ -606,6 +624,9 @@ else
     ok "Installed ${BOLD}ccp-server${RESET}${GREEN} -> $INSTALL_DIR/ccp-server${RESET}"
     ok "Installed ${BOLD}ccp-client${RESET}${GREEN} -> $INSTALL_DIR/ccp-client${RESET}"
 fi
+
+# The alias always executes the same installed client and follows its updates.
+install_ccp_alias
 
 # ── MCP bridge ───────────────────────────────────────────────────────────────
 

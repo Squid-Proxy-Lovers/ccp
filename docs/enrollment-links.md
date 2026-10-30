@@ -1,8 +1,10 @@
 # Enrollment link format
 
 Unreleased version 1. This reference defines the shared Rust/browser parser.
-Issuance, the join page and client-command integration are separate work until
-their implementation and end-to-end checks are complete.
+The [issuer API](invitation-link-issuance.md) creates these links. The
+[client command](workspace-client.md#enroll-from-a-link) accepts them with hidden
+paste, bounded stdin or an explicit positional argument. The join/issuer panel
+integration remains separate until its end-to-end checks are complete.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md)
 

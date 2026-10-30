@@ -140,7 +140,19 @@ if command == 'git':
 
 
 class NativeSourceInstallTests(unittest.TestCase):
-    def run_source(self, *, client=False, failure=""):
+    @staticmethod
+    def prepare_alias(installed, binaries, alias):
+        if alias == "foreign":
+            (installed / "ccp").write_text("foreign tool")
+        elif alias == "dangling":
+            (installed / "ccp").symlink_to("other-tool")
+        elif alias == "own":
+            (installed / "ccp").symlink_to("ccp-client")
+        elif alias == "external":
+            (binaries / "ccp").write_text("#!/bin/sh\nexit 0\n")
+            (binaries / "ccp").chmod(0o755)
+
+    def run_source(self, *, client=False, failure="", alias=""):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scripts, binaries, home = root / "scripts", root / "bin", root / "home"
@@ -151,6 +163,7 @@ class NativeSourceInstallTests(unittest.TestCase):
             installed = home / ".local/bin"
             installed.mkdir(parents=True)
             (installed / "ccp-client").write_text("previous client")
+            self.prepare_alias(installed, binaries, alias)
             log = root / "calls.jsonl"
             stub = r"""
 import json, os, pathlib, sys
@@ -192,7 +205,7 @@ elif command == "python3":
                 path.chmod(0o755)
             env = dict(
                 os.environ,
-                PATH=f"{binaries}:{os.environ['PATH']}",
+                PATH=f"{binaries}:/usr/bin:/bin",
                 HOME=str(home),
                 TMPDIR=str(root),
                 CCP_SOURCE_TEST_LOG=str(log),
@@ -217,7 +230,26 @@ elif command == "python3":
                 "client": (installed / "ccp-client").read_text(),
                 "server": (installed / "ccp-server").exists(),
             }
+            alias_path = installed / "ccp"
+            if alias and alias != "own":
+                self.assertIn("existing ccp", result.stdout)
+                if alias == "foreign":
+                    self.assertEqual(alias_path.read_text(), "foreign tool")
+                elif alias == "dangling":
+                    self.assertEqual(os.readlink(alias_path), "other-tool")
+                else:
+                    self.assertFalse(alias_path.exists())
+                    self.assertEqual((binaries / "ccp").read_text(), "#!/bin/sh\nexit 0\n")
+            elif result.returncode == 0:
+                self.assertTrue(alias_path.is_symlink())
+                self.assertEqual(os.readlink(alias_path), "ccp-client")
             return result, calls, state
+
+    def test_alias_never_replaces_an_existing_file_or_dangling_symlink(self):
+        for alias in ("foreign", "dangling", "external", "own"):
+            with self.subTest(alias=alias):
+                result, _, _ = self.run_source(client=True, alias=alias)
+                self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_fresh_source_server_installs_locked_frontend_before_cargo(self):
         result, calls, state = self.run_source()
