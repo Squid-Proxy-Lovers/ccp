@@ -101,3 +101,28 @@ revoked grant or bypasses a disabled client.
 Unknown fields, unsupported tagged settings, invalid deadlines, missing no-expiry
 confirmation and malformed routing return a fixed refusal without minting a link.
 Opening a link in a browser is separate from redeeming it through the client.
+
+## Create a link in the panel
+
+Sign in with the target workspace’s owner/admin key. Open **Clients & access**,
+then **Invitations**. Choose read-only or read/write access and a lifetime:
+30 minutes by default, a custom date in your local time, or explicitly confirmed
+no expiry. Dates beyond seven days require a separate confirmation. The panel asks ten
+minutes early, with the same group-cap requirement, to allow for clock differences. Individual
+links admit one client. The single initial group can have a use cap; a cap is
+required for no-expiry or dated links beyond seven days.
+
+Expand **Advanced · public addresses** when public ports or hostnames differ from
+those seen by your browser. Use HTTPS origins covered by the instance certificate;
+the client currently requires direct mTLS connectivity.
+
+After creation, copy the private enrollment link once. The recipient runs
+`ccp enroll` and pastes it at the hidden prompt. The optional POSIX command copy
+puts the secret on argv. Show the value and select it manually if clipboard access
+fails. The public `/join` page strips its fragment and shows these instructions;
+it does not submit the invitation, install software or change browser trust.
+Refreshing the page loses its in-memory link; reopen the original complete link.
+
+An uncertain issuance is never retried automatically. Read invitation metadata
+and explicitly resolve the pending action before deliberately issuing another.
+A lost initial-group link cannot be recovered by reopening the group window.

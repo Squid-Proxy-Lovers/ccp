@@ -3,8 +3,9 @@
 Unreleased version 1. This reference defines the shared Rust/browser parser.
 The [issuer API](invitation-link-issuance.md) creates these links. The
 [client command](workspace-client.md#enroll-from-a-link) accepts them with hidden
-paste, bounded stdin or an explicit positional argument. The join/issuer panel
-integration remains separate until its end-to-end checks are complete.
+paste, bounded stdin or an explicit positional argument. Workspace owners/admins
+create links from Clients & access → Invitations. Opening a link shows the join
+instructions without redeeming it.
 
 [Documentation index](README.md) · [Workspace client](workspace-client.md)
 
@@ -68,7 +69,8 @@ explicit access is required to copy it. Developer tools can still inspect browse
 memory. Consumers never redeem or submit it. Hidden paste is the primary flow;
 an optional copyable command must identify its supported shell.
 The fragment stays out of the initial HTTP request; browser JavaScript still has
-access to it. A hosted browser UI therefore has its previously agreed proxy trust
+access to it. Browsers may retain the original link in history or sync; use a
+private window when needed. A hosted browser UI therefore has its previously agreed proxy trust
 boundary. Passing a secret link on argv can expose it through shell history and
 process listings; hidden paste and stdin are required command alternatives. POSIX
 single quoting is not safe in Windows cmd.exe, so do not paste that command there.

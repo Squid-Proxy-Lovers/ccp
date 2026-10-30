@@ -8,6 +8,7 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Secret from '../../lib/ui/Secret.svelte';
+  import EnrollmentLinkCard from '../../components/EnrollmentLinkCard.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app} from '../../lib/app.svelte';
   import {copyText, notice} from '../../lib/notify.svelte';
@@ -92,6 +93,9 @@
   {:else if outcome.phase === 'done'}
     <h2 bind:this={heading} id="access-outcome-title" tabindex="-1" class="text-[15px] font-semibold tracking-tight outline-none">{outcome.title}</h2>
     <p class="text-sm">{outcome.message}</p>
+    {#if outcome.link}
+      <EnrollmentLinkCard value={outcome.link} ondismiss={() => { if (outcome.phase === 'done') outcome = {...outcome, link: undefined}; }} />
+    {/if}
     {#if outcome.secret}
       <Secret title={outcome.secret.title} value={outcome.secret.value}
         ondismiss={() => { if (outcome.phase === 'done') outcome = {...outcome, secret: undefined}; }} />

@@ -134,3 +134,18 @@ export function takeJoinLink(location, history) {
   if (hash) history.replaceState(null, '', '/join');
   return hash ? parseEnrollmentLink(location.origin + '/join' + hash) : null;
 }
+
+// Reuse the strict v1 origin rules for public-address issuer controls.
+export const enrollmentOrigin = origin;
+
+// Same-document link navigation does not remount the public page. Always scrub
+// the new fragment before parsing it, including malformed replacement links.
+/** @param {(link: ReturnType<typeof parseEnrollmentLink>|null, error: string) => void} update */
+export function watchJoinLinks(location, history, events, update) {
+  const receive = () => {
+    try { update(takeJoinLink(location, history), ''); }
+    catch (error) { update(null, error instanceof EnrollmentLinkError ? error.message : 'Invalid enrollment link.'); }
+  };
+  events.addEventListener('hashchange', receive);
+  return () => events.removeEventListener('hashchange', receive);
+}

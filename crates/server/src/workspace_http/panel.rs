@@ -12,7 +12,7 @@ use http_body_util::Full;
 use hyper::{Method, Response, body::Bytes, header::HeaderValue};
 
 pub(super) fn handles(path: &str) -> bool {
-    path == "/admin" || path.starts_with("/admin/")
+    path == "/join" || path == "/admin" || path.starts_with("/admin/")
 }
 
 pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
@@ -59,7 +59,7 @@ fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
     const JS: &str = "text/javascript; charset=utf-8";
     const FONT: &str = "font/woff2";
     let value: (&'static str, &'static [u8]) = match path {
-        "/admin" | "/admin/" | "/admin/setup" => (
+        "/admin" | "/admin/" | "/admin/setup" | "/join" => (
             "text/html; charset=utf-8",
             include_bytes!(concat!(env!("OUT_DIR"), "/panel/index.html")),
         ),

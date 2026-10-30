@@ -212,6 +212,12 @@ async fn issued_uri_redeems_exactly_once_and_certificate_reads_only_its_workspac
     let page = read.json::<Value>().await.unwrap();
     assert_eq!(page["data"]["workspaces"].as_array().unwrap().len(), 1);
     assert_eq!(page["data"]["workspaces"][0]["id"], keys["workspace_id"]);
+    let join_denied = enrolled
+        .get(format!("{}join", link.target().mtls_origin))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(join_denied.status(), 404);
     let admin_denied = enrolled
         .post(format!(
             "{}api/v1/admin/invitations/link",
@@ -305,6 +311,51 @@ async fn public_origin_override_keeps_pins_and_does_not_inherit_an_admin_forward
     })).await;
     assert_eq!(bad.status(), 400);
     assert_eq!(count(&f), 1);
+    let (directory, _) = f.stop().await;
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[tokio::test]
+async fn public_join_shell_is_https_only_no_store_and_rejects_queries_and_posts() {
+    let f = Fixture::start(root(), Vec::new()).await;
+    let response = f
+        .client
+        .get(format!("{}/join", f.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+    assert!(
+        response.headers()["content-security-policy"]
+            .to_str()
+            .unwrap()
+            .contains("form-action 'none'")
+    );
+    let body = response.text().await.unwrap();
+    assert!(body.contains("/admin/app.js"));
+    assert!(!body.contains("ccp_join_"));
+    assert_eq!(
+        f.client
+            .get(format!("{}/join?t=private", f.base))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        400
+    );
+    assert_eq!(
+        f.client
+            .post(format!("{}/join", f.base))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        405
+    );
+    assert_eq!(count(&f), 0);
     let (directory, _) = f.stop().await;
     std::fs::remove_dir_all(directory).unwrap();
 }
