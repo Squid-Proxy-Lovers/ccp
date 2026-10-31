@@ -20,6 +20,7 @@ mod invitation;
 mod model;
 mod native_provenance;
 mod operation_ledger;
+mod overview;
 mod provisioning;
 mod recovery;
 mod retention;
@@ -63,6 +64,10 @@ pub use model::{
 pub use native_provenance::{
     NativeEntryHistory, NativeEntryRecord, NativeHistoryRequest, NativeImportInfo, NativeRow,
     NativeSqlValue,
+};
+pub use overview::{
+    AccessCounts, ContentTotals, DailyActivity, OVERVIEW_MAX_DAYS, WorkspaceOverview,
+    WriterActivity,
 };
 pub use provisioning::{InitialOwner, OwnerProvisioning, ProvisionedWorkspace};
 pub use recovery::{

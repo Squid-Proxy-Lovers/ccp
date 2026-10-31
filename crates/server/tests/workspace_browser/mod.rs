@@ -9,6 +9,7 @@ mod guidance;
 mod initial_window;
 mod invitation_list;
 mod lifecycle;
+mod overview;
 mod panel;
 mod recovery_list;
 mod reported;

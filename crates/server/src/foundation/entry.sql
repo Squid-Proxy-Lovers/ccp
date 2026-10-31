@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS ccp_content_versions (
     FOREIGN KEY(entry_id, workspace_id)
         REFERENCES ccp_content_entries(id, workspace_id) ON DELETE RESTRICT
 );
+-- Bounded overview reads scan one workspace's recent versions by time.
+CREATE INDEX IF NOT EXISTS ccp_content_versions_recorded
+    ON ccp_content_versions(workspace_id, recorded_at);
 CREATE TRIGGER IF NOT EXISTS ccp_immutable_content_version
 BEFORE UPDATE ON ccp_content_versions
 BEGIN SELECT RAISE(ABORT, 'content versions are immutable'); END;

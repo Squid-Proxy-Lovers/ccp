@@ -40,7 +40,7 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
         ("x-frame-options", "DENY"),
         (
             "content-security-policy",
-            "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
+            "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
         ),
         ("cross-origin-opener-policy", "same-origin"),
         (
@@ -53,80 +53,37 @@ pub(super) fn serve(surface: Surface, input: &Input) -> Result<Reply, Error> {
     Ok(reply)
 }
 
+/// The Svelte build in `crates/server/web/dist`, committed so the server builds
+/// without Node. File names are fixed by `vite.config.ts`.
 fn asset(path: &str) -> Result<(&'static str, &'static [u8]), Error> {
+    const JS: &str = "text/javascript; charset=utf-8";
+    const FONT: &str = "font/woff2";
     let value: (&'static str, &'static [u8]) = match path {
         "/admin" | "/admin/" => (
             "text/html; charset=utf-8",
-            include_bytes!("panel/index.html"),
+            include_bytes!("../../web/dist/index.html"),
         ),
-        "/admin/panel.css" => ("text/css; charset=utf-8", include_bytes!("panel/panel.css")),
-        "/admin/app.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/app.js"),
+        "/admin/app.css" => (
+            "text/css; charset=utf-8",
+            include_bytes!("../../web/dist/app.css"),
         ),
-        "/admin/model.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/model.js"),
+        "/admin/app.js" => (JS, include_bytes!("../../web/dist/app.js")),
+        "/admin/theme.js" => (JS, include_bytes!("../../web/dist/theme.js")),
+        "/admin/favicon.svg" => (
+            "image/svg+xml",
+            include_bytes!("../../web/dist/favicon.svg"),
         ),
-        "/admin/view.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/view.js"),
+        "/admin/fonts/OverusedGroteskRoman-VF.woff2" => (
+            FONT,
+            include_bytes!("../../web/dist/fonts/OverusedGroteskRoman-VF.woff2"),
         ),
-        "/admin/native_history.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/native_history.js"),
+        "/admin/fonts/fragment-mono-latin-400-normal.woff2" => (
+            FONT,
+            include_bytes!("../../web/dist/fonts/fragment-mono-latin-400-normal.woff2"),
         ),
-        "/admin/native_values.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/native_values.js"),
-        ),
-        "/admin/context.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/context.js"),
-        ),
-        "/admin/access.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/access.js"),
-        ),
-        "/admin/guidance.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/guidance.js"),
-        ),
-        "/admin/deletion.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/deletion.js"),
-        ),
-        "/admin/settings.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/settings.js"),
-        ),
-        "/admin/team.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/team.js"),
-        ),
-        "/admin/transfer.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/transfer.js"),
-        ),
-        "/admin/invitations.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/invitations.js"),
-        ),
-        "/admin/enrollment.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/enrollment.js"),
-        ),
-        "/admin/reported.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/reported.js"),
-        ),
-        "/admin/archives.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/archives.js"),
-        ),
-        "/admin/client_access.js" => (
-            "text/javascript; charset=utf-8",
-            include_bytes!("panel/client_access.js"),
+        "/admin/fonts/fragment-mono-latin-ext-400-normal.woff2" => (
+            FONT,
+            include_bytes!("../../web/dist/fonts/fragment-mono-latin-ext-400-normal.woff2"),
         ),
         _ => return Err(Error::NotFound),
     };

@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-const source = await readFile(new URL('../crates/server/src/workspace_http/panel/native_values.js', import.meta.url), 'utf8');
+const source = await readFile(new URL('../crates/server/web/src/lib/native_values.js', import.meta.url), 'utf8');
 const {nativeHistoryPage, nativeScalarText} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 const page = () => ({workspace_id: 'workspace', entry_id: 'entry', source: {database_sha256: 'a'.repeat(64), schema: 2, converted_at: 1}, items: [{ordinal: 1, source_table: 'message_history', source_key: '-42', row: {columns: ['id', 'text', 'real', 'bytes', 'blob', 'null'], values: [
   {type: 'integer', value: '9223372036854775807'}, {type: 'text', value: '<img src=x onerror="danger()">\u0000literal'},
