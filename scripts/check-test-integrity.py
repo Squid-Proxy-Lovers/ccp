@@ -92,14 +92,10 @@ def compare(base: dict[str, Counter[str]], head: dict[str, Counter[str]]) -> lis
         before = sum(counts[category] for counts in base.values())
         after = sum(counts[category] for counts in head.values())
         print(f"{category}: {before} -> {after}")
-        increased_skips = category == "skips" and after > before
-        reduced_checks = category != "skips" and after < before
-        if not (increased_skips or reduced_checks):
-            continue
         for path in sorted(set(base) | set(head)):
             old = base.get(path, Counter())[category]
             new = head.get(path, Counter())[category]
-            if (increased_skips and new > old) or (reduced_checks and new < old):
+            if (category == "skips" and new > old) or (category != "skips" and new < old):
                 problems.append(f"{path}: {category} {old} -> {new}")
     return problems
 
