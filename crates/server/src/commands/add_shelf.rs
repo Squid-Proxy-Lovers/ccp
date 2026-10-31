@@ -12,7 +12,7 @@ impl ServerState {
         description: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<AddShelfResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self.native_mutation(session_id, auth_context).await?;
         let shelf_name = normalize_segment(Some(shelf_name), "");
         if shelf_name.is_empty() {
             bail!("shelf name is required for add_shelf");
