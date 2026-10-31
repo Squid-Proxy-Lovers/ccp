@@ -53,7 +53,7 @@ const DEFAULT_MTLS_SERVER_BASE_URL: &str = "https://localhost:1338";
 const DEFAULT_AUTH_LISTENER_ADDR: &str = "127.0.0.1:1337";
 const DEFAULT_MTLS_LISTENER_ADDR: &str = "127.0.0.1:1338";
 /// Current schema version. Bump when adding new migrations.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 25;
 
 const AUTH_TOKEN_PURPOSE: &[u8] = b"ccp-auth-token:v1:";
 const DEFAULT_ENROLLMENT_TOKEN_TTL_SECONDS: u64 = 60 * 60;
@@ -64,6 +64,7 @@ const DEFAULT_CERT_WARNING_WINDOW_SECONDS: u64 = 0;
 const SCHEMA: &str = include_str!("init-db.sql");
 
 pub struct SessionBootstrap {
+    pub(crate) directory_lease: crate::directory_mode::DirectoryLease,
     pub session_id: i64,
     pub session_name: String,
     pub auth_redeem_url: String,
@@ -87,7 +88,8 @@ pub struct SessionBinding {
 }
 
 pub async fn initialize_cpp_server(session_name: &str) -> anyhow::Result<SessionBootstrap> {
-    let _ = config_session_dir(session_name)?;
+    let directory = config_session_dir(session_name)?;
+    let directory_lease = crate::directory_mode::DirectoryLease::native(&directory)?;
     init_sqlite(&db_path())?;
     validate_auth_formating()?;
     let mut connection = open_sqlite_connection()?;
@@ -100,6 +102,7 @@ pub async fn initialize_cpp_server(session_name: &str) -> anyhow::Result<Session
     let initial_read_write_token =
         ensure_initial_enrollment_token(session_name, session_id, "read_write")?;
     Ok(SessionBootstrap {
+        directory_lease,
         session_id,
         session_name: session_name.to_string(),
         auth_redeem_url: auth_redeem_url(),
@@ -203,6 +206,19 @@ fn cmp_dir_session_name(dir: &Path, session_name: &str) -> anyhow::Result<bool> 
         return Ok(false);
     }
 
+    let _directory_lease = match crate::directory_mode::DirectoryLease::native(dir) {
+        Ok(lease) => lease,
+        Err(error)
+            if error
+                .downcast_ref::<crate::directory_mode::DirectoryConflict>()
+                .is_some() =>
+        {
+            // A legacy discovery scan cannot inspect a protected/in-use mode.
+            // Explicitly selected directories are rejected by startup/tool guards.
+            return Ok(false);
+        }
+        Err(error) => return Err(error),
+    };
     let connection = Connection::open(&db_path)
         .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
     configure_sqlite(&connection)?;
@@ -365,7 +381,8 @@ pub fn issue_enrollment_token(
     access_level: &str,
     ttl_seconds: Option<u64>,
 ) -> anyhow::Result<IssuedEnrollmentToken> {
-    let _ = config_session_dir(session_name)?;
+    let directory = config_session_dir(session_name)?;
+    let _directory_lease = crate::directory_mode::DirectoryLease::native(&directory)?;
     if access_level != "read" && access_level != "read_write" && access_level != "admin" {
         bail!("access_level must be 'read', 'read_write', or 'admin'");
     }
@@ -662,12 +679,14 @@ pub fn ensure_active_session_binding(session_id: i64) -> anyhow::Result<SessionB
 }
 
 fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> anyhow::Result<i64> {
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let owner = env::var(SESSION_OWNER_ENV).unwrap_or_default();
     let labels = env::var(SESSION_LABELS_ENV).unwrap_or_default();
     let visibility = env::var(SESSION_VISIBILITY_ENV).unwrap_or_else(|_| "private".to_string());
     let purpose = env::var(SESSION_PURPOSE_ENV)
         .unwrap_or_else(|_| "Runtime session for CCP inter-agent communication".to_string());
-    connection
+    transaction
         .execute(
             "INSERT OR IGNORE INTO sessions (
                 name,
@@ -690,7 +709,7 @@ fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> an
         )
         .with_context(|| format!("failed to ensure session {session_name} exists"))?;
 
-    connection
+    transaction
         .execute(
             "UPDATE sessions
              SET is_active = 1,
@@ -704,13 +723,16 @@ fn ensure_runtime_session(connection: &mut Connection, session_name: &str) -> an
         )
         .with_context(|| format!("failed to activate session {session_name}"))?;
 
-    connection
+    let session_id = transaction
         .query_row(
             "SELECT id FROM sessions WHERE name = ?1",
             [session_name],
             |row| row.get(0),
         )
-        .with_context(|| format!("failed to load session id for {session_name}"))
+        .with_context(|| format!("failed to load session id for {session_name}"))?;
+    crate::foundation::map_legacy_session(&transaction, session_id)?;
+    transaction.commit()?;
+    Ok(session_id)
 }
 
 #[expect(
@@ -872,8 +894,6 @@ fn apply_schema_migrations(connection: &Connection) -> anyhow::Result<()> {
         )
         .context("failed to apply v2 migration: transfer_log table")?;
 
-    record_schema_version(connection)?;
-
     Ok(())
 }
 
@@ -931,6 +951,12 @@ pub fn current_schema_version() -> anyhow::Result<u32> {
 }
 
 fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
+    // Every supported workspace schema atomically recorded this older native
+    // migration. Rebuilding both native auth tables on every startup holds the
+    // writer lock and reparses all later triggers for no schema change.
+    if has_recorded_workspace_schema(connection)? {
+        return Ok(());
+    }
     let has_auth_tokens: bool = connection
         .query_row(
             "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'auth_tokens'",
@@ -1008,6 +1034,23 @@ fn migrate_access_level_admin(connection: &Connection) -> anyhow::Result<()> {
     )
     .context("failed to migrate access_level admin")?;
     Ok(())
+}
+
+fn has_recorded_workspace_schema(connection: &Connection) -> anyhow::Result<bool> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_version')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(false);
+    }
+    let version: u32 = connection.query_row(
+        "SELECT coalesce(max(version),0) FROM schema_version",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(version >= 5)
 }
 
 fn add_column_if_missing(connection: &Connection, sql: &str) -> anyhow::Result<()> {
@@ -1180,6 +1223,30 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     }
 }
 
+pub(crate) fn reject_unsupported_schema(connection: &Connection) -> anyhow::Result<()> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version')",
+        [], |row| row.get(0),
+    )?;
+    if exists {
+        let version: u32 = connection.query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )?;
+        if version > SCHEMA_VERSION {
+            bail!("database schema {version} is newer than supported schema {SCHEMA_VERSION}");
+        }
+        if matches!(version, 3 | 4) {
+            bail!(
+                "HTTP holding-draft database schema {version} requires offline conversion; \
+                 preserve its database, journal and keys with its producing binary"
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn init_sqlite(db_path: &Path) -> anyhow::Result<()> {
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -1194,19 +1261,28 @@ pub(crate) fn init_sqlite(db_path: &Path) -> anyhow::Result<()> {
         .with_context(|| format!("failed to open sqlite database at {}", db_path.display()))?;
     configure_sqlite(&connection)?;
 
-    apply_schema_migrations(&connection)?;
-
+    reject_unsupported_schema(&connection)?;
+    // Legacy table rebuilds need foreign keys disabled before BEGIN; SQLite
+    // ignores changes to that pragma inside a transaction. This connection is
+    // private to initialization and is never used for serving requests.
+    connection.pragma_update(None, "foreign_keys", false)?;
     let transaction = connection
-        .transaction()
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("failed to start sqlite initialization transaction")?;
 
+    reject_unsupported_schema(&transaction)?;
+    apply_schema_migrations(&transaction)?;
     transaction
         .execute_batch(SCHEMA)
         .context("failed to initialize sqlite schema")?;
 
+    crate::foundation::migrate(&transaction)?;
+    record_schema_version(&transaction)?;
+
     transaction
         .commit()
         .context("failed to commit sqlite initialization transaction")?;
+    connection.pragma_update(None, "foreign_keys", true)?;
 
     Ok(())
 }
@@ -1240,6 +1316,7 @@ pub struct CertInfo {
 
 pub fn check_server_health(session_name: &str) -> anyhow::Result<ServerHealthStatus> {
     let session_dir = config_session_dir(session_name)?;
+    let _directory_lease = crate::directory_mode::DirectoryLease::native(&session_dir)?;
     let db_path = session_dir.join("ccp.sqlite3");
     let journal_path = session_dir.join("runtime-journal.jsonl");
     let ca_cert_path = session_dir.join("ccp_ca_cert.pem");

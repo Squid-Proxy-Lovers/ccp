@@ -8,6 +8,7 @@ mod enrollment_structs;
 mod storage;
 mod transport;
 mod transport_helpers;
+pub mod workspace;
 use std::path::Path;
 
 use anyhow::{Context, bail};

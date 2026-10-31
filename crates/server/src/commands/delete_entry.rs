@@ -13,10 +13,22 @@ impl ServerState {
         book_name: Option<&str>,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<DeleteResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let checkpoint = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
 
         let deleted_at = current_precise_timestamp_string()?;
         let (_path, key) = entry_path_for(name, shelf_name, book_name);
+        if !self
+            .sessions
+            .read()
+            .await
+            .get(&session_id)
+            .is_some_and(|session| session.entries.contains_key(&key))
+        {
+            bail!("entry '{name}' not found");
+        }
+        self.checkpoint_before_mutation(&checkpoint).await?;
         let (deleted_entry, deleted_history, deleted_result) = {
             let mut sessions = self.sessions.write().await;
             let session = sessions
@@ -87,7 +99,6 @@ impl ServerState {
         }
         self.remove_append_lock(session_id, &key).await;
 
-        checkpoint_journal(&self.journal);
         Ok(deleted_result)
     }
 }

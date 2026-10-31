@@ -90,6 +90,7 @@ pub enum JournalEntry {
 enum JournalCommand {
     Append(JournalEntry),
     Shutdown(mpsc::SyncSender<anyhow::Result<()>>),
+    Checkpoint(mpsc::SyncSender<anyhow::Result<()>>),
 }
 
 #[derive(Clone)]
@@ -97,10 +98,34 @@ pub struct JournalHandle {
     path: PathBuf,
     sender: mpsc::SyncSender<JournalCommand>,
     last_error: Arc<Mutex<Option<String>>>,
+    _directory_lease: Option<crate::directory_mode::DirectoryLease>,
 }
 
 impl JournalHandle {
     pub fn start(path: PathBuf) -> anyhow::Result<Self> {
+        Self::start_inner(path, None)
+    }
+
+    pub(crate) fn start_guarded(
+        path: PathBuf,
+        lease: crate::directory_mode::DirectoryLease,
+    ) -> anyhow::Result<Self> {
+        if !lease.allows_native() {
+            anyhow::bail!("legacy journal requires a native directory lease");
+        }
+        let parent = path
+            .parent()
+            .context("journal path has no data directory")?;
+        if std::fs::canonicalize(parent)? != lease.directory() {
+            anyhow::bail!("journal path does not match its native directory lease");
+        }
+        Self::start_inner(path, Some(lease))
+    }
+
+    fn start_inner(
+        path: PathBuf,
+        directory_lease: Option<crate::directory_mode::DirectoryLease>,
+    ) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).with_context(|| {
                 format!("failed to create journal directory at {}", parent.display())
@@ -119,7 +144,11 @@ impl JournalHandle {
             .name("ccp-journal-writer".to_string())
             .spawn({
                 let last_error = Arc::clone(&last_error);
-                move || run_journal_writer(file, receiver, last_error)
+                let writer_lease = directory_lease.clone();
+                move || {
+                    let _directory_lease = writer_lease;
+                    run_journal_writer(file, receiver, last_error);
+                }
             })
             .context("failed to spawn journal writer thread")?;
 
@@ -127,6 +156,7 @@ impl JournalHandle {
             path,
             sender,
             last_error,
+            _directory_lease: directory_lease,
         })
     }
 
@@ -159,6 +189,21 @@ impl JournalHandle {
         *self.last_error.lock().unwrap_or_else(|e| e.into_inner()) =
             Some("journal writer is not available".to_string());
         Ok(())
+    }
+
+    #[expect(
+        clippy::map_err_ignore,
+        reason = "a send error carries only the unsent acknowledgement; report writer health"
+    )]
+    pub fn checkpoint_blocking(&self) -> anyhow::Result<()> {
+        self.check_health()?;
+        let (done, result) = mpsc::sync_channel(1);
+        self.sender
+            .send(JournalCommand::Checkpoint(done))
+            .map_err(|_| self.send_error())?;
+        result
+            .recv()
+            .context("journal writer dropped checkpoint acknowledgement")?
     }
 
     pub fn truncate_blocking(&self) -> anyhow::Result<()> {
@@ -214,85 +259,71 @@ fn run_journal_writer(
     receiver: mpsc::Receiver<JournalCommand>,
     last_error: Arc<Mutex<Option<String>>>,
 ) {
-    while let Ok(command) = receiver.recv() {
+    let mut pending = None;
+    loop {
+        let Some(command) = pending.take().or_else(|| receiver.recv().ok()) else {
+            return;
+        };
         match command {
-            JournalCommand::Append(entry) => {
-                // Batch: serialize this entry plus any pending entries, then flush once
-                let mut buf = match serde_json::to_vec(&entry) {
-                    Ok(mut line) => {
-                        line.push(b'\n');
-                        line
-                    }
-                    Err(error) => {
-                        record_error(
-                            &last_error,
-                            anyhow::Error::new(error).context("failed to serialize journal entry"),
-                        );
-                        return;
-                    }
-                };
-                // Drain all pending commands without blocking
-                while let Ok(next) = receiver.try_recv() {
-                    match next {
-                        JournalCommand::Append(next_entry) => {
-                            match serde_json::to_vec(&next_entry) {
-                                Ok(mut line) => {
-                                    line.push(b'\n');
-                                    buf.extend_from_slice(&line);
-                                }
-                                Err(error) => {
-                                    record_error(
-                                        &last_error,
-                                        anyhow::Error::new(error)
-                                            .context("failed to serialize journal entry"),
-                                    );
-                                    return;
-                                }
-                            }
-                        }
-                        JournalCommand::Shutdown(done) => {
-                            // Write pending batch before shutdown
-                            if let Err(error) = file
-                                .write_all(&buf)
-                                .and_then(|_| file.flush())
-                                .context("failed to flush journal on shutdown")
-                            {
-                                #[expect(
-                                    clippy::let_underscore_must_use,
-                                    reason = "the requester may have stopped waiting for this acknowledgement"
-                                )]
-                                let _ = done.send(Err(error));
-                            } else {
-                                #[expect(
-                                    clippy::let_underscore_must_use,
-                                    reason = "the requester may have stopped waiting for this acknowledgement"
-                                )]
-                                let _ = done.send(Ok(()));
-                            }
-                            return;
-                        }
-                    }
-                }
-                if let Err(error) = file
-                    .write_all(&buf)
-                    .context("failed to append journal batch")
-                    .and_then(|_| file.flush().context("failed to flush journal batch"))
-                {
+            JournalCommand::Append(entry) => match write_batch(&mut file, &receiver, entry) {
+                Ok(next) => pending = next,
+                Err(error) => {
                     record_error(&last_error, error);
                     return;
                 }
+            },
+            JournalCommand::Checkpoint(done) => {
+                let result = file
+                    .flush()
+                    .and_then(|()| file.set_len(0))
+                    .and_then(|()| file.flush())
+                    .context("failed to checkpoint journal");
+                acknowledge(done, result);
             }
             JournalCommand::Shutdown(done) => {
-                let result = file.flush().context("failed to flush journal on shutdown");
-                #[expect(
-                    clippy::let_underscore_must_use,
-                    reason = "the requester may have stopped waiting for this acknowledgement"
-                )]
-                let _ = done.send(result);
+                acknowledge(
+                    done,
+                    file.flush().context("failed to flush journal on shutdown"),
+                );
                 return;
             }
         }
     }
+}
+
+fn write_batch(
+    file: &mut File,
+    receiver: &mpsc::Receiver<JournalCommand>,
+    first: JournalEntry,
+) -> anyhow::Result<Option<JournalCommand>> {
+    let mut bytes = Vec::new();
+    append_encoded(&mut bytes, first)?;
+    let mut next = None;
+    while let Ok(command) = receiver.try_recv() {
+        match command {
+            JournalCommand::Append(entry) => append_encoded(&mut bytes, entry)?,
+            control => {
+                next = Some(control);
+                break;
+            }
+        }
+    }
+    file.write_all(&bytes)
+        .context("failed to append journal batch")?;
+    file.flush().context("failed to flush journal batch")?;
+    Ok(next)
+}
+fn append_encoded(bytes: &mut Vec<u8>, entry: JournalEntry) -> anyhow::Result<()> {
+    serde_json::to_writer(&mut *bytes, &entry).context("failed to serialize journal entry")?;
+    bytes.push(b'\n');
+    Ok(())
+}
+fn acknowledge(done: mpsc::SyncSender<anyhow::Result<()>>, result: anyhow::Result<()>) {
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "the requester may have stopped waiting for this acknowledgement"
+    )]
+    let _ = done.send(result);
 }
 
 fn record_error(last_error: &Arc<Mutex<Option<String>>>, error: anyhow::Error) {

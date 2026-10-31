@@ -7,10 +7,14 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0"
+ccp-transport = { version = "0.1.0", path = "../transport" }
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 hmac = "0.12"
 httparse = "1.9"
+http-body-util = "0.1.5"
+hyper = { version = "1.12", features = ["http1", "server"] }
+hyper-util = { version = "0.1.21", features = ["tokio"] }
 protocol = { version = "0.1.0", path = "../protocol" }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 rustls = { version = "0.23.46", features = ["ring"] }
@@ -26,6 +30,11 @@ time = { version = "0.3", features = ["formatting", "macros"] }
 url = "2.5"
 uuid = { version = "1", features = ["v4"] }
 x509-parser = "0.16"
+
+[dev-dependencies]
+tokio = { version = "1.48", features = ["test-util"] }
+futures-util = { version = "0.3", features = ["sink"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [lints]
 workspace = true

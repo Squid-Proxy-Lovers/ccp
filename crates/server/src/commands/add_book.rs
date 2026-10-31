@@ -13,7 +13,7 @@ impl ServerState {
         description: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<AddBookResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self.native_mutation(session_id, auth_context).await?;
         let shelf_name = normalize_segment(Some(shelf_name), "");
         let book_name = normalize_segment(Some(book_name), "");
         if shelf_name.is_empty() {

@@ -11,7 +11,9 @@ impl ServerState {
         entry_key: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<RestoreResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
         let (deleted_entry, deleted_history) =
             super::super::database::load_deleted_entry(entry_key)?
                 .with_context(|| format!("deleted entry '{entry_key}' not found"))?;
@@ -105,7 +107,6 @@ impl ServerState {
             return Err(error);
         }
 
-        checkpoint_journal(&self.journal);
         Ok(RestoreResult {
             entry_key: deleted_entry.entry_key,
             restored_entry,
