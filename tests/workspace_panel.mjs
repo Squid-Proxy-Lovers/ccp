@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/web/src/lib/model.js', import.meta.url), 'utf8');
-const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -724,3 +724,21 @@ test('new global session may inspect same-instance body-free tracking but cannot
 });
 
 import './workspace_native_panel.mjs';
+
+
+test('existing principal UUIDs are canonical before freezing and verifying a key request', () => {
+  const lower = 'abcdef01-2345-6789-abcd-ef0123456789';
+  for (const value of [lower, lower.toUpperCase(), `  ${lower.toUpperCase()}  `]) {
+    const principal = principalIdentity('existing', value);
+    const attempt = new SecurityAttempt(session(), 'team/appoint', {workspace_id: 'workspace', principal});
+    assert.equal(principal.principal_id, lower);
+    assert.equal(JSON.parse(attempt.requestBody).principal.principal_id, lower);
+    principal.principal_id = 'edited';
+    assert.equal(JSON.parse(attempt.body).request.principal.principal_id, lower);
+  }
+  assert.deepEqual(principalIdentity('new_principal', '  Case Sensitive  '), {kind: 'new_principal', name: 'Case Sensitive'});
+  for (const value of ['', 'partial', 'abcdef01-2345-6789-abcd-ef0123456789/other']) {
+    assert.throws(() => principalIdentity('existing', value));
+  }
+  assert.throws(() => principalIdentity('other', lower));
+});

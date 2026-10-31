@@ -146,9 +146,10 @@ before editing it; an unconfigured store starts with expected revision 0:
 ```
 
 `update` explicitly checks official releases, stages a verified client/MCP pair and
-selects it only after every configured profile passes the candidate's read-only
-preflight. Pending work, migration needs, missing servers or unknown contracts
-defer selection. A same-source result reports `up_to_date` without rebuilding or
+selects it using the candidate's read-only preflight observation for every
+configured profile. Preflight does not reserve or lock profiles through
+activation; they may change after the observation. Observed pending work,
+migration needs, missing servers or unknown contracts defer selection. A same-source result reports `up_to_date` without rebuilding or
 probing profiles. Workspace access and credential validity remain separate.
 
 Use `--channel nightly` for dated official main snapshots. Add `--pin-tag` to hold

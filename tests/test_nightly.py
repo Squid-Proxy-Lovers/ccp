@@ -484,15 +484,51 @@ elif name == 'curl':
     if fixture == 'releases':
         fixture = 'releases-' + parse_qs(parsed.query)['page'][0] + '.json'
     if fixture == os.environ.get('NIGHTLY_TEST_FAILURE'):
+        pathlib.Path(args[args.index('-o') + 1]).write_bytes(b'partial-download')
         sys.exit(1)
     shutil.copyfile(pathlib.Path(os.environ['NIGHTLY_TEST_FIXTURES']) / fixture,
                     args[args.index('-o') + 1])
 elif name == 'git':
     sys.exit('Unexpected source clone')
+elif name == 'cargo':
+    assert args == ['build', '--release', '--locked', '-p', 'client']
+elif name == 'mktemp':
+    import tempfile
+    root = pathlib.Path(os.environ['NIGHTLY_TEST_FIXTURES']).parent.resolve()
+    if args == ['-d']:
+        print(tempfile.mkdtemp(dir=root))
+    else:
+        target = pathlib.Path(args[0])
+        assert target.parent.resolve() == root or root in target.parent.resolve().parents
+        fd, value = tempfile.mkstemp(prefix=target.name.replace('XXXXXX', ''), dir=target.parent)
+        os.close(fd)
+        print(value)
+elif name in ('cp', 'chmod', 'mv', 'mkdir'):
+    root = pathlib.Path(os.environ['NIGHTLY_TEST_FIXTURES']).parent.resolve()
+    for value in args:
+        if not value.startswith('-') and value not in ('+x', '0755'):
+            target = pathlib.Path(value).resolve()
+            assert target == root or root in target.parents
+    if name == os.environ.get('NIGHTLY_TEST_FAILURE'):
+        if name == 'cp': pathlib.Path(args[-1]).write_bytes(b'partial-copy')
+        sys.exit(1)
+    import subprocess
+    subprocess.run([shutil.which(name, path='/usr/bin:/bin'), *args], check=True)
 elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
     sys.exit(1)
 """
-        for command in ("curl", "uname", "docker", "git"):
+        for command in (
+            "curl",
+            "uname",
+            "docker",
+            "git",
+            "cargo",
+            "cp",
+            "chmod",
+            "mv",
+            "mkdir",
+            "mktemp",
+        ):
             path = self.bin_dir / command
             path.write_text(stub)
             path.chmod(0o755)
@@ -500,6 +536,64 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
         pip.parent.mkdir(parents=True)
         pip.write_text(stub)
         pip.chmod(0o755)
+
+    def source_fixture(self):
+        (self.root / "Cargo.toml").write_text("# private build fixture")
+        (self.root / "mcp").mkdir()
+        release_dir = self.root / "target/release"
+        release_dir.mkdir(parents=True)
+        (release_dir / "client").write_bytes(b"replacement-client")
+        (release_dir / "server").write_bytes(b"replacement-server")
+
+    def test_stable_success_preserves_readable_executable_mode(self):
+        (self.root / "mcp").mkdir()
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        target = self.install_dir / "ccp-client"
+        self.assertEqual(target.read_bytes(), b"ccp-client-linux-x86_64")
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+
+    def test_stable_failed_transfer_preserves_installed_bytes(self):
+        target = self.install_dir / "ccp-client"
+        target.write_bytes(b"working-client")
+        target.chmod(0o755)
+        result, _ = self.install("--client", failure="ccp-client-linux-x86_64")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.read_bytes(), b"working-client")
+        self.assertNotIn("Done.", result.stdout)
+        self.assertEqual(sorted(p.name for p in self.install_dir.iterdir()), ["ccp-client"])
+
+    def test_source_publish_failures_preserve_old_binary_and_refuse_success(self):
+        self.source_fixture()
+        for failure in ("cp", "chmod", "mv", "mkdir"):
+            with self.subTest(failure=failure):
+                target = self.install_dir / "ccp-client"
+                target.write_bytes(b"working-client")
+                target.chmod(0o755)
+                result, _ = self.install("--client", "--from-source", failure=failure)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(target.read_bytes(), b"working-client")
+                self.assertNotIn("Done.", result.stdout)
+                self.assertNotIn("Installed ", result.stdout)
+                self.assertEqual(sorted(p.name for p in self.install_dir.iterdir()), ["ccp-client"])
+
+    def test_stable_mcp_failure_refuses_completion(self):
+        (self.root / "mcp").mkdir()
+        result, calls = self.install("--client", failure="pip")
+        self.assertTrue(any(call[0] == "pip" for call in calls))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("MCP bridge installed", result.stdout)
+        self.assertNotIn("Done.", result.stdout)
+
+    def test_source_success_publishes_executable_bytes(self):
+        self.source_fixture()
+        result, _ = self.install("--client", "--from-source")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        target = self.install_dir / "ccp-client"
+        self.assertEqual(target.read_bytes(), b"replacement-client")
+        self.assertNotEqual(target.stat().st_mode & 0o111, 0)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+        self.assertIn("Done.", result.stdout)
 
     def install(self, *args, failure=""):
         env = dict(

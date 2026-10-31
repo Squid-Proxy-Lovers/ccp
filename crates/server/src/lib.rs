@@ -66,7 +66,7 @@ const FRAME_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
     reason = "legacy function predating the size and complexity limits; split it before extending"
 )]
 pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
-    let (bootstrap, journal, state) = initialize_native_runtime(session_name).await?;
+    let (bootstrap, _, state) = initialize_native_runtime(session_name).await?;
     let shutdown = Arc::new(ShutdownCoordinator::new());
 
     println!(
@@ -259,10 +259,7 @@ pub async fn run_server(session_name: &str) -> anyhow::Result<()> {
     let _ = mtls_task.await;
     shutdown.wait_for_idle().await;
 
-    state.mark_sessions_stopped().await?;
-    journal.shutdown()?;
-    state.persist_snapshot_to_sqlite().await?;
-    journal.truncate_blocking()?;
+    state.finish_native_shutdown().await?;
 
     server_result
 }

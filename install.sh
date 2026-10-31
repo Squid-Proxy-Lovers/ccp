@@ -18,6 +18,7 @@ FROM_SOURCE=false
 CHANNEL="stable"
 RELEASE_VERSION=""
 RELEASE_STAGE=""
+PUBLISH_STAGE=""
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -120,6 +121,7 @@ fi
 
 cleanup_release() {
     if [ -n "$RELEASE_STAGE" ]; then rm -rf "$RELEASE_STAGE"; fi
+    if [ -n "$PUBLISH_STAGE" ]; then rm -f "$PUBLISH_STAGE"; fi
 }
 trap cleanup_release EXIT
 
@@ -145,6 +147,18 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
+publish_binary() {
+    local source="$1" dest="$2"
+    PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
+    if ! cp "$source" "$PUBLISH_STAGE" || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
+        err "Could not publish $dest."
+        rm -f "$PUBLISH_STAGE"
+        PUBLISH_STAGE=""
+        return 1
+    fi
+    PUBLISH_STAGE=""
+}
+
 download_binary() {
     local name="$1" dest="$2"
     local platform
@@ -152,14 +166,15 @@ download_binary() {
     local url="https://github.com/${REPO}/releases/latest/download/${name}-${platform}"
 
     step "Downloading ${BOLD}$name${RESET}${CYAN} for $platform${RESET}"
+    PUBLISH_STAGE="$(mktemp "${dest}.download.XXXXXX")" || return 1
     local ok=false
     if command -v curl &>/dev/null; then
-        curl -fsSL "$url" -o "$dest" && ok=true
+        curl -fsSL "$url" -o "$PUBLISH_STAGE" && ok=true
     elif command -v wget &>/dev/null; then
-        wget -q "$url" -O "$dest" && ok=true
+        wget -q "$url" -O "$PUBLISH_STAGE" && ok=true
     else
         err "Need curl or wget to download binaries."
-        exit 1
+        return 1
     fi
 
     if [ "$ok" = false ]; then
@@ -169,9 +184,13 @@ download_binary() {
         echo ""
         info "Try installing from source instead:"
         echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
-        exit 1
+        return 1
     fi
-    chmod +x "$dest"
+    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
+        err "Could not publish $dest."
+        return 1
+    fi
+    PUBLISH_STAGE=""
 }
 
 download_release_file() {
@@ -303,18 +322,14 @@ build_from_source() {
         exit 1
     fi
 
-    mkdir -p "$INSTALL_DIR"
-    if [ "$MODE" = "client" ]; then
-        cp "$build_dir/target/release/client" "$INSTALL_DIR/ccp-client"
-        chmod +x "$INSTALL_DIR/ccp-client"
-    else
-        cp "$build_dir/target/release/server" "$INSTALL_DIR/ccp-server"
-        cp "$build_dir/target/release/client" "$INSTALL_DIR/ccp-client"
-        chmod +x "$INSTALL_DIR/ccp-server" "$INSTALL_DIR/ccp-client"
+    mkdir -p "$INSTALL_DIR" || return 1
+    if [ "$MODE" != "client" ]; then
+        publish_binary "$build_dir/target/release/server" "$INSTALL_DIR/ccp-server" || return 1
     fi
+    publish_binary "$build_dir/target/release/client" "$INSTALL_DIR/ccp-client" || return 1
 
     if [ "$build_dir" != "$REPO_ROOT" ]; then
-        rm -rf "$build_dir"
+        rm -rf "$build_dir" || return 1
     fi
 }
 
@@ -373,22 +388,22 @@ install_mcp_bridge() {
         mcp_src="$mcp_home/src"
         if [ ! -d "$mcp_src" ]; then
             step "Downloading MCP bridge..."
-            mkdir -p "$mcp_home"
+            mkdir -p "$mcp_home" || return 1
             git clone --depth 1 "https://github.com/${REPO}.git" "$mcp_home/repo" 2>/dev/null || {
                 warn "Could not download MCP bridge. Install from the repo manually."
-                return
+                return 1
             }
-            mv "$mcp_home/repo/mcp" "$mcp_src"
-            rm -rf "$mcp_home/repo"
+            mv "$mcp_home/repo/mcp" "$mcp_src" || return 1
+            rm -rf "$mcp_home/repo" || return 1
         fi
     fi
 
     step "Installing MCP bridge..."
     if [ ! -d "$venv_dir" ]; then
-        python3 -m venv "$venv_dir"
+        python3 -m venv "$venv_dir" || return 1
     fi
-    "$venv_dir/bin/pip" install --quiet --upgrade pip
-    "$venv_dir/bin/pip" install --quiet -e "$mcp_src"
+    "$venv_dir/bin/pip" install --quiet --upgrade pip || return 1
+    "$venv_dir/bin/pip" install --quiet -e "$mcp_src" || return 1
     ok "MCP bridge installed in $venv_dir"
 }
 
@@ -598,18 +613,18 @@ fi
 # ── Binary install ───────────────────────────────────────────────────────────
 
 step "Installing CCP ${BOLD}($MODE)${RESET}"
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" || exit 1
 
 if [ "$FROM_SOURCE" = true ]; then
-    build_from_source
+    build_from_source || exit 1
 elif [ "$CHANNEL" = "nightly" ]; then
-    install_nightly_binaries
+    install_nightly_binaries || exit 1
 else
     if [ "$MODE" = "client" ]; then
-        download_binary "ccp-client" "$INSTALL_DIR/ccp-client"
+        download_binary "ccp-client" "$INSTALL_DIR/ccp-client" || exit 1
     else
-        download_binary "ccp-server" "$INSTALL_DIR/ccp-server"
-        download_binary "ccp-client" "$INSTALL_DIR/ccp-client"
+        download_binary "ccp-server" "$INSTALL_DIR/ccp-server" || exit 1
+        download_binary "ccp-client" "$INSTALL_DIR/ccp-client" || exit 1
     fi
 fi
 
@@ -631,7 +646,7 @@ install_ccp_alias
 # ── MCP bridge ───────────────────────────────────────────────────────────────
 
 if [ "$MODE" = "client" ]; then
-    install_mcp_bridge
+    install_mcp_bridge || exit 1
     configure_mcp
 elif [ "$MODE" = "both" ]; then
     echo ""
@@ -639,7 +654,7 @@ elif [ "$MODE" = "both" ]; then
     read -r INSTALL_MCP_ANSWER </dev/tty 2>/dev/null || INSTALL_MCP_ANSWER="n"
     case "$INSTALL_MCP_ANSWER" in
         [yY]|[yY][eE][sS])
-            install_mcp_bridge
+            install_mcp_bridge || exit 1
             configure_mcp
             ;;
         *)

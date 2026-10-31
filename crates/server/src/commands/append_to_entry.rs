@@ -19,7 +19,7 @@ impl ServerState {
         appended_content: &str,
         metadata: AppendMetadata,
     ) -> anyhow::Result<AppendResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self.native_mutation(session_id, auth_context).await?;
         let (path, key) = entry_path_for(name, shelf_name, book_name);
         let entry_lock = self.append_lock(session_id, &key).await;
         let _entry_guard = entry_lock.lock().await;

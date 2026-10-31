@@ -677,6 +677,8 @@ fn print_json(body: &str) -> anyhow::Result<()> {
 
 fn parse_cli() -> Cli {
     let args: Vec<_> = std::env::args_os().collect();
+    let workspace = args.get(1).is_some_and(|arg| arg == "workspace");
+    let input_formats = if workspace { "" } else { CLIENT_INPUT_FORMATS };
     let native = args.get(1).is_some_and(|arg| arg == "enroll")
         && args.iter().skip(2).any(|arg| {
             let arg = arg.to_string_lossy();
@@ -696,11 +698,11 @@ fn parse_cli() -> Cli {
     }
     let matches = match command.try_get_matches_from(args) {
         Ok(matches) => matches,
-        Err(error) => print_error(error, CLIENT_INPUT_FORMATS),
+        Err(error) => print_error(error, input_formats),
     };
     match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
-        Err(error) => print_error(error, CLIENT_INPUT_FORMATS),
+        Err(error) => print_error(error, input_formats),
     }
 }
 
@@ -723,6 +725,9 @@ fn print_error(error: clap::Error, input_formats: &str) -> ! {
     } else {
         error.print()
     };
+    if input_formats.is_empty() {
+        std::process::exit(exit_code);
+    }
     if use_stderr {
         let mut stderr = io::stderr();
         #[expect(

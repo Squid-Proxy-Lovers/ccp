@@ -141,56 +141,68 @@ fn validate_content(content: &EntryContent) -> anyhow::Result<()> {
 }
 
 fn request_hash(request: &EntryMutation) -> anyhow::Result<Vec<u8>> {
-    use protocol::workspace::content as wire;
-    let content = |value: &EntryContent| wire::EntryContent {
-        text: value.text.clone(),
-        description: value.description.clone(),
-        labels: value.labels.clone(),
-    };
+    use protocol::workspace::content::BorrowedEntryChange as Borrowed;
+    let target = match &request.change {
+        EntryChange::Create { book_id, .. } => book_id,
+        EntryChange::Append { id, .. }
+        | EntryChange::Revise { id, .. }
+        | EntryChange::Archive { id, .. }
+        | EntryChange::Restore { id, .. } => id,
+    }
+    .to_string();
     let change = match &request.change {
-        EntryChange::Create {
-            book_id,
+        EntryChange::Create { name, content, .. } => Borrowed::Create {
+            book_id: &target,
             name,
-            content: value,
-        } => wire::EntryChange::Create {
-            book_id: book_id.to_string(),
-            name: name.clone(),
-            content: content(value),
+            content: fingerprint_content(content),
         },
         EntryChange::Append {
-            id,
             expected_revision,
             text,
-        } => wire::EntryChange::Append {
-            entry_id: id.to_string(),
+            ..
+        } => Borrowed::Append {
+            entry_id: &target,
             expected_revision: *expected_revision,
-            text: text.clone(),
+            text,
         },
         EntryChange::Revise {
-            id,
             expected_revision,
-            content: value,
-        } => wire::EntryChange::Revise {
-            entry_id: id.to_string(),
+            content,
+            ..
+        } => Borrowed::Revise {
+            entry_id: &target,
             expected_revision: *expected_revision,
-            content: content(value),
+            content: fingerprint_content(content),
         },
         EntryChange::Archive {
-            id,
-            expected_revision,
-        } => wire::EntryChange::Archive {
-            entry_id: id.to_string(),
+            expected_revision, ..
+        } => Borrowed::Archive {
+            entry_id: &target,
             expected_revision: *expected_revision,
         },
         EntryChange::Restore {
-            id,
-            expected_revision,
-        } => wire::EntryChange::Restore {
-            entry_id: id.to_string(),
+            expected_revision, ..
+        } => Borrowed::Restore {
+            entry_id: &target,
             expected_revision: *expected_revision,
         },
     };
-    Ok(Sha256::digest(wire::fingerprint_bytes(&change, request.agent.as_deref())?).to_vec())
+    Ok(
+        Sha256::digest(protocol::workspace::content::borrowed_fingerprint_bytes(
+            change,
+            request.agent.as_deref(),
+        )?)
+        .to_vec(),
+    )
+}
+fn fingerprint_content(
+    content: &EntryContent,
+) -> protocol::workspace::content::BorrowedEntryContent<'_> {
+    protocol::workspace::content::BorrowedEntryContent {
+        description: &content.description,
+        labels: &content.labels,
+        text: &content.text,
+    }
 }
 
 fn replay(

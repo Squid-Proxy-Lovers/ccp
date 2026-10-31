@@ -223,6 +223,16 @@ export function keyExpiry(value, now = Date.now()) {
   return seconds;
 }
 
+// Canonicalize the entered UUID before constructing the one-shot request and
+// its receipt comparison; the server serializes UUIDs in lowercase.
+export function principalIdentity(mode, value) {
+  const principal = value.trim();
+  if (!['new_principal', 'existing'].includes(mode) || !principal) throw new Error('Choose an identity and enter its name or UUID.');
+  if (mode === 'new_principal') return {kind: 'new_principal', name: principal};
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(principal)) throw new Error('Enter the existing principal’s complete UUID.');
+  return {kind: 'existing', principal_id: principal.toLowerCase()};
+}
+
 export class SecurityAttempt {
   #sent = false;
   constructor(session, action, body) {
