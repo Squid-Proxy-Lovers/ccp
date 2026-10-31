@@ -6,8 +6,9 @@
 //!
 //! These APIs are not external authentication endpoints. Callers must construct
 //! actors from verified transport credentials, never a request's claimed ID.
-//! Phase 1 leaves the existing native transport unchanged; new transport and
-//! entry ownership enforcement are introduced by subsequent phases.
+//! Workspace HTTPS/mTLS adapters authenticate callers before constructing actors.
+//! Stores recheck workspace permissions and entry ownership for each operation.
+//! The existing native transport remains a separate compatibility path.
 
 mod access;
 mod admin;

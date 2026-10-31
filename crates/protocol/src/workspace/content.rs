@@ -9,7 +9,9 @@ mod fingerprint;
 mod native;
 mod purge;
 mod shelves;
-pub use fingerprint::fingerprint_bytes;
+pub use fingerprint::{
+    BorrowedEntryChange, BorrowedEntryContent, borrowed_fingerprint_bytes, fingerprint_bytes,
+};
 pub use native::{NativeHistory, NativeRecord, NativeRow, NativeSource, NativeValue};
 pub use purge::{EntryPurge, EntryPurgeReceipt};
 pub use shelves::{ArchivedShelf, ShelfState, ShelfTransition, ShelfTransitionReceipt};

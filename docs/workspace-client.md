@@ -362,7 +362,8 @@ entries, earlier versions and archived summaries through current mTLS access.
 Each command names an explicit workspace; it does not alter caller selections.
 Use [entry mutations](workspace-content-mutations.md) to edit entries and retain
 the original request safely across uncertain results.
-Entry mutations and workspace MCP content tools remain subsequent work.
+The [workspace MCP bridge](workspace-mcp.md) also exposes content reads and
+guarded entry mutations.
 
 ## Read current guidance
 
@@ -405,8 +406,8 @@ This explicit reader does not publish guidance or implement automatic initial/
 changed guidance delivery with other tool results. The MCP bridge supports
 [explicit refresh](workspace-mcp.md#refresh-guidance-explicitly) and
 [automatic initial/changed guidance](workspace-mcp.md#read-automatic-guidance-alongside-results)
-with unavailable warnings beside other successful tool results. Desktop editors
-remain later work.
+with unavailable warnings beside other successful tool results. Scoped desktop
+editors are available in the [admin panel](workspace-browser-session.md).
 
 ## Retrieve a guidance delivery context
 

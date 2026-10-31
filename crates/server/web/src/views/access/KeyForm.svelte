@@ -12,7 +12,7 @@
   import {app} from '../../lib/app.svelte';
   import {notice} from '../../lib/notify.svelte';
   import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {keyExpiry} from '../../lib/model.js';
+  import {keyExpiry, principalIdentity} from '../../lib/model.js';
   import {changeSecurity, FormDraft, type Admin, type Report} from './actions';
 
   let {admin = null, onclose, onoutcome}: {admin?: Admin | null; onclose: () => void; onoutcome: Report} = $props();
@@ -30,11 +30,7 @@
       let body: Record<string, unknown>;
       if (admin) body = {workspace_id: workspace.id, principal_id: admin.id, name: form.get('name'), expires_at: expiry};
       else {
-        const mode = form.get('mode'), principal = form.get('principal').trim();
-        if (!['new_principal', 'existing'].includes(mode) || !principal) throw new Error('Choose an identity and enter its name or UUID.');
-        if (mode === 'existing' && !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(principal)) throw new Error('Enter the existing principal’s complete UUID.');
-        body = {workspace_id: workspace.id, principal: mode === 'existing'
-          ? {kind: 'existing', principal_id: principal} : {kind: 'new_principal', name: principal}, key_expires_at: expiry};
+        body = {workspace_id: workspace.id, principal: principalIdentity(form.get('mode'), form.get('principal')), key_expires_at: expiry};
       }
       const ok = await confirmAction(admin
         ? {title: 'Create an additional key?', confirm: 'Create key', body: `Create an additional key for ${admin.name} (${admin.id})? Existing keys remain valid.`}

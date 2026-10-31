@@ -25,6 +25,47 @@ mod tests {
         )
     }
     #[tokio::test]
+    async fn empty_nonfinal_fragments_are_consumed_within_the_message_payload_cap() {
+        use ccp_transport::websocket::tungstenite::protocol::frame::{
+            Frame,
+            coding::{Data, OpCode},
+        };
+        let (mut sender, receiver) = pair(8192).await;
+        let mut reader = ByteStream::new(receiver);
+        sender
+            .send(Message::Frame(Frame::message(
+                Vec::new(),
+                OpCode::Data(Data::Binary),
+                false,
+            )))
+            .await
+            .unwrap();
+        for _ in 0..301 {
+            sender
+                .send(Message::Frame(Frame::message(
+                    Vec::new(),
+                    OpCode::Data(Data::Continue),
+                    false,
+                )))
+                .await
+                .unwrap();
+        }
+        sender
+            .send(Message::Frame(Frame::message(
+                vec![42],
+                OpCode::Data(Data::Continue),
+                true,
+            )))
+            .await
+            .unwrap();
+        let mut byte = [0];
+        timeout(Duration::from_secs(1), reader.read_exact(&mut byte))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(byte, [42]);
+    }
+    #[tokio::test]
     async fn simultaneous_bulk_duplex_progresses_without_flush_read_deadlock() {
         let (a, b) = pair(8192).await;
         let (mut ar, mut aw) = tokio::io::split(ByteStream::new(a));

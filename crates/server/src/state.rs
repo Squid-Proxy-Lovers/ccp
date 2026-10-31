@@ -582,6 +582,7 @@ pub struct ServerState {
     cert_grants: RwLock<HashMap<String, CertGrant>>,
     revoked_cert_common_names: RwLock<HashSet<String>>,
     append_locks: AppendLocks,
+    native_checkpoint: RwLock<()>,
     journal: Arc<JournalHandle>,
 }
 
@@ -604,6 +605,7 @@ impl ServerState {
     }
 
     pub async fn note_auth_token_used(&self, token: &str) -> anyhow::Result<()> {
+        let _mutation = self.native_checkpoint.read().await;
         let timestamp = current_timestamp_string()?;
         let token_hash = hash_token(token);
 
@@ -635,6 +637,7 @@ impl ServerState {
         cert_pem: &str,
         expires_at: &str,
     ) -> anyhow::Result<()> {
+        let _mutation = self.native_checkpoint.read().await;
         let created_at = current_timestamp_string()?;
         self.journal.append(JournalEntry::IssuedCert {
             session_id,
@@ -659,6 +662,11 @@ impl ServerState {
     }
 
     pub async fn mark_sessions_stopped(&self) -> anyhow::Result<()> {
+        let _mutation = self.native_checkpoint.read().await;
+        self.mark_sessions_stopped_inner().await
+    }
+
+    async fn mark_sessions_stopped_inner(&self) -> anyhow::Result<()> {
         let timestamp = current_timestamp_string()?;
         let mut sessions = self.sessions.write().await;
         for session in sessions.values_mut() {
@@ -818,10 +826,5 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
         .extend(tokenize_search_text(appended_content));
 }
 
-fn checkpoint_journal(journal: &JournalHandle) {
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "pre-existing behaviour: a failed checkpoint leaves the journal intact for replay"
-    )]
-    let _ = journal.truncate_blocking();
-}
+#[path = "native_checkpoint.rs"]
+mod native_checkpoint;

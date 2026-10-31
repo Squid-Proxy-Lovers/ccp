@@ -71,7 +71,6 @@ def expand(archive: Path, root: Path) -> Path:
 def extract(source: tarfile.TarFile, item: tarfile.TarInfo, target: Path) -> None:
     directory(target.parent, create=True)
     stream = source.extractfile(item)
-    require(stream is not None, "MCP archive file cannot be read")
     if stream is None:
         raise ValueError("MCP archive file cannot be read")
     with stream, target.open("xb") as output:

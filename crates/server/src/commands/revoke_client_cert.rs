@@ -18,34 +18,20 @@ impl ServerState {
         }
         let revoked_at = current_timestamp_string()?;
 
-        // Add to revocation set first (fail-closed: deny access before removing grant)
-        self.revoked_cert_common_names
-            .write()
-            .await
-            .insert(target_client_common_name.to_string());
-
-        // Single write lock for the entire grant removal + validation
-        let grant = {
-            let mut grants = self.cert_grants.write().await;
-            let removed = grants.remove(target_client_common_name);
-            let Some(grant) = removed else {
-                // Not found — undo revocation mark
-                self.revoked_cert_common_names
-                    .write()
-                    .await
-                    .remove(target_client_common_name);
-                bail!("client certificate '{target_client_common_name}' not found");
-            };
-            if grant.session_id != session_id {
-                grants.insert(target_client_common_name.to_string(), grant);
-                self.revoked_cert_common_names
-                    .write()
-                    .await
-                    .remove(target_client_common_name);
-                bail!("client certificate '{target_client_common_name}' not found");
-            }
-            grant
-        };
+        let _mutation = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
+        let mut grants = self.cert_grants.write().await;
+        let grant = grants
+            .get(target_client_common_name)
+            .filter(|grant| grant.session_id == session_id)
+            .cloned()
+            .with_context(|| {
+                format!("client certificate '{target_client_common_name}' not found")
+            })?;
+        let mut revoked = self.revoked_cert_common_names.write().await;
+        let newly_revoked = revoked.insert(target_client_common_name.to_string());
+        grants.remove(target_client_common_name);
 
         if let Err(error) = super::super::database::persist_revoked_cert(
             session_id,
@@ -53,19 +39,13 @@ impl ServerState {
             &grant,
             &revoked_at,
         ) {
-            // DB failed — undo both changes
-            self.cert_grants
-                .write()
-                .await
-                .insert(target_client_common_name.to_string(), grant);
-            self.revoked_cert_common_names
-                .write()
-                .await
-                .remove(target_client_common_name);
+            grants.insert(target_client_common_name.to_string(), grant);
+            if newly_revoked {
+                revoked.remove(target_client_common_name);
+            }
             return Err(error);
         }
 
-        checkpoint_journal(&self.journal);
         Ok(RevokeCertResult {
             client_common_name: target_client_common_name.to_string(),
             revoked_at,

@@ -147,7 +147,18 @@ class TestIntegrityGateTests(unittest.TestCase):
             for command in (
                 ["init", "--quiet"],
                 ["add", "lib.rs"],
-                ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "--quiet", "-m", "base"],
+                [
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "base",
+                ],
             ):
                 subprocess.run([git, *command], cwd=root, check=True)  # noqa: S603
             (root / "lib.rs").write_text(change)
@@ -168,11 +179,75 @@ class TestIntegrityGateTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_check("#[test]\nfn checks() {}\n")
 
+    def test_unrelated_additions_cannot_offset_file_reductions(self):
+        checker = load_script("check-test-integrity.py")
+        base = {"original.rs": checker.count("original.rs", self.BASE)}
+        for replacement in ("", "#[test]\nfn checks() {}\n"):
+            with self.subTest(replacement=replacement), contextlib.redirect_stdout(io.StringIO()):
+                head = {
+                    "original.rs": checker.count("original.rs", replacement),
+                    "unrelated.rs": checker.count("unrelated.rs", self.BASE),
+                }
+                problems = checker.compare(base, head)
+                self.assertIn("original.rs: assertions 1 -> 0", problems)
+                if not replacement:
+                    self.assertIn("original.rs: tests 1 -> 0", problems)
+
+    def test_removed_skip_cannot_offset_a_new_skip_elsewhere(self):
+        checker = load_script("check-test-integrity.py")
+        skipped = self.BASE.replace("#[test]", "#[test]\n#[ignore]")
+        base = {"original.rs": checker.count("original.rs", skipped)}
+        head = {
+            "original.rs": checker.count("original.rs", self.BASE),
+            "unrelated.rs": checker.count("unrelated.rs", skipped),
+        }
+        with contextlib.redirect_stdout(io.StringIO()):
+            problems = checker.compare(base, head)
+        self.assertIn("unrelated.rs: skips 0 -> 1", problems)
+
     def test_new_ignore_fails_unless_reviewed(self):
         ignored = self.BASE.replace("#[test]", "#[test]\n#[ignore]")
         with self.assertRaises(SystemExit):
             self.run_check(ignored)
         self.run_check(ignored, allow=True)
+
+
+class NativeResolverTests(unittest.TestCase):
+    def test_cold_checkout_selects_each_binary_without_changing_configured_commands(self):
+        from ccp_mcp_server import server
+
+        with tempfile.TemporaryDirectory() as directory:
+            for component in ("client", "server"):
+                with self.subTest(component=component):
+                    key = f"CCP_{component.upper()}_BIN"
+                    resolver = getattr(server, f"_resolve_{component}_command")
+                    with (
+                        patch.dict("os.environ", {key: ""}),
+                        patch.object(
+                            server,
+                            f"DEFAULT_{component.upper()}_BINARY",
+                            Path(directory) / component,
+                        ),
+                        patch.object(
+                            server, f"DEFAULT_{component.upper()}_MANIFEST", ROOT / "Cargo.toml"
+                        ),
+                        patch.object(server.shutil, "which", return_value="/trusted/cargo"),
+                    ):
+                        self.assertEqual(
+                            resolver().argv,
+                            [
+                                "/trusted/cargo",
+                                "run",
+                                "--quiet",
+                                "--manifest-path",
+                                str(ROOT / "Cargo.toml"),
+                                "--bin",
+                                component,
+                                "--",
+                            ],
+                        )
+                        with patch.dict("os.environ", {key: "/configured/binary"}):
+                            self.assertEqual(resolver().argv, ["/configured/binary"])
 
 
 class CoverageGateTests(unittest.TestCase):

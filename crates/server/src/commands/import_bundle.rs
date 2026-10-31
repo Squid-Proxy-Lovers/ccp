@@ -11,10 +11,6 @@ use protocol::{ConflictPolicy, ImportBundleResult, TransferBundle};
 use super::super::*;
 
 impl ServerState {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "legacy function predating the size and complexity limits; split it before extending"
-    )]
     pub async fn import_bundle(
         &self,
         session_id: i64,
@@ -22,8 +18,21 @@ impl ServerState {
         policy: &ConflictPolicy,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<ImportBundleResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let checkpoint = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
+        self.validate_import(session_id, bundle, policy).await?;
+        self.checkpoint_before_mutation(&checkpoint).await?;
+        self.import_bundle_inner(session_id, bundle, policy, auth_context)
+            .await
+    }
 
+    async fn validate_import(
+        &self,
+        session_id: i64,
+        bundle: &TransferBundle,
+        policy: &ConflictPolicy,
+    ) -> anyhow::Result<()> {
         // Verify bundle integrity.
         let entries_bytes = serde_json::to_vec(&bundle.entries)
             .context("failed to serialise entries for hash verification")?;
@@ -34,10 +43,6 @@ impl ServerState {
         if computed_sha256 != bundle.bundle_sha256 {
             bail!("bundle integrity check failed: hash mismatch");
         }
-
-        let scope_json =
-            serde_json::to_string(&bundle.selector.scope).context("failed to serialise scope")?;
-        let policy_str = policy_to_str(policy);
 
         // Validate all names up-front before taking the write lock.
         for entry in &bundle.entries {
@@ -65,6 +70,26 @@ impl ServerState {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "legacy function predating the size and complexity limits; split it before extending"
+    )]
+    async fn import_bundle_inner(
+        &self,
+        session_id: i64,
+        bundle: &TransferBundle,
+        policy: &ConflictPolicy,
+        auth_context: &ConnectionAuthContext,
+    ) -> anyhow::Result<ImportBundleResult> {
+        self.ensure_write_access(session_id, auth_context).await?;
+
+        let scope_json =
+            serde_json::to_string(&bundle.selector.scope).context("failed to serialise scope")?;
+        let policy_str = policy_to_str(policy);
 
         // Snapshots for rollback.
         let shelves_snapshot;
@@ -321,8 +346,6 @@ impl ServerState {
             &created_at,
             &auth_context.common_name,
         )?;
-
-        checkpoint_journal(&self.journal);
 
         Ok(ImportBundleResult {
             imported_entries,
