@@ -193,6 +193,8 @@
   // ---- entry writes -----------------------------------------------------------
   async function written(action: EntryChange['action'], receipt: EntryReceipt) {
     if (action === 'create') created = new Set([...created, receipt.entry_id]);
+    // A restored entry is active again: show the active list it now belongs to.
+    if (action === 'restore') archivedEntries = false;
     const failure = await refreshed(() => entries.reload());
     if (action === 'archive') {
       entry = null;

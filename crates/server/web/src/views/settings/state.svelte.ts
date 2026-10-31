@@ -25,7 +25,14 @@ export interface Uncertain { attempt: Attempt; error: string; observation: strin
 
 const message = (error: unknown): string => (error as Error).message;
 /** Model attempts are plain frozen objects; `app.pending` holds them by identity. */
-export const describePolicy = (seconds: number | null): string => seconds === null ? 'Manual retention' : `${seconds} seconds`;
+/** A retention window in the largest whole unit: "30 days", "12 hours", "90 seconds". */
+export function duration(seconds: number): string {
+  const units: [string, number][] = [['day', 86400], ['hour', 3600], ['minute', 60]];
+  const [unit, size] = units.find(([, size]) => seconds % size === 0) ?? ['second', 1];
+  const count = seconds / size;
+  return `${count.toLocaleString()} ${unit}${count === 1 ? '' : 's'}`;
+}
+export const describePolicy = (seconds: number | null): string => seconds === null ? 'Manual retention' : duration(seconds);
 
 export class SettingsState {
   policy = $state.raw<Policy | null>(null);

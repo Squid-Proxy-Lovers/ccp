@@ -18,6 +18,13 @@ export interface CreatedWorkspace { workspace_id: string; owner_key: string }
 
 const NO_OPERATION_ID = ['lifecycle', 'security', 'transfer', 'admission', 'enrollment', 'client_access'];
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** A readable name for a form-draft key such as `context.book.<uuid>.<uuid>`: "Context book draft". */
+function draftLabel(key: string): string {
+  const words = key.split(/[.:/]/).filter(part => part && !UUID.test(part)).join(' ').replace(/[-_]+/g, ' ');
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)} draft`;
+}
+
 class App {
   session = $state.raw<Session | null>(null);
   workspace = $state.raw<Workspace | null>(null);
@@ -63,12 +70,14 @@ class App {
   get hasFormDrafts(): boolean {
     return Object.values(this.drafts).some(fields => Object.values(fields).some(value => value.trim() !== ''));
   }
+  /** Unsaved local work as plain text: the pending or edited body, then each form draft by name. */
   recoveryText(): string {
     const parts: string[] = [];
     if (this.pending) parts.push(this.pending.body);
     else if (this.draft) parts.push(this.draft);
     for (const [key, fields] of Object.entries(this.drafts)) {
-      if (Object.values(fields).some(value => value.trim())) parts.push(`${key}: ${JSON.stringify(fields, null, 2)}`);
+      const filled = Object.entries(fields).filter(([, value]) => value.trim());
+      if (filled.length) parts.push([draftLabel(key), ...filled.map(([name, value]) => `${name}: ${value}`)].join('\n'));
     }
     return parts.join('\n\n');
   }
@@ -264,7 +273,7 @@ class App {
   async boot(): Promise<void> {
     this.#fragmentKey = takeFragment(location, history);
     window.addEventListener('beforeunload', event => {
-      if (this.dirty || this.pending || this.deletion || this.hasFormDrafts) { event.preventDefault(); event.returnValue = ''; }
+      if (this.dirty || this.pending || this.deletion || this.hasFormDrafts || this.createdWorkspace) { event.preventDefault(); event.returnValue = ''; }
     });
     window.addEventListener('focus', () => {
       if (this.session && !this.locked && !this.busy) void this.run(() => this.verify(), 'verify');

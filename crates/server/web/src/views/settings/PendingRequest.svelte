@@ -26,12 +26,14 @@
     ? transfer ? 'Original ownership transfer' : 'Original settings request'
     : transfer ? 'Local transfer copy' : 'Forgotten settings request');
 
-  // Keep keyboard users in the box when its controls change underneath them.
+  // Move keyboard users into the box when it appears, and keep them there when
+  // its controls change underneath them.
   let heading: HTMLHeadingElement | null = $state(null);
   $effect(() => {
     void uncertain.stage;
     void tick().then(() => {
-      if (!document.activeElement || document.activeElement === document.body) heading?.focus();
+      const box = heading?.closest('[data-pending-request]');
+      if (!box?.contains(document.activeElement)) heading?.focus();
     });
   });
 
@@ -40,7 +42,7 @@
   }
 </script>
 
-<Card class="border-warning/40 bg-warning/[0.04]">
+<Card class="border-warning/40 bg-warning/[0.04]" data-pending-request>
   <CardContent class="space-y-4">
     <div class="space-y-1.5" role="status">
       <h2 bind:this={heading} tabindex="-1" class="text-[15px] font-semibold tracking-tight outline-none">{title}</h2>
