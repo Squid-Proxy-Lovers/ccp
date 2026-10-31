@@ -29,6 +29,38 @@ Two integration load tests are excluded from normal CI. Run them explicitly:
 cargo test -p ccp-tests --locked -- --ignored --test-threads=1
 ```
 
+## Frontend build dependency security
+
+`node --test tests/frontend_dependency.mjs` checks the merge package actually
+resolved by the Svelte plugin, including CJS and UMD artifacts. It covers poisoned
+source/target shapes, nested placeholders, array cloning, adjacent keys and normal
+configuration semantics. `make quality-tests` and the frontend audit job run it;
+these runtime assertions complement the complete `npm audit` policy.
+
+## First-boot onboarding
+
+`cargo test -p server --test first_boot --locked` exercises actual HTTPS setup,
+current code authorization, concurrent claims, error handling and restart safety.
+`node --test tests/onboarding_panel.mjs` checks fragment handling, request privacy
+and uncertain claim responses. The normal quality suite includes these Node cases.
+
+`cargo test -p client --test workspace tests::links --locked` exercises link
+enrollment, actual TLS secret-send boundaries, profile reuse and durable recovery.
+`python3 tests/client_link_prompt.py --client target/release/client` verifies hidden
+paste with a real isolated Unix terminal; CI runs it after building the binaries.
+
+After building an image, run:
+
+```bash
+docker build -t ccp-onboarding-test .
+python3 tests/docker_first_boot.py --image ccp-onboarding-test
+```
+
+This uses the image's default command and named volume, completes setup over
+CA-pinned HTTPS, refuses a repeated claim and verifies the saved owner key after
+restarting on the same volume. Host ports are ephemeral so an existing server
+can stay running. Only the test's unique container and volume are removed.
+
 ## CLI integration
 
 ```bash

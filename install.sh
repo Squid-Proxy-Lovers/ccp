@@ -285,6 +285,17 @@ build_from_source() {
         exit 1
     fi
 
+    if [ "$MODE" != "client" ]; then
+        if ! command -v npm &>/dev/null || ! command -v node &>/dev/null; then
+            err "Server source builds require Node.js 24 or newer and npm."
+            exit 1
+        fi
+        if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+            err "Server source builds require Node.js 24 or newer."
+            exit 1
+        fi
+    fi
+
     local build_dir="$REPO_ROOT"
 
     if [ -z "$build_dir" ] || [ ! -f "$build_dir/Cargo.toml" ]; then
@@ -296,8 +307,17 @@ build_from_source() {
         fi
     fi
 
+    local packages=(-p client)
+    if [ "$MODE" != "client" ]; then
+        step "Installing locked frontend build dependencies..."
+        if ! npm ci --prefix "$build_dir/crates/server/web" --ignore-scripts; then
+            err "Frontend dependency installation failed. No binaries installed."
+            exit 1
+        fi
+        packages+=(-p server)
+    fi
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release --locked); then
+    if ! (cd "$build_dir" && cargo build --release --locked "${packages[@]}"); then
         err "Build failed."
         exit 1
     fi
@@ -310,6 +330,24 @@ build_from_source() {
 
     if [ "$build_dir" != "$REPO_ROOT" ]; then
         rm -rf "$build_dir" || return 1
+    fi
+}
+
+install_ccp_alias() {
+    local alias_path="$INSTALL_DIR/ccp"
+    if [ -e "$alias_path" ] || [ -L "$alias_path" ]; then
+        if [ -L "$alias_path" ] && [ "$(readlink "$alias_path")" = "ccp-client" ]; then
+            return
+        fi
+        warn "An existing ccp path was retained. Use ccp-client for CCP."
+        return
+    fi
+    if command -v ccp &>/dev/null; then
+        warn "An existing ccp command was retained. Use ccp-client for CCP."
+        return
+    fi
+    if ! ln -s ccp-client "$alias_path"; then
+        warn "The ccp alias could not be created. Use ccp-client for CCP."
     fi
 }
 
@@ -601,6 +639,9 @@ else
     ok "Installed ${BOLD}ccp-server${RESET}${GREEN} -> $INSTALL_DIR/ccp-server${RESET}"
     ok "Installed ${BOLD}ccp-client${RESET}${GREEN} -> $INSTALL_DIR/ccp-client${RESET}"
 fi
+
+# The alias always executes the same installed client and follows its updates.
+install_ccp_alias
 
 # ── MCP bridge ───────────────────────────────────────────────────────────────
 

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use protocol::{AppendMetadata, ConflictPolicy, TransferScope, TransferSelector};
 
 use crate::enrollment::enroll;
@@ -92,10 +92,15 @@ enum NativeCommand {
 
 #[derive(Args)]
 struct EnrollArgs {
-    #[arg(long, value_name = "url")]
-    redeem_url: String,
-    #[arg(long, value_name = "token")]
-    token: String,
+    /// Enrollment link, '-' for stdin, or omit for a hidden paste prompt.
+    #[arg(value_name="LINK",conflicts_with_all=["redeem_url","token"])]
+    link: Option<String>,
+    #[arg(long,conflicts_with_all=["redeem_url","token"])]
+    profile: Option<PathBuf>,
+    #[arg(long, value_name = "url", requires = "token")]
+    redeem_url: Option<String>,
+    #[arg(long, value_name = "token", requires = "redeem_url")]
+    token: Option<String>,
 }
 
 #[derive(Args)]
@@ -274,9 +279,14 @@ async fn run_native(command: NativeCommand) -> anyhow::Result<()> {
     match command {
         // authentication command, send redeem url and token to the server
         // save the enrollment to the filesystem (~/.ccp/enrollments/<session-name>/<session-id>/enrollment.json)
-        NativeCommand::Enroll(args) => {
-            enroll(&args.redeem_url, &args.token).await?;
-        }
+        NativeCommand::Enroll(args) => match (args.redeem_url, args.token) {
+            (Some(url), Some(token)) => enroll(&url, &token).await?,
+            (None, None) => {
+                crate::workspace::links::cli::run(args.link.as_deref(), args.profile.as_deref())
+                    .await?
+            }
+            _ => bail!("native enrollment requires both --redeem-url and --token"),
+        },
 
         // list all sessions and their details
         NativeCommand::Sessions => list_sessions()?,
@@ -666,14 +676,33 @@ fn print_json(body: &str) -> anyhow::Result<()> {
 }
 
 fn parse_cli() -> Cli {
-    match Cli::try_parse() {
+    let args: Vec<_> = std::env::args_os().collect();
+    let workspace = args.get(1).is_some_and(|arg| arg == "workspace");
+    let input_formats = if workspace { "" } else { CLIENT_INPUT_FORMATS };
+    let native = args.get(1).is_some_and(|arg| arg == "enroll")
+        && args.iter().skip(2).any(|arg| {
+            let arg = arg.to_string_lossy();
+            arg == "--redeem-url"
+                || arg == "--token"
+                || arg.starts_with("--redeem-url=")
+                || arg.starts_with("--token=")
+        });
+    let mut command = Cli::command();
+    // Preserve legacy native error/usage output while keeping one parser and
+    // implementation. Link-mode options remain documented on enroll --help.
+    if native && let Some(enroll) = command.find_subcommand_mut("enroll") {
+        *enroll = enroll
+            .clone()
+            .mut_arg("link", |arg| arg.hide(true))
+            .mut_arg("profile", |arg| arg.hide(true));
+    }
+    let matches = match command.try_get_matches_from(args) {
+        Ok(matches) => matches,
+        Err(error) => print_error(error, input_formats),
+    };
+    match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
-        Err(error) => {
-            let workspace = std::env::args_os()
-                .nth(1)
-                .is_some_and(|value| value == "workspace");
-            print_error(error, if workspace { "" } else { CLIENT_INPUT_FORMATS })
-        }
+        Err(error) => print_error(error, input_formats),
     }
 }
 
@@ -684,7 +713,18 @@ fn print_error(error: clap::Error, input_formats: &str) -> ! {
         clippy::let_underscore_must_use,
         reason = "printing help is best effort when the terminal has closed"
     )]
-    let _ = error.print();
+    let _ = if use_stderr
+        && std::env::args_os().skip(1).any(|arg| {
+            let value = arg.to_string_lossy();
+            value.contains("ccp_join_") || value.contains("://") && value.contains('#')
+        }) {
+        writeln!(
+            io::stderr(),
+            "Invalid enrollment command arguments. Use ccp-client enroll --help; secret links are not echoed."
+        )
+    } else {
+        error.print()
+    };
     if input_formats.is_empty() {
         std::process::exit(exit_code);
     }

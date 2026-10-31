@@ -46,7 +46,10 @@ bash install.sh --docker --channel nightly --version "$NIGHTLY_TAG"
 
 Replace the example tag with an actual release tag. `--version` requires
 `--channel nightly`. Source builds use `--from-source` separately and build the
-selected local checkout, or main when cloning outside a checkout.
+selected local checkout, or main when cloning outside a checkout. Server source
+builds require Rust, Git, Make and Node.js 24 or newer with npm; the installer runs
+locked frontend dependency installation first. Client-only source builds do not
+need Node.js.
 
 ## Download and container tags
 

@@ -14,6 +14,7 @@ const SERVER_INPUT_FORMATS: &str = r#"Input formats:
   server <session-name>
   server issue-token <session> <read|read_write|admin> [--ttl <seconds>]
   server health <session>
+  server up --data-dir <DIR> [--name <DNS_OR_IP>] [--https-listen <ADDR>] [--mtls-listen <ADDR>]
   server workspace-serve --data-dir <DIR> [--activate-workspace] [--https-listen <ADDR>] [--mtls-listen <ADDR>]
   server workspace-init --data-dir <DIR> --operator <NAME> --workspace <NAME>
   server workspace-tls-init --data-dir <DIR> --name <DNS_OR_IP> [--name <DNS_OR_IP>...]
@@ -36,6 +37,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Start a local workspace instance, with setup on its first boot.
+    Up(UpArgs),
     IssueToken(IssueTokenArgs),
     Health(HealthArgs),
     WorkspaceInit(WorkspaceInitArgs),
@@ -93,6 +96,18 @@ struct LegacyConvertArgs {
         help = "Confirm that the producing server and tools are stopped; retain the complete source and matching binary"
     )]
     confirm_offline: bool,
+}
+
+#[derive(Args)]
+struct UpArgs {
+    #[command(flatten)]
+    data: LocalDataArgs,
+    #[arg(long = "name", value_name = "DNS_OR_IP")]
+    names: Vec<String>,
+    #[arg(long, default_value = "127.0.0.1:8443")]
+    https_listen: SocketAddr,
+    #[arg(long, default_value = "127.0.0.1:8444")]
+    mtls_listen: SocketAddr,
 }
 
 #[derive(Args)]
@@ -197,6 +212,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn execute_command(command: Command) -> anyhow::Result<()> {
     match command {
+        Command::Up(args) => serve_up(args).await,
         Command::WorkspaceServe(args) => serve_workspace(args).await,
         Command::IssueToken(args) => print_json(&server::init::issue_enrollment_token(
             &args.session,
@@ -255,6 +271,49 @@ async fn execute_command(command: Command) -> anyhow::Result<()> {
             args.ttl_seconds,
         )?),
     }
+}
+
+async fn serve_up(args: UpArgs) -> anyhow::Result<()> {
+    let (server, code) =
+        server::workspace_http::WorkspaceServer::up(server::workspace_http::UpConfig {
+            data_dir: args.data.data_dir,
+            names: args.names,
+            https_listen: args.https_listen,
+            mtls_listen: args.mtls_listen,
+        })
+        .await?;
+    let origin = server.panel_origin()?;
+    match code {
+        Some(code) => println!("Open: {origin}/admin/setup#code={code}"),
+        None => println!("Open: {origin}/admin"),
+    }
+    for (label, value) in [
+        ("CA SHA-256", server.ca_fingerprint()),
+        (
+            "Server leaf SHA-256",
+            server.trust_info().server_sha256.as_str(),
+        ),
+    ] {
+        let fingerprint = value
+            .as_bytes()
+            .chunks(2)
+            .map(std::str::from_utf8)
+            .collect::<Result<Vec<_>, _>>()?
+            .join(":");
+        println!("{label}: {fingerprint}");
+    }
+    println!(
+        "Local CA trust is not installed automatically. Compare the server certificate fingerprint in your browser before setup."
+    );
+    io::stdout().flush()?;
+    server
+        .run_until(async {
+            tokio::signal::ctrl_c()
+                .await
+                .context("cannot listen for shutdown")
+        })
+        .await?;
+    Ok(())
 }
 
 async fn serve_workspace(args: WorkspaceServeArgs) -> anyhow::Result<()> {
@@ -350,4 +409,31 @@ fn exit_with_cli_error(error: clap::Error, input_formats: &str) -> ! {
         let _ = writeln!(stdout, "\n{input_formats}");
     }
     std::process::exit(exit_code);
+}
+
+#[cfg(test)]
+mod up_cli_tests {
+    use super::*;
+    #[test]
+    fn explicit_terminator_keeps_native_session_named_up_accessible() {
+        let cli = Cli::try_parse_from(["server", "--", "up"]).unwrap();
+        assert!(cli.command.is_none());
+        assert_eq!(cli.session_name.as_deref(), Some("up"));
+    }
+    #[test]
+    fn up_defaults_are_local_and_existing_workspace_serve_remains_separate() {
+        let cli = Cli::try_parse_from(["server", "up", "--data-dir", "test-data"]).unwrap();
+        let Some(Command::Up(args)) = cli.command else {
+            panic!("expected up")
+        };
+        assert_eq!(args.https_listen, "127.0.0.1:8443".parse().unwrap());
+        assert_eq!(args.mtls_listen, "127.0.0.1:8444".parse().unwrap());
+        assert!(args.names.is_empty());
+        assert!(matches!(
+            Cli::try_parse_from(["server", "workspace-serve", "--data-dir", "test-data"])
+                .unwrap()
+                .command,
+            Some(Command::WorkspaceServe(_))
+        ));
+    }
 }

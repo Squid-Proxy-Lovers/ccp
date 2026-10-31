@@ -32,6 +32,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -44,6 +54,8 @@ jobs:
         run: make installer-tests
       - name: Nightly packaging and publication regressions
         run: make nightly-tests
+      - name: Hidden enrollment paste on a real isolated terminal
+        run: python3 tests/client_link_prompt.py --client target/release/client
       - name: CLI integration
         run: bash tests/run.sh --skip-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -60,6 +72,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -85,6 +107,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           toolchain: "1.88.0"
@@ -102,6 +134,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install locked frontend test dependencies
+        run: npm ci --prefix crates/server/web --ignore-scripts
       - run: make tools
       - run: python -m pip install -e ./mcp
       - run: make lint-python lint-types lint-deadcode lint-deps lint-shell lint-workflows lint-secrets
@@ -116,6 +154,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -144,6 +192,22 @@ jobs:
       - run: python -m pip install -e ./mcp
       - run: make security
 
+  frontend-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Audit the complete locked frontend build dependency graph
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          node --test tests/frontend_dependency.mjs
+          npm --prefix crates/server/web audit
+
   compat:
     needs: [test]
     runs-on: ubuntu-latest
@@ -152,6 +216,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -186,7 +260,11 @@ jobs:
           PY
       - name: Build previous dependency set
         if: steps.versions.outputs.same_api == 'true'
-        run: cargo build --release --locked --manifest-path "$RUNNER_TEMP/ccp-baseline/Cargo.toml" --target-dir "$RUNNER_TEMP/ccp-baseline-target" -p server -p client
+        run: |
+          if [ -f "$RUNNER_TEMP/ccp-baseline/crates/server/build.rs" ] && [ -f "$RUNNER_TEMP/ccp-baseline/crates/server/web/package.json" ]; then
+            npm ci --prefix "$RUNNER_TEMP/ccp-baseline/crates/server/web" --ignore-scripts
+          fi
+          env -u CCP_PANEL_DIST cargo build --release --locked --manifest-path "$RUNNER_TEMP/ccp-baseline/Cargo.toml" --target-dir "$RUNNER_TEMP/ccp-baseline-target" -p server -p client
       - name: Old/new clients and upgrade/downgrade persistence
         if: steps.versions.outputs.same_api == 'true'
         run: python3 tests/dependency_compat.py --server "$RUNNER_TEMP/ccp-current/server" --client "$RUNNER_TEMP/ccp-current/client" --old-server "$RUNNER_TEMP/ccp-baseline-target/release/server" --old-client "$RUNNER_TEMP/ccp-baseline-target/release/client"
@@ -228,7 +306,7 @@ jobs:
           python tests/workspace_mcp_smoke.py
 
   build:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp]
     strategy:
       matrix:
         include:
@@ -249,6 +327,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           target: ${{ matrix.target }}
@@ -369,7 +457,7 @@ jobs:
           generate_release_notes: true
 
   docker:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -394,6 +482,8 @@ jobs:
             sleep 0.25
           done
           exit 1
+      - name: Default first-boot setup and persistent restart
+        run: python3 tests/docker_first_boot.py --image "ccp-ci:$GITHUB_SHA"
       - name: Save tested image for publication
         run: docker save "ccp-ci:$GITHUB_SHA" | gzip > "$RUNNER_TEMP/ccp-image.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

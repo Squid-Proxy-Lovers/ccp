@@ -7,6 +7,7 @@ import {
   wire, invitationPage, invitationStatus, recoveryPage, recoveryStatus, enrollmentStatus,
   AdmissionAttempt, EnrollmentAttempt, ClientAccessAttempt, SecurityAttempt,
 } from '../../lib/model.js';
+import {LinkAttempt} from '../../lib/link_issuance.js';
 import {app} from '../../lib/app.svelte';
 import {notice} from '../../lib/notify.svelte';
 import type {Session, Workspace} from '../../lib/types';
@@ -59,7 +60,7 @@ export interface Wording {
 export type Outcome =
   | {phase: 'pending'; wording: Wording; attempt: Attempt; error: string; observe: () => Promise<Observation>; observation?: Observation}
   | {phase: 'local'; wording: Wording; attempt: Attempt}
-  | {phase: 'done'; title: string; message: string; secret?: {title: string; value: string}; note?: string; reread: string}
+  | {phase: 'done'; title: string; message: string; secret?: {title: string; value: string}; link?: string; note?: string; reread: string}
   | {phase: 'discarded'; title: string; body: string; reread: string};
 export type Report = (outcome: Outcome) => void;
 
@@ -186,6 +187,34 @@ export async function changeAdmission(report: Report, workspace: Workspace, acti
     secret: action === 'individual' ? {title: 'Client invitation · ' + result.invitation_id, value: result.secret} : undefined});
   notice(confirmed + (action === 'individual' ? ' Copy the secret privately before leaving.' : ' Existing client grants and content are preserved.'), 'success');
 }
+
+/** Deliberate issuance only: retain an uncertain request without retrying it. */
+export async function changeLink(report: Report, attempt: LinkAttempt, ask: () => Promise<boolean> = async () => true): Promise<boolean> {
+  if (!await ask()) return false;
+  const words = attempt.kind === 'enrollment' ? wording.enrollment : wording.admission;
+  const sent = await send(attempt as Attempt, result => { attempt.receipt(result); return true; }, 'The enrollment link response could not be verified.');
+  if ('error' in sent) {
+    unconfirmed(report, words, attempt as Attempt, sent.error, async () => ({
+      note: attempt.kind === 'enrollment'
+        ? 'Current initial-window observation only; no causal attribution or cancellation. The private link cannot be retrieved.'
+        : 'First page only; no causal attribution. The private link cannot be retrieved. Inspect current state before another issuance.',
+      text: text(attempt.kind === 'enrollment' ? await readEnrollment(attempt.workspace_id)
+        : invitationPage(await app.request(INVITATIONS + 'list', {workspace_id: attempt.workspace_id, limit: 16}))),
+    }));
+    return true;
+  }
+  const {result} = sent;
+  const message = `Enrollment link creation confirmed: ${result.invitation_id} in workspace ${attempt.workspace_id}.`;
+  if (!await stillSignedIn(message + ' Its private link is unavailable because this session could not be checked. Sign in with an authorized workspace key to inspect or revoke this invitation before deliberately issuing another. An initial group cannot be reopened.')) return true;
+  report({phase: 'done', title: 'Enrollment link created', message, link: result.enrollment_link,
+    note: result.expires_at === null ? 'No expiry. Revoke unused admissions when this link is no longer needed.' : `Expires: ${new Date(result.expires_at * 1000).toLocaleString()}.`, reread: READ_ACCESS});
+  notice('Enrollment link created. Copy it privately before leaving.', 'success');
+  return true;
+}
+
+export const linkFields = (form: FormDraft) => ({mode: form.get('mode') || 'short', date: form.get('date'),
+  noExpiry: form.get('noExpiry') === 'yes', longLived: form.get('longLived') === 'yes', capacity: form.get('capacity'),
+  https: form.get('https'), mtls: form.get('mtls')});
 
 // ---- initial group enrollment ---------------------------------------------------
 

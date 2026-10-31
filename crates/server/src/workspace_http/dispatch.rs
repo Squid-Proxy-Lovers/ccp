@@ -20,6 +20,26 @@ use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 pub(super) fn dispatch(context: &Context, input: Input) -> Result<Reply, Error> {
+    if super::setup::handles(&input.path) {
+        return super::setup::dispatch(context, input);
+    }
+    if input.path == "/api/v1/ca.pem" && matches!(context.surface, Surface::Https) {
+        if input.method != Method::GET || input.query.is_some() {
+            return Err(Error::BadRequest);
+        }
+        let mut reply = hyper::Response::new(http_body_util::Full::new(hyper::body::Bytes::from(
+            context.state.identity.trust().ca_certificate_pem.clone(),
+        )));
+        reply.headers_mut().insert(
+            "content-type",
+            hyper::header::HeaderValue::from_static("application/x-pem-file"),
+        );
+        reply.headers_mut().insert(
+            "cache-control",
+            hyper::header::HeaderValue::from_static("no-store"),
+        );
+        return Ok(reply);
+    }
     if matches!(context.surface, Surface::Bootstrap)
         && !super::tunnel::bootstrap_allows(&input.method, &input.path)
     {
@@ -89,6 +109,7 @@ fn https(
     }
     if input.path != "/api/v1/admin/workspaces"
         && !invitations::handles(&input.path)
+        && !super::invitation_link::handles(&input.path)
         && !management::handles(&input.path)
         && !team::handles(&input.path)
         && !content::handles(&input.path)
@@ -100,6 +121,9 @@ fn https(
         return Err(Error::NotFound);
     }
     let actor = browser::authenticate(state, store, &input, now)?;
+    if super::invitation_link::handles(&input.path) {
+        return super::invitation_link::dispatch(state, store, actor, &input, now);
+    }
     if work_status::admin_handles(&input.path) {
         return work_status::dispatch(store, actor, &input, now);
     }

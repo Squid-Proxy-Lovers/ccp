@@ -8,6 +8,7 @@ pub mod content;
 mod crypto;
 pub mod guidance;
 mod lifecycle;
+pub mod links;
 mod network;
 mod preflight;
 mod read;

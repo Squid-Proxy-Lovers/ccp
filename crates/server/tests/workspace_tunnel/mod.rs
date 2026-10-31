@@ -157,6 +157,7 @@ async fn bootstrap_cannot_reach_admin_even_with_valid_key_or_browser_cookie() {
         "/admin/app.js",
         "/api/v1/admin/session",
         "/api/v1/admin/workspaces",
+        "/api/v1/admin/invitations/link",
         CLIENT_PATH,
     ] {
         let (code, result) = send(

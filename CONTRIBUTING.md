@@ -8,7 +8,7 @@ features before implementing them.
 
 ## Setup
 
-Install Rust through rustup, Python 3.13, Git, and Make. The MCP package also
+Install Rust through rustup, Node.js 24, Python 3.13, Git, and Make. The MCP package also
 supports Python 3.10+; CI tests both the minimum and current supported environments.
 
 ```bash
@@ -18,6 +18,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ./mcp
 make tools
+npm ci --prefix crates/server/web --ignore-scripts
 ```
 
 `make tools` installs exact Python tool versions from `requirements-lint.txt` and
@@ -38,6 +39,13 @@ cargo check --workspace --locked
 make help          # available build, test, and quality commands
 ```
 
+The server build checks frontend dependencies and compiles the locked Svelte
+sources into Cargo's output directory. Install its Node dependencies once before
+Rust server/workspace builds. Docker and CI prebuild the same assets in a Node
+stage and pass `CCP_PANEL_DIST`; that path is a build-time input, not a runtime
+setting. Generated `web/dist` is not committed. Installed server binaries embed
+the panel and do not need Node.js.
+
 Cargo-built binaries are named `server` and `client`; the installer names them
 `ccp-server` and `ccp-client`. See the [test guide](tests/README.md) to select suites.
 
@@ -50,6 +58,7 @@ make nightly-tests
 make mcp-smoke
 make compat
 make security         # needs network
+npm --prefix crates/server/web audit  # includes the build dependency graph
 ```
 
 Run `make hooks` once to check formatting, Python, and secrets before each commit.
@@ -84,7 +93,7 @@ producing release artifacts.
 | Shell | ShellCheck for Git-visible Bash and POSIX scripts, including extensionless scripts |
 | Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
 | Secrets | Gitleaks CLI on working source and Git history, with redacted output |
-| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit |
+| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit; npm audit |
 
 The Rust policy lives in the workspace manifest and `clippy.toml`, and every
 crate inherits it. Tests may unwrap, expect, panic, and index. Python targets
@@ -115,6 +124,18 @@ A change is ready for review when:
 
 Every pull request needs approval from the code owner in `.github/CODEOWNERS`
 and passing required checks before it merges into `main`.
+
+The frontend pins `@oss-cve-patches/deepmerge@4.3.2` for the Svelte Vite plugin's
+`deepmerge` dependency until an official fixed dependency is available. This is
+a temporary npm override, locked by tarball integrity, for
+[GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4).
+The [fork's targeted fix](https://github.com/oss-cve-patches/deepmerge/pull/1)
+rejects `__proto__` in both merge loops. Its MIT license is unchanged and it adds
+no runtime dependencies or install hooks. Review future publisher/version changes
+rather than widening this override. Remove it after validating an official
+Svelte plugin/dependency release. `tests/frontend_dependency.mjs` resolves the
+actual package from the consuming plugin and tests its CJS and UMD artifacts;
+the complete dependency audit remains enforced.
 
 Dependency vulnerabilities fail the audit. Existing maintenance notices and
 duplicate versions receive separate dependency review. The license allowlist records

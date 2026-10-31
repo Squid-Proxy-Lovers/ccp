@@ -237,7 +237,7 @@ fn enrollments_dir() -> anyhow::Result<PathBuf> {
     Ok(client_home_dir()?.join(ENROLLMENTS_DIR_NAME))
 }
 
-fn client_home_dir() -> anyhow::Result<PathBuf> {
+pub(crate) fn client_home_dir() -> anyhow::Result<PathBuf> {
     if let Some(path) = std::env::var_os(CLIENT_HOME_ENV) {
         return Ok(PathBuf::from(path));
     }

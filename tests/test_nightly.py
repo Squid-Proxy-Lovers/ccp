@@ -246,7 +246,7 @@ class ReleaseContractTests(unittest.TestCase):
                 "workspace_api": 1,
                 "client_profile_read_min": 1,
                 "client_profile_write": 5,
-                "server_schema_write": 25,
+                "server_schema_write": 27,
             },
         )
         self.assertEqual(set(value["artifacts"]), set(nightly.ASSETS) | {"build-info.json"})
@@ -491,7 +491,7 @@ elif name == 'curl':
 elif name == 'git':
     sys.exit('Unexpected source clone')
 elif name == 'cargo':
-    assert args == ['build', '--release', '--locked']
+    assert args == ['build', '--release', '--locked', '-p', 'client']
 elif name == 'mktemp':
     import tempfile
     root = pathlib.Path(os.environ['NIGHTLY_TEST_FIXTURES']).parent.resolve()

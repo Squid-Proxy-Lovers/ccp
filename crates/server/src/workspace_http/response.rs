@@ -18,6 +18,9 @@ pub(super) type Reply = Response<Full<Bytes>>;
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Error {
     BadRequest,
+    SetupComplete,
+    SetupExpired,
+    SetupThrottled,
     Unauthorized,
     Forbidden,
     NotFound,
@@ -35,6 +38,9 @@ pub(super) enum Error {
 impl Error {
     pub fn reply(self) -> Reply {
         let (status, code) = match self {
+            Self::SetupComplete => (StatusCode::CONFLICT, "setup_complete"),
+            Self::SetupExpired => (StatusCode::GONE, "setup_expired"),
+            Self::SetupThrottled => (StatusCode::TOO_MANY_REQUESTS, "setup_throttled"),
             Self::BadRequest => (StatusCode::BAD_REQUEST, "invalid_request"),
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "unauthorized"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),

@@ -90,12 +90,42 @@ impl DirectoryLease {
         Self::acquire(directory, LeaseKind::Maintenance)
     }
 
+    /// Promote the uniquely held maintenance lease without a release/reacquire
+    /// gap. Data activation precedes ledger activation, as in acquire(); a crash
+    /// between those commits still makes native callers refuse the directory.
+    pub(crate) fn promote_workspace(self) -> anyhow::Result<Self> {
+        let mut inner =
+            Arc::try_unwrap(self.0).map_err(|_shared| anyhow::anyhow!("setup lease is shared"))?;
+        if inner.kind != LeaseKind::Maintenance {
+            bail!("setup promotion requires maintenance authority");
+        }
+        require_clean_legacy_journal(&inner.directory)?;
+        crate::init::init_sqlite(&inner.directory.join("ccp.sqlite3"))?;
+        persist_data_activation(&inner.directory)?;
+        let connection = inner
+            ._connection
+            .get_mut()
+            .map_err(|_poisoned| anyhow::anyhow!("setup lease is poisoned"))?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if transaction.execute("UPDATE directory_mode SET mode='workspace', revision=revision+1 WHERE singleton=1 AND revision < 9223372036854775807",[])? != 1 {
+            bail!("invalid or exhausted directory-mode revision");
+        }
+        transaction.commit()?;
+        inner.mode = DirectoryMode::Workspace;
+        inner.kind = LeaseKind::Workspace;
+        Ok(Self(Arc::new(inner)))
+    }
+
     pub fn directory(&self) -> &Path {
         &self.0.directory
     }
 
     pub fn mode(&self) -> DirectoryMode {
         self.0.mode
+    }
+
+    pub(crate) fn allows_maintenance(&self) -> bool {
+        self.0.kind == LeaseKind::Maintenance
     }
 
     pub(crate) fn allows_native(&self) -> bool {
