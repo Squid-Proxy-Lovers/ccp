@@ -15,7 +15,7 @@ supports [content reads](workspace-content-client.md) and
 [entry mutations](workspace-content-mutations.md). The [workspace MCP bridge](workspace-mcp.md)
 exposes content reads, shelf/book creation and guarded entry mutations. The
 [browser-session API](workspace-browser-session.md) now supports scoped cookie
-authentication; the actual login page and human panel remain subsequent work. A
+authentication and the bundled desktop admin panel. A
 [client operation resolution fence](workspace-operation-resolution.md) supports
 body-free outcome recovery without replaying a write under new credentials. Keep this
 draft implementation separate from a production rollout.
@@ -96,9 +96,12 @@ Access policy for administration. Only the first HTTP request on a connection ca
 upgrade. Queries, request bodies, duplicate handshake headers, Origin-bearing
 requests and extension offers are refused. The fixed subprotocol must match
 exactly. Frames are binary and uncompressed; frame/message size is capped at
-64KiB, while larger inner HTTP bodies stream across multiple frames. Empty and
-control frames share a 128-per-second limit. Data reads continue while outgoing
-writes are backpressured.
+64KiB, while larger inner HTTP bodies stream across multiple frames. Delivered
+Ping/Pong events and completed empty binary messages share a 128-per-second
+limit. Empty non-final fragments are consumed inside the WebSocket parser and
+are not counted by this message-level budget. The payload cap and connection
+deadline remain enforced. Data reads continue while outgoing writes are
+backpressured.
 
 Each tunnel retains one of the existing 64 connection slots. A single 120-second
 absolute deadline starts at admission and covers outer TLS, upgrade, inner TLS
@@ -445,8 +448,9 @@ blocks receipt retrieval but does not revoke an already issued certificate or
 grant. Closing initial enrollment likewise preserves existing memberships.
 Physical-host admin-key reset remains a local command, without an HTTP route.
 The [workspace client](workspace-client.md#recover-into-a-separate-profile)
-supports recovery into a separate profile. Workspace MCP and browser recovery
-workflows remain subsequent work.
+supports recovery into a separate profile. Workspace MCP recovery is available
+through the MCP bridge. Browser recovery workflows are available in the bundled
+desktop admin panel.
 
 ## Try a protected request
 

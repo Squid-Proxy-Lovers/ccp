@@ -42,10 +42,12 @@ pub(super) fn dispatch(
     match input.path.as_str() {
         "/api/v1/admin/workspaces/create" => {
             let body: api::CreateWorkspace = decode(&input.body)?;
+            let name =
+                crate::foundation::validate_name(&body.name).map_err(|_name| Error::BadRequest)?;
             let request = provisioning(body.owner, body.key_expires_at)?;
             provisioned(
                 store
-                    .create_workspace_with_owner_key(actor, &body.name, &request, now)
+                    .create_workspace_with_owner_key(actor, name, &request, now)
                     .map_err(operation)?,
             )
         }
@@ -117,7 +119,11 @@ fn provisioning(
 pub(super) fn principal(owner: api::InitialOwner) -> Result<InitialOwner, Error> {
     Ok(match owner {
         api::InitialOwner::Existing { principal_id } => InitialOwner::Existing(id(&principal_id)?),
-        api::InitialOwner::NewPrincipal { name } => InitialOwner::NewPrincipal(name),
+        api::InitialOwner::NewPrincipal { name } => InitialOwner::NewPrincipal(
+            crate::foundation::validate_name(&name)
+                .map_err(|_name| Error::BadRequest)?
+                .to_owned(),
+        ),
     })
 }
 

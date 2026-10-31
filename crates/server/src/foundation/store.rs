@@ -36,7 +36,8 @@ use super::{
 
 /// A transaction boundary for the new persistent access records. This is an
 /// internal server API, not proof that a supplied actor/credential was presented
-/// by a remote peer. Transport authentication is integrated in phase 2.
+/// by a remote peer. Workspace transport adapters authenticate the peer before
+/// constructing its actor.
 pub struct AccessStore<'a> {
     connection: &'a mut Connection,
 }
@@ -74,7 +75,7 @@ impl<'a> AccessStore<'a> {
         Ok(result)
     }
 
-    /// Initial local-operator provisioning only. A future CLI must enforce OS /
+    /// Initial local-operator provisioning only. Callers must enforce OS and
     /// data-directory access; this method must never be a first-web-visitor API.
     /// Existing global-admin records, even disabled ones, prevent re-bootstrap.
     pub fn bootstrap_admin(&mut self, name: &str, now: i64) -> anyhow::Result<Uuid> {

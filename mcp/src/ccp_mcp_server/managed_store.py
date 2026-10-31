@@ -245,7 +245,6 @@ class Store:
         with fs.locked(self.root):
             self._initialize()
             current = self.pointer()
-            contract.require(current.previous is not None, "No previous managed generation")
             if current.previous is None:
                 raise ValueError("No previous managed generation")
             self.generation(current.previous)
@@ -270,11 +269,8 @@ class Store:
         contract.require(mode in {"client", "mcp"}, "Unknown managed launch mode")
         with fs.locked(self.root, shared=True):
             pointer = self.pointer()
-            contract.require(
-                pointer.current is not None, "Activate a verified managed bundle first"
-            )
             if pointer.current is None:
-                raise ValueError("No active generation")
+                raise ValueError("Activate a verified managed bundle first")
             generation = self.generation(pointer.current)
             client = generation.path / "client"
             environment = os.environ.copy()

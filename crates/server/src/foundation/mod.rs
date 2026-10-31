@@ -6,8 +6,9 @@
 //!
 //! These APIs are not external authentication endpoints. Callers must construct
 //! actors from verified transport credentials, never a request's claimed ID.
-//! Phase 1 leaves the existing native transport unchanged; new transport and
-//! entry ownership enforcement are introduced by subsequent phases.
+//! Workspace HTTPS/mTLS adapters authenticate callers before constructing actors.
+//! Stores recheck workspace permissions and entry ownership for each operation.
+//! The existing native transport remains a separate compatibility path.
 
 mod access;
 mod admin;
@@ -166,7 +167,7 @@ fn parse_id(id: String) -> anyhow::Result<Uuid> {
     Uuid::parse_str(&id).context("invalid persisted foundation identity")
 }
 
-fn validate_name(name: &str) -> anyhow::Result<&str> {
+pub(crate) fn validate_name(name: &str) -> anyhow::Result<&str> {
     let name = name.trim();
     if name.is_empty() || name.len() > 256 || name.chars().any(char::is_control) {
         bail!("name must contain 1..256 bytes without control characters");

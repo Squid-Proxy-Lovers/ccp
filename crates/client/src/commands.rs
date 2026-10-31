@@ -668,7 +668,12 @@ fn print_json(body: &str) -> anyhow::Result<()> {
 fn parse_cli() -> Cli {
     match Cli::try_parse() {
         Ok(cli) => cli,
-        Err(error) => print_error(error, CLIENT_INPUT_FORMATS),
+        Err(error) => {
+            let workspace = std::env::args_os()
+                .nth(1)
+                .is_some_and(|value| value == "workspace");
+            print_error(error, if workspace { "" } else { CLIENT_INPUT_FORMATS })
+        }
     }
 }
 
@@ -680,6 +685,9 @@ fn print_error(error: clap::Error, input_formats: &str) -> ! {
         reason = "printing help is best effort when the terminal has closed"
     )]
     let _ = error.print();
+    if input_formats.is_empty() {
+        std::process::exit(exit_code);
+    }
     if use_stderr {
         let mut stderr = io::stderr();
         #[expect(
