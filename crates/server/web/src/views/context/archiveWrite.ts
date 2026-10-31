@@ -9,7 +9,7 @@ export interface AdminIntent extends HeldIntent {
   action: 'shelf' | 'purge'; workspace_id: string; book_id: string | null; target_id: string; path: string;
   receipt(value: unknown): unknown;
 }
-export type ArchiveOutcome = {state: 'confirmed'; text: string} | {state: 'unconfirmed'; error: string};
+export type ArchiveOutcome = {state: 'confirmed'; text: string; receipt: string} | {state: 'unconfirmed'; error: string};
 
 /** Sends (or exactly re-sends) the operation. `null` means the session locked. */
 export async function sendArchive(intent: AdminIntent): Promise<ArchiveOutcome | null> {
@@ -28,11 +28,12 @@ export async function sendArchive(intent: AdminIntent): Promise<ArchiveOutcome |
   }
   app.pending = null;
   app.clean();
-  const text = `${intent.action === 'purge' ? 'Entry purge' : 'Shelf transition'} confirmed. Historical receipt: ${JSON.stringify(receipt)}.`;
+  const text = `${intent.action === 'purge' ? 'Entry purge' : 'Shelf transition'} confirmed.`;
+  const historical = JSON.stringify(receipt, null, 2);
   try { await app.verify(); } catch {
-    app.lock(`${text} Sign in again to inspect current metadata; do not create a replacement operation.`);
+    app.lock(`${text} Historical receipt: ${JSON.stringify(receipt)}. Sign in again to inspect current metadata; do not create a replacement operation.`);
     return null;
   }
   notice(text, 'success');
-  return {state: 'confirmed', text};
+  return {state: 'confirmed', text, receipt: historical};
 }

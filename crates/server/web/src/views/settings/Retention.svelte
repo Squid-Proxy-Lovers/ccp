@@ -2,6 +2,7 @@
   // Archived entry retention. Timed cleanup is enabled only from manual
   // retention with an explicit duration and confirmation; a timed policy must be
   // disabled before another duration is chosen. Changes carry the base revision.
+  import {tick} from 'svelte';
   import {Copy, RotateCcw, Timer, TimerOff} from '@lucide/svelte';
   import Alert from '../../lib/ui/Alert.svelte';
   import Badge from '../../lib/ui/Badge.svelte';
@@ -18,20 +19,26 @@
   import {app} from '../../lib/app.svelte';
   import {copyText, stamp} from '../../lib/notify.svelte';
   import type {Workspace} from '../../lib/types';
-  import type {SettingsState} from './state.svelte';
+  import {duration, type SettingsState} from './state.svelte';
 
   let {ctl, workspace}: {ctl: SettingsState; workspace: Workspace} = $props();
 
   const units = [{value: '86400', label: 'Days'}, {value: '3600', label: 'Hours'}, {value: '1', label: 'Seconds'}];
   const policy = $derived(ctl.policy);
 
+  // A confirmed change replaces the form that had focus; return focus to this card.
+  async function change(write: () => Promise<void>) {
+    await write();
+    await tick();
+    if (document.activeElement === document.body) document.getElementById('retention-card')?.focus();
+  }
   function enable(event: SubmitEvent) {
     event.preventDefault();
-    void app.run(() => ctl.enableRetention(), 'retention-enable');
+    void app.run(() => change(() => ctl.enableRetention()), 'retention-enable');
   }
 </script>
 
-<Card>
+<Card id="retention-card" tabindex="-1" aria-label="Archived entry retention" class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
   <CardHeader title="Archived entry retention"
     description="How long individually archived entries are kept before permanent cleanup.">
     {#snippet action()}
@@ -78,7 +85,7 @@
           {#if policy.retention_seconds === null}
             Manual retention: keep individually archived entries until privileged manual purge.
           {:else}
-            Timed cleanup: individually archived entries become due after {policy.retention_seconds} seconds.{workspace.archived ? ' Paused while this workspace is archived.' : ''}
+            Timed cleanup: individually archived entries become due after {duration(policy.retention_seconds)}.{workspace.archived ? ' Paused while this workspace is archived.' : ''}
           {/if}
         </p>
         <p class="text-[13px] text-muted-foreground">
@@ -96,7 +103,7 @@
       {:else if policy.retention_seconds !== null}
         <p class="text-sm">To choose another duration, first disable timed cleanup, then explicitly enable it again. Existing individual archives receive fresh full windows on re-enable.</p>
         <Button variant="outline" disabled={ctl.frozen} busy={app.working('retention-disable')}
-          onclick={() => app.run(() => ctl.disableRetention(), 'retention-disable')}><TimerOff /> Disable timed cleanup</Button>
+          onclick={() => app.run(() => change(() => ctl.disableRetention()), 'retention-disable')}><TimerOff /> Disable timed cleanup</Button>
       {:else}
         <form class="space-y-4 border-t pt-4" onsubmit={enable} oninput={() => ctl.retentionDraft()}>
           <p class="text-sm">
