@@ -69,12 +69,7 @@ pub(crate) async fn enroll_and_save(
     redeem_url: &str,
     token: &str,
 ) -> anyhow::Result<StoredEnrollment> {
-    let redeem_url = Url::parse(redeem_url).context("invalid redeem URL")?;
-
-    // format validation for the redeem URL
-    if redeem_url.path() != "/auth/redeem" {
-        anyhow::bail!("redeem URL must point to /auth/redeem");
-    }
+    let redeem_url = parse_redeem_url(redeem_url)?;
 
     // format validation for the token
     let token = token.trim();
@@ -149,3 +144,15 @@ pub(crate) async fn enroll_and_save(
     };
     save_enrollment(&material)
 }
+
+fn parse_redeem_url(value: &str) -> anyhow::Result<Url> {
+    let url = Url::parse(value).context("invalid redeem URL")?;
+    if url.path() != "/auth/redeem" {
+        anyhow::bail!("redeem URL must point to /auth/redeem");
+    }
+    Ok(url)
+}
+
+#[cfg(test)]
+#[path = "enrollment_test.rs"]
+mod tests;

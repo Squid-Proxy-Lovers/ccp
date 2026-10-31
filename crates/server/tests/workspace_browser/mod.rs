@@ -206,3 +206,65 @@ async fn browser_global_read_never_borrows_workspace_write_or_guidance_scope() {
     );
     f.finish().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn invalid_creation_names_refuse_input_without_invalidating_browser_sessions() {
+    let f = Fixture::new().await;
+    let (cookie, session) = login(&f, f.setup.instance_key.secret(), None).await;
+    let proof = session["csrf_token"].as_str().unwrap();
+    let mut responses = Vec::new();
+    for owner_bad in [false, true] {
+        for value in [
+            " ".to_string(),
+            "x".repeat(257),
+            "🦑".repeat(65),
+            "bad\0name".to_string(),
+        ] {
+            let body = if owner_bad {
+                json!({"name":"new workspace","owner":{"kind":"new_principal","name":value},"key_expires_at":null})
+            } else {
+                json!({"name":value,"owner":{"kind":"new_principal","name":"new owner"},"key_expires_at":null})
+            };
+            let response = f
+                .public_client()
+                .post(f.url("/api/v1/admin/workspaces/create"))
+                .header("cookie", &cookie)
+                .header("origin", origin(&f))
+                .header("x-ccp-csrf", proof)
+                .json(&body)
+                .send()
+                .await
+                .unwrap();
+            responses.push(response.status().as_u16());
+            let current = status(&f, &cookie, 200).await;
+            assert_eq!(current["data"]["csrf_token"], session["csrf_token"]);
+        }
+    }
+    let count: i64 = f
+        .db()
+        .query_row("SELECT COUNT(*) FROM ccp_workspaces", [], |row| row.get(0))
+        .unwrap();
+    let boundary = post(
+        &f,
+        &cookie,
+        proof,
+        "/api/v1/admin/workspaces/create",
+        &json!({"name":"a".repeat(256),"owner":{"kind":"new_principal","name":"owner"},"key_expires_at":null}),
+        200,
+    )
+    .await;
+    assert!(boundary["data"]["workspace_id"].is_string());
+    let (scoped, scoped_session) = login(&f, f.setup.owner_key.secret(), None).await;
+    post(
+        &f,
+        &scoped,
+        scoped_session["csrf_token"].as_str().unwrap(),
+        "/api/v1/admin/workspaces/create",
+        &json!({"name":"forbidden","owner":{"kind":"new_principal","name":"owner"},"key_expires_at":null}),
+        403,
+    )
+    .await;
+    f.finish().await;
+    assert_eq!(count, 1);
+    assert_eq!(responses, vec![400; 8]);
+}

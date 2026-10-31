@@ -21,7 +21,9 @@ use tokio::{
 };
 
 /// A byte stream with one bounded incoming message and bounded parser write buffers.
-/// Control and empty frames share a 128-per-second limit, not a lifetime allowance.
+/// Delivered Ping/Pong events and completed empty binary messages share a
+/// 128-per-second limit. The WebSocket parser consumes non-final fragments;
+/// those fragments are not counted by this message-level budget.
 /// Tungstenite processes automatic Pong/Close writes while continuing to read when
 /// writes would block; application reads must never wait for an outgoing flush.
 pub struct ByteStream<S> {
@@ -97,7 +99,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for ByteStream<S> {
                 Some(Err(e)) => return Poll::Ready(Err(error(e))),
             }
         }
-        // Cooperative scheduling even when a peer continuously sends empty/control frames.
+        // Cooperate between delivered empty messages and Ping/Pong events.
         cx.waker().wake_by_ref();
         Poll::Pending
     }
