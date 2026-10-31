@@ -1,10 +1,13 @@
 <script lang="ts">
+  // First-run setup: verify the code the server printed, name the first workspace,
+  // then show both admin keys once. Keys never touch browser storage.
   import {onMount, untrack, tick} from 'svelte';
+  import {ArrowRight, CircleAlert} from '@lucide/svelte';
   import Logo from './Logo.svelte';
-  import Appearance from './Appearance.svelte';
+  import CenteredPage from './CenteredPage.svelte';
   import Button from '../lib/ui/Button.svelte';
   import Input from '../lib/ui/Input.svelte';
-  import Field from '../lib/ui/Field.svelte';
+  import SecretField from '../lib/ui/SecretField.svelte';
   import {setupRequest, setupKeys, validSetupName, SetupError} from '../lib/setup.js';
 
   let {initialCode = '', initialError = ''}: {initialCode?: string; initialError?: string} = $props();
@@ -16,13 +19,22 @@
   let workspace = $state('');
   let acknowledged = $state(false);
   let copied = $state('');
-  let shownOwner = $state(false);
-  let shownInstance = $state(false);
+  let keys = $state<{instance_admin_key: {secret: string}; workspace_owner_key: {secret: string}} | null>(null);
   $effect(() => {
     const currentStep = step;
     void tick().then(() => { if (currentStep !== 'code') document.getElementById('setup-title')?.focus(); });
   });
-  let keys = $state<{instance_admin_key: {secret: string}; workspace_owner_key: {secret: string}} | null>(null);
+
+  const STEPS = ['Verify code', 'Name workspace', 'Save keys'];
+  const index = $derived(step === 'code' ? 0 : step === 'details' ? 1 : step === 'keys' ? 2 : -1);
+  const heading = $derived({
+    code: ['Set up CCP', 'Confirm the setup code your server printed.'],
+    details: ['Name your workspace', "You'll own it and administer this server."],
+    keys: ['Save your keys', "They're shown once. Anyone with a key has its access."],
+    uncertain: ['Check whether setup finished', 'The request may have completed before the response was lost.'],
+    complete: ['CCP is already set up', 'Sign in with a saved admin key.'],
+  }[step]);
+  const prefilled = $derived(Boolean(initialCode) && code === initialCode);
 
   function failure(value: unknown, claiming: boolean) {
     error = value instanceof Error ? value.message : 'Setup could not be verified.';
@@ -39,7 +51,7 @@
   }
   async function claim() {
     if (busy) return;
-    if (!validSetupName(operator) || !validSetupName(workspace)) { error = 'Enter an admin label and workspace name, each at most 256 bytes without control characters.'; return; }
+    if (!validSetupName(operator) || !validSetupName(workspace)) { error = 'Enter your name and a workspace name, each at most 256 bytes without control characters.'; return; }
     busy = true; error = '';
     try {
       const result = await setupRequest('claim', {code, operator: operator.trim(), workspace: workspace.trim()});
@@ -47,16 +59,9 @@
     } catch (value) { failure(value, true); }
     finally { busy = false; }
   }
-  async function copy(value: string, target: 'owner' | 'instance') {
-    error = ''; copied = '';
-    try { await navigator.clipboard.writeText(value); copied = 'Key copied. Save it privately before continuing.'; }
-    catch {
-      if (target === 'owner') shownOwner = true; else shownInstance = true;
-      error = 'Clipboard access failed. This key is shown and selected; copy it manually before leaving.';
-      await tick();
-      const field = document.getElementById('setup-' + target + '-key');
-      if (field instanceof HTMLInputElement) { field.focus(); field.select(); }
-    }
+  function keyCopied(ok: boolean) {
+    error = ok ? '' : 'Clipboard access failed. The key is shown and selected; copy it manually before leaving.';
+    copied = ok ? 'Key copied. Save it privately before continuing.' : '';
   }
   function open(role: 'workspace_owner_key' | 'instance_admin_key') {
     if (!acknowledged || !keys || busy) return;
@@ -67,40 +72,98 @@
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   });
+  const card = 'w-full rounded-xl border bg-card/90 p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-12px_rgb(0_0_0/0.18)] backdrop-blur-sm dark:shadow-[0_0_0_1px_rgb(255_255_255/0.02),0_16px_40px_-16px_rgb(0_0_0/0.9)]';
 </script>
 
-<div class="min-h-svh bg-background text-foreground">
-  <header class="flex h-16 items-center justify-between border-b px-6"><Logo class="size-8 shrink-0" /><Appearance /></header>
-  <main class="mx-auto grid max-w-2xl gap-6 px-6 py-12" aria-busy={busy}>
-    {#if error}<div role="alert" class="rounded-md border border-destructive/30 bg-destructive/5 p-4 text-sm">{error}</div>{/if}
-    {#if step === 'code'}
-      <div class="grid gap-2"><h1 id="setup-title" tabindex="-1" class="outline-none text-3xl font-semibold tracking-tight">Set up your CCP instance</h1><p class="text-muted-foreground">Use the setup link printed by your server. No administrator exists until this setup is completed.</p></div>
-      <form class="grid gap-5" onsubmit={(event) => { event.preventDefault(); void verify(); }}>
-        <Field id="setup-code" label="Setup code" hint="Find it in the Open link in your server or container logs. Codes expire after an hour; a restart prints a new one."><Input id="setup-code" aria-describedby="setup-code-hint" type="password" bind:value={code} required autocomplete="off" spellcheck="false" disabled={busy} /></Field>
-        <div><Button type="submit" {busy}>Verify setup code</Button></div>
-      </form>
-    {:else if step === 'details'}
-      <div class="grid gap-2"><h1 id="setup-title" tabindex="-1" class="outline-none text-3xl font-semibold tracking-tight">Create your first workspace</h1><p class="text-muted-foreground">The first operator becomes the instance administrator and this workspace’s owner. Their keys have separate scopes.</p></div>
-      <form class="grid gap-5" onsubmit={(event) => { event.preventDefault(); void claim(); }}>
-        <Field id="setup-operator" label="Your admin label" hint="A label for administration and audit records. This is not a password."><Input id="setup-operator" aria-describedby="setup-operator-hint" bind:value={operator} required maxlength={256} disabled={busy} /></Field>
-        <Field id="setup-workspace" label="First workspace name"><Input id="setup-workspace" bind:value={workspace} required maxlength={256} disabled={busy} /></Field>
-        <div class="flex gap-3"><Button type="submit" {busy}>Create instance and workspace</Button><Button variant="outline" disabled={busy} onclick={() => {step = 'code'; error = '';}}>Change setup code</Button></div>
-      </form>
-    {:else if step === 'keys' && keys}
-      <div class="grid gap-2"><h1 id="setup-title" tabindex="-1" class="outline-none text-3xl font-semibold tracking-tight">Save your admin keys</h1><p class="text-muted-foreground">These keys are shown once. Save both privately before leaving. Anyone holding a key has its access.</p></div>
-      <div class="grid gap-3 rounded-lg border p-5"><Field id="setup-owner-key" label="Workspace owner key" hint="Edit context and manage this workspace’s clients and admin team."><Input id="setup-owner-key" aria-describedby="setup-owner-key-hint" type={shownOwner ? 'text' : 'password'} value={keys.workspace_owner_key.secret} autocomplete="off" readonly /></Field><div><Button variant="outline" onclick={() => void copy(keys!.workspace_owner_key.secret, 'owner')}>Copy workspace owner key</Button><Button variant="ghost" aria-pressed={shownOwner} onclick={() => shownOwner = !shownOwner}>{shownOwner ? 'Hide' : 'Show'} workspace owner key</Button></div></div>
-      <div class="grid gap-3 rounded-lg border p-5"><Field id="setup-instance-key" label="Instance admin key" hint="Create workspaces and administer the instance. Workspace writes use their scoped key."><Input id="setup-instance-key" aria-describedby="setup-instance-key-hint" type={shownInstance ? 'text' : 'password'} value={keys.instance_admin_key.secret} autocomplete="off" readonly /></Field><div><Button variant="outline" onclick={() => void copy(keys!.instance_admin_key.secret, 'instance')}>Copy instance admin key</Button><Button variant="ghost" aria-pressed={shownInstance} onclick={() => shownInstance = !shownInstance}>{shownInstance ? 'Hide' : 'Show'} instance admin key</Button></div></div>
-      <p role="status" class="text-sm text-muted-foreground">{copied}</p>
-      <label class="flex items-center gap-3 text-sm"><input type="checkbox" bind:checked={acknowledged} class="size-4 accent-primary" />I have saved both keys privately.</label>
-      <div class="flex flex-wrap gap-3"><Button disabled={!acknowledged} onclick={() => open('workspace_owner_key')}>Open workspace panel</Button><Button variant="outline" disabled={!acknowledged} onclick={() => open('instance_admin_key')}>Open instance administration</Button></div>
-    {:else if step === 'uncertain'}
-      <h1 id="setup-title" tabindex="-1" class="outline-none text-3xl font-semibold tracking-tight">Check whether setup completed</h1>
-      <p class="text-muted-foreground">The claim may have committed. Checking its state does not create another owner. If it completed without delivering the keys, the host operator must recover access.</p>
-      <div><Button {busy} onclick={() => void verify()}>Check setup state</Button></div>
-    {:else}
-      <h1 id="setup-title" tabindex="-1" class="outline-none text-3xl font-semibold tracking-tight">This instance is already set up</h1>
-      <p class="text-muted-foreground">Sign in with a saved admin key. If the first response was lost, stop the server and use the local key-reset commands. Damaged or missing admin roles require a matching backup.</p>
-      <div><a href="/admin" class="font-medium underline underline-offset-4">Open sign-in</a></div>
+{#snippet alert()}
+  {#if error}
+    <p role="alert" class="flex items-start gap-1.5 text-sm text-destructive"><CircleAlert class="mt-0.5 size-4 shrink-0" aria-hidden="true" />{error}</p>
+  {/if}
+{/snippet}
+
+<CenteredPage {busy}>
+  <div class="rise flex flex-col items-center gap-5 text-center">
+    <div class="relative">
+      <div class="login-halo pointer-events-none absolute -inset-10 -z-10" aria-hidden="true"></div>
+      <Logo class="size-14 drop-shadow-[0_8px_18px_rgb(0_0_0/0.18)]" motion={busy ? 'loading' : 'once'} />
+    </div>
+    <div>
+      <h1 id="setup-title" tabindex="-1" class="text-2xl font-semibold tracking-tight outline-none">{heading[0]}</h1>
+      <p class="mt-1.5 text-sm text-muted-foreground">{heading[1]}</p>
+    </div>
+    {#if index >= 0}
+      <ol class="flex items-center gap-1.5" aria-label="Setup progress">
+        {#each STEPS as name, position (name)}
+          <li class={['h-1 w-8 rounded-full transition-colors duration-500', position <= index ? 'bg-foreground' : 'bg-border']}
+            aria-current={position === index ? 'step' : undefined}>
+            <span class="sr-only">Step {position + 1} of {STEPS.length}: {name}{position < index ? ', done' : ''}</span>
+          </li>
+        {/each}
+      </ol>
     {/if}
-  </main>
-</div>
+  </div>
+
+  {#if step === 'code'}
+    <form class={['rise rise-2 grid max-w-sm gap-4', card]} onsubmit={event => { event.preventDefault(); void verify(); }}>
+      <div class="grid gap-2">
+        <label for="setup-code" class="text-sm font-medium">Setup code</label>
+        <Input id="setup-code" type="password" bind:value={code} required autocomplete="off" spellcheck={false} disabled={busy}
+          placeholder="ccp_setup_…" class="font-mono" aria-describedby="setup-code-hint" aria-invalid={error ? true : undefined} />
+        <p id="setup-code-hint" class="text-xs text-muted-foreground">
+          {prefilled ? 'Filled in from your setup link.' : 'In your server log, after “Open:”.'} Codes expire after an hour; restarting the server prints a new one.
+        </p>
+      </div>
+      {@render alert()}
+      <Button type="submit" class="group w-full" {busy}>Continue <ArrowRight class="transition-transform duration-200 group-hover:translate-x-0.5" /></Button>
+    </form>
+  {:else if step === 'details'}
+    <form class={['rise grid max-w-sm gap-4', card]} onsubmit={event => { event.preventDefault(); void claim(); }}>
+      <div class="grid gap-2">
+        <label for="setup-operator" class="text-sm font-medium">Your name</label>
+        <Input id="setup-operator" bind:value={operator} required maxlength={256} disabled={busy} autocomplete="name" aria-describedby="setup-operator-hint" />
+        <p id="setup-operator-hint" class="text-xs text-muted-foreground">Shown in audit records. Not a password.</p>
+      </div>
+      <div class="grid gap-2">
+        <label for="setup-workspace" class="text-sm font-medium">Workspace name</label>
+        <Input id="setup-workspace" bind:value={workspace} required maxlength={256} disabled={busy} autocomplete="off" placeholder="Research" />
+      </div>
+      {@render alert()}
+      <Button type="submit" class="group w-full" {busy}>Create workspace <ArrowRight class="transition-transform duration-200 group-hover:translate-x-0.5" /></Button>
+      <button type="button" disabled={busy} onclick={() => { step = 'code'; error = ''; }}
+        class="justify-self-center rounded text-xs text-muted-foreground underline-offset-4 outline-none hover:text-foreground hover:underline focus-visible:ring-2 focus-visible:ring-ring">
+        Use a different setup code
+      </button>
+    </form>
+  {:else if step === 'keys' && keys}
+    <div class={['rise grid max-w-md gap-5', card]}>
+      <SecretField id="setup-owner-key" label="Workspace owner key" value={keys.workspace_owner_key.secret} oncopy={keyCopied}
+        hint={`Edit context and manage clients and admins in ${workspace.trim()}.`} />
+      <SecretField id="setup-instance-key" label="Instance admin key" value={keys.instance_admin_key.secret} oncopy={keyCopied}
+        hint="Create workspaces and administer this server. It can't edit workspace context." />
+      <p role="status" class="text-sm text-muted-foreground empty:hidden">{copied}</p>
+      {@render alert()}
+      <label class="flex items-center gap-2.5 border-t pt-4 text-sm">
+        <input type="checkbox" bind:checked={acknowledged} class="size-4 accent-primary" /> I've saved both keys somewhere private.
+      </label>
+      <div class="grid gap-2">
+        <Button class="group w-full" disabled={!acknowledged} onclick={() => open('workspace_owner_key')}>
+          Open {workspace.trim()} <ArrowRight class="transition-transform duration-200 group-hover:translate-x-0.5" />
+        </Button>
+        <Button variant="ghost" class="w-full" disabled={!acknowledged} onclick={() => open('instance_admin_key')}>Open instance administration</Button>
+      </div>
+    </div>
+    <p class="rise rise-3 max-w-md text-center text-xs text-muted-foreground">Lost a key later? Reset it on the server host with <code class="font-mono">ccp-server reset-owner-key</code> or <code class="font-mono">reset-instance-key</code>.</p>
+  {:else if step === 'uncertain'}
+    <div class={['rise grid max-w-sm gap-4', card]}>
+      <p class="text-sm text-muted-foreground">Checking doesn't create another owner. If setup finished without delivering the keys, the host operator must recover access.</p>
+      {@render alert()}
+      <Button class="w-full" {busy} onclick={() => void verify()}>Check setup state</Button>
+    </div>
+  {:else}
+    <div class={['rise grid max-w-sm gap-4', card]}>
+      <p class="text-sm text-muted-foreground">If the first response was lost, stop the server and use the local key-reset commands. Damaged or missing admin roles need a matching backup.</p>
+      {@render alert()}
+      <a href="/admin" class="inline-flex h-9 w-full items-center justify-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-xs outline-none hover:bg-primary/90 focus-visible:ring-2 focus-visible:ring-ring">Go to sign in</a>
+    </div>
+  {/if}
+</CenteredPage>
