@@ -17,6 +17,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/server/web/package-lock.json
+      # crates/server/build.rs builds and embeds the admin panel.
+      - run: npm ci --prefix crates/server/web --ignore-scripts
+
+      - name: Admin panel check
+        run: npm --prefix crates/server/web run check
 
       - name: Build
         run: cargo build --release
@@ -49,6 +59,13 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/server/web/package-lock.json
+      # crates/server/build.rs builds and embeds the admin panel.
+      - run: npm ci --prefix crates/server/web --ignore-scripts
       - run: cargo clippy --workspace -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
 
   fmt:
@@ -86,6 +103,13 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: crates/server/web/package-lock.json
+      # crates/server/build.rs builds and embeds the admin panel.
+      - run: npm ci --prefix crates/server/web --ignore-scripts
 
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'

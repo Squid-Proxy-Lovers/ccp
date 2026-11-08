@@ -1,3 +1,13 @@
+# Admin panel (Svelte). Cargo embeds this build; see crates/server/build.rs.
+FROM node:24-bookworm-slim AS panel
+WORKDIR /panel
+COPY crates/server/web/package.json crates/server/web/package-lock.json ./
+RUN npm ci --ignore-scripts
+COPY crates/server/web/src ./src
+COPY crates/server/web/public ./public
+COPY crates/server/web/index.html crates/server/web/vite.config.ts crates/server/web/svelte.config.js crates/server/web/tsconfig.json ./
+RUN npm run check && npm run build
+
 FROM rust:1-bookworm AS builder
 
 WORKDIR /app
@@ -12,6 +22,9 @@ COPY crates/protocol/Cargo.toml /app/crates/protocol/Cargo.toml
 COPY crates/protocol/src /app/crates/protocol/src
 COPY crates/server/Cargo.toml /app/crates/server/Cargo.toml
 COPY crates/server/src /app/crates/server/src
+COPY crates/server/build.rs /app/crates/server/build.rs
+COPY --from=panel /panel/dist /app/panel-dist
+ENV CCP_PANEL_DIST=/app/panel-dist
 # The server embeds these client-management scripts with include_str!.
 COPY scripts /app/scripts
 COPY crates/client/Cargo.toml /app/crates/client/Cargo.toml

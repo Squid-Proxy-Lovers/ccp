@@ -2,25 +2,29 @@
 
 CARGO ?= cargo
 
-.PHONY: build release test integration check lint fmt docker help
+.PHONY: panel build release test integration check lint fmt docker help
 
-build: ## Compile the workspace in development mode.
+panel: ## Install admin panel dependencies (the server embeds the panel at build time).
+	npm ci --prefix crates/server/web --ignore-scripts
+
+build: panel ## Compile the workspace in development mode.
 	$(CARGO) build --workspace --locked
 
-release: ## Compile optimized server and client binaries.
+release: panel ## Compile optimized server and client binaries.
 	$(CARGO) build --workspace --release --locked
 
-test: ## Run all Rust tests.
+test: panel ## Run all Rust tests and the admin panel check.
+	npm --prefix crates/server/web run check
 	$(CARGO) test --workspace --locked
 	python3 -m unittest discover -s mcp/tests -v
 
 integration: release ## Run the end-to-end CLI test suite.
 	bash tests/run.sh --skip-build
 
-check: ## Type-check without producing binaries.
+check: panel ## Type-check without producing binaries.
 	$(CARGO) check --workspace --all-targets --locked
 
-lint: ## Run Clippy with the project's CI lint policy.
+lint: panel ## Run Clippy with the project's CI lint policy.
 	$(CARGO) clippy --workspace -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity -A clippy::large_enum_variant -A clippy::await_holding_lock
 
 fmt: ## Check Rust formatting.

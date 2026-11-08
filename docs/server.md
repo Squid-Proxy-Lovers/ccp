@@ -26,7 +26,8 @@ ccp-server initial-topic
 - `DELETE /v1/admin/sessions/{session}` — delete a session
 - `GET /v1/admin/sessions/{session}/stats` — get session statistics
 - `GET /v1/admin/activity?session={session}&limit=100` — recent live session activity
-- `GET /admin` — central management dashboard
+- `GET /admin` — admin panel (Svelte; built from `crates/server/web` and embedded at compile time)
+- `GET /admin/classic` — the previous single-page dashboard, kept as a fallback
 - `GET|PUT /v1/admin/master` — global master instructions
 - `GET|PUT /v1/admin/sessions/{session}/master` — session master instructions
 - `GET /setup-client.sh` and `GET /setup-client.ps1`
@@ -61,3 +62,10 @@ ccp-client-linux-x86_64
 ccp-client-windows-x86_64.exe
 ccp-mcp.tar.gz
 ```
+
+## Admin panel
+
+The panel source lives in `crates/server/web`. `crates/server/build.rs` embeds it in the server binary:
+it copies a prebuilt `CCP_PANEL_DIST` (the Docker build does this) or runs `npm run build` itself, which
+needs Node 24 and `npm ci --prefix crates/server/web --ignore-scripts` first. For local UI work, run
+`npm run dev` in `crates/server/web`; it proxies `/v1` to `CCP_PANEL_UPSTREAM` (default `http://127.0.0.1:1338`).

@@ -54,6 +54,8 @@ The `--client` flag is what most people want if someone else is running the serv
 
 The repository selects Rust 1.88.0 automatically when used with `rustup`.
 
+The server embeds the admin panel at build time, so building it also needs Node 24 (`make` runs `npm ci --prefix crates/server/web --ignore-scripts` for you).
+
 ```bash
 make release       # optimized server and client binaries in target/release/
 make test          # full Rust test suite

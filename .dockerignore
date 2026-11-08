@@ -11,3 +11,5 @@ crates/protocol/target
 tests/target
 crates/server/sessions
 tests/benchmark-results
+
+crates/server/web/dist

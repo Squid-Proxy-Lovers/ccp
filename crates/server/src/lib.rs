@@ -6,6 +6,7 @@ pub mod identity;
 pub mod init;
 pub mod journal;
 pub mod message;
+mod panel;
 pub mod state;
 
 use std::path::PathBuf;
@@ -128,7 +129,10 @@ pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<(
             "/v1/admin/sessions/{session}/master",
             get(admin_get_session_master).put(admin_set_session_master),
         )
-        .route("/admin", get(admin_dashboard))
+        .route("/admin", get(panel::index))
+        .route("/admin/", get(panel::index))
+        .route("/admin/classic", get(admin_dashboard))
+        .route("/admin/{*path}", get(panel::file))
         .route("/setup-client.sh", get(setup_client_script))
         .route("/setup-client.ps1", get(setup_client_powershell))
         .route("/ccp-manage", get(management_script))
