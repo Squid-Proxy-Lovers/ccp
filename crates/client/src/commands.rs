@@ -706,7 +706,7 @@ fn resolved_server(explicit: Option<&str>) -> String {
     explicit
         .map(ToString::to_string)
         .or_else(|| std::env::var("CCP_SERVER_URL").ok())
-        .unwrap_or_else(|| "http://192.168.130.34:1338".to_string())
+        .unwrap_or_else(|| "https://ccp.spl.team".to_string())
 }
 
 fn hostname_fallback() -> Option<String> {

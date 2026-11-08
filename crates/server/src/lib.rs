@@ -27,7 +27,7 @@ use crate::init::{
 };
 use crate::journal::JournalHandle;
 use crate::message::handle_message_request;
-use crate::state::ServerState;
+use crate::state::{AdminAgentStatus, ServerState};
 
 pub const DEFAULT_CLIENT_KEY: &str = "ccp-client-7b6c2f915e4a8d30";
 pub const DEFAULT_ADMIN_KEY: &str = "ccp-admin-f1a847d36c509e2b";
@@ -72,6 +72,7 @@ struct ActivityQuery {
 #[derive(Debug, Serialize)]
 struct AdminOverview {
     sessions: Vec<protocol::SessionStats>,
+    agents: Vec<AdminAgentStatus>,
     global_master: protocol::InstructionRecord,
 }
 
@@ -114,6 +115,14 @@ pub async fn run_plain_server(initial_session: Option<&str>) -> anyhow::Result<(
         .route(
             "/v1/admin/sessions/{session}/stats",
             get(admin_session_stats),
+        )
+        .route(
+            "/v1/admin/sessions/{session}/library",
+            get(admin_session_library),
+        )
+        .route(
+            "/v1/admin/sessions/{session}/entries/{shelf}/{book}/{entry}",
+            get(admin_get_entry),
         )
         .route(
             "/v1/admin/sessions/{session}/master",
@@ -235,13 +244,19 @@ async fn admin_overview(State(state): State<AppState>, headers: HeaderMap) -> Re
     if !admin_authorized(&state, &headers) {
         return error(StatusCode::UNAUTHORIZED, "invalid admin key");
     }
-    match state.ccp.global_master_instructions() {
-        Ok(global_master) => Json(AdminOverview {
+    match (
+        state.ccp.global_master_instructions(),
+        state.ccp.active_agent_statuses().await,
+    ) {
+        (Ok(global_master), Ok(agents)) => Json(AdminOverview {
             sessions: state.ccp.all_session_stats().await,
+            agents,
             global_master,
         })
         .into_response(),
-        Err(error_value) => error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string()),
+        (Err(error_value), _) | (_, Err(error_value)) => {
+            error(StatusCode::INTERNAL_SERVER_ERROR, error_value.to_string())
+        }
     }
 }
 
@@ -311,6 +326,34 @@ async fn admin_session_stats(
     }
     match state.ccp.session_stats(&session).await {
         Ok(stats) => (StatusCode::OK, Json(stats)).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_session_library(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(session): Path<String>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.admin_library(&session).await {
+        Ok(library) => Json(library).into_response(),
+        Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
+    }
+}
+
+async fn admin_get_entry(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((session, shelf, book, entry)): Path<(String, String, String, String)>,
+) -> Response {
+    if !admin_authorized(&state, &headers) {
+        return error(StatusCode::UNAUTHORIZED, "invalid admin key");
+    }
+    match state.ccp.admin_entry(&session, &shelf, &book, &entry).await {
+        Ok(record) => Json(record).into_response(),
         Err(error_value) => error(StatusCode::NOT_FOUND, error_value.to_string()),
     }
 }

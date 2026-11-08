@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$ServerUrl = "http://192.168.130.34:1338"
+$ServerUrl = "https://ccp.spl.team"
 $ClientKey = "ccp-client-7b6c2f915e4a8d30"
 $InstallDir = if ($env:CCP_INSTALL_DIR) { $env:CCP_INSTALL_DIR } else { "$env:USERPROFILE\.local\bin" }
 
@@ -14,6 +14,7 @@ $ClientPath = Join-Path $InstallDir "ccp-client.exe"
 Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/downloads/ccp-client-windows-$arch.exe" -OutFile $ClientPath
 $UpdatePath = Join-Path $InstallDir "ccp-update.ps1"
 Invoke-WebRequest -UseBasicParsing -Uri "$ServerUrl/ccp-update.ps1" -OutFile $UpdatePath
+$env:CCP_SERVER_URL = $ServerUrl
 & $ClientPath subscribe-all
 
 $McpVenv = Join-Path $env:USERPROFILE ".ccp-client\mcp-venv"

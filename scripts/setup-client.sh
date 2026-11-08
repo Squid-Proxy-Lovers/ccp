@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-SERVER_URL="http://192.168.130.34:1338"
+SERVER_URL="https://ccp.spl.team"
 CLIENT_KEY="ccp-client-7b6c2f915e4a8d30"
 INSTALL_DIR="${CCP_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -21,7 +21,7 @@ curl -fsSL "$SERVER_URL/downloads/ccp-client-${os}-${arch}" -o "$INSTALL_DIR/ccp
 chmod 0755 "$INSTALL_DIR/ccp-client"
 curl -fsSL "$SERVER_URL/ccp-update" -o "$INSTALL_DIR/ccp-update"
 chmod 0755 "$INSTALL_DIR/ccp-update"
-"$INSTALL_DIR/ccp-client" subscribe-all
+CCP_SERVER_URL="$SERVER_URL" "$INSTALL_DIR/ccp-client" subscribe-all
 
 MCP_VENV="$HOME/.ccp-client/mcp-venv"
 python3 -m venv "$MCP_VENV"

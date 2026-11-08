@@ -10,6 +10,7 @@ services:
       CCP_SESSION_NAME: ${CCP_SESSION_NAME:-my-session}
       CCP_HTTP_PORT: ${CCP_HTTP_PORT:-1338}
       CCP_ADVERTISE_HOST: ${CCP_ADVERTISE_HOST:-192.168.130.34}
+      CCP_HTTP_BASE_URL: ${CCP_HTTP_BASE_URL:-https://ccp.spl.team}
       CCP_CLIENT_KEY: ${CCP_CLIENT_KEY:-ccp-client-7b6c2f915e4a8d30}
       CCP_ADMIN_KEY: ${CCP_ADMIN_KEY:-ccp-admin-f1a847d36c509e2b}
       CCP_DOWNLOAD_DIR: /var/lib/ccp/downloads
@@ -19,5 +20,27 @@ services:
       - ccp-server-data:/var/lib/ccp/server
       - ./downloads:/var/lib/ccp/downloads:ro
 
+  cloudflared:
+    image: cloudflare/cloudflared:2026.8.2
+    container_name: ccp-cloudflared
+    user: "0:0"
+    restart: unless-stopped
+    depends_on:
+      - ccp-server
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --metrics
+      - 127.0.0.1:20241
+      - run
+      - --token-file
+      - /run/secrets/cloudflare_tunnel_token
+    secrets:
+      - cloudflare_tunnel_token
+
 volumes:
   ccp-server-data:
+
+secrets:
+  cloudflare_tunnel_token:
+    file: .cloudflared/tunnel-token

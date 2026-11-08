@@ -36,6 +36,24 @@ mod tests;
 const DEFAULT_SHELF_NAME: &str = "main";
 const DEFAULT_BOOK_NAME: &str = "default";
 
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminAgentStatus {
+    pub session_name: String,
+    pub team: String,
+    pub agent_name: String,
+    pub worker_id: String,
+    pub status: String,
+    pub updated_at: String,
+    pub expires_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AdminLibrary {
+    pub shelves: Vec<protocol::ShelfSummary>,
+    pub books: Vec<protocol::BookSummary>,
+    pub entries: Vec<protocol::EntrySummary>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct EntryPath {
     shelf_name: String,
@@ -815,6 +833,121 @@ impl ServerState {
             .collect::<Vec<_>>();
         result.sort_by(|left, right| left.session.session_name.cmp(&right.session.session_name));
         result
+    }
+
+    pub async fn active_agent_statuses(&self) -> anyhow::Result<Vec<AdminAgentStatus>> {
+        let session_names = self
+            .sessions
+            .read()
+            .await
+            .iter()
+            .map(|(id, session)| (*id, session.metadata.session_name.clone()))
+            .collect::<HashMap<_, _>>();
+        let now = current_precise_timestamp_string()?.parse::<i64>()?;
+        let connection = open_sqlite_connection()?;
+        let mut statement = connection.prepare(
+            "SELECT session_id, team, agent_name, worker_id, status, updated_at, expires_at
+             FROM agent_statuses
+             WHERE expires_at > ?1
+             ORDER BY updated_at DESC, agent_name COLLATE NOCASE, worker_id",
+        )?;
+        let rows = statement.query_map([now], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                AdminAgentStatus {
+                    session_name: String::new(),
+                    team: row.get(1)?,
+                    agent_name: row.get(2)?,
+                    worker_id: row.get(3)?,
+                    status: row.get(4)?,
+                    updated_at: row.get::<_, i64>(5)?.to_string(),
+                    expires_at: row.get::<_, i64>(6)?.to_string(),
+                },
+            ))
+        })?;
+
+        let mut statuses = Vec::new();
+        for row in rows {
+            let (session_id, mut status) = row?;
+            if let Some(session_name) = session_names.get(&session_id) {
+                status.session_name = session_name.clone();
+                statuses.push(status);
+            }
+        }
+        Ok(statuses)
+    }
+
+    pub async fn admin_library(&self, session_selector: &str) -> anyhow::Result<AdminLibrary> {
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .iter()
+            .find(|(id, session)| {
+                id.to_string() == session_selector
+                    || session.metadata.session_name == session_selector
+            })
+            .map(|(_, session)| session)
+            .with_context(|| format!("unknown session '{session_selector}'"))?;
+
+        let mut shelves = session
+            .shelves
+            .iter()
+            .map(|(name, shelf)| protocol::ShelfSummary {
+                shelf_name: name.clone(),
+                description: shelf.description.clone(),
+                book_count: session.shelf_book_counts.get(name).copied().unwrap_or(0),
+                entry_count: session.shelf_entry_counts.get(name).copied().unwrap_or(0),
+            })
+            .collect::<Vec<_>>();
+        shelves.sort_by(|left, right| left.shelf_name.cmp(&right.shelf_name));
+
+        let mut books = session
+            .books
+            .iter()
+            .map(|((shelf_name, book_name), book)| protocol::BookSummary {
+                shelf_name: shelf_name.clone(),
+                book_name: book_name.clone(),
+                shelf_description: session.shelf_description(shelf_name),
+                description: book.description.clone(),
+                entry_count: session
+                    .book_entry_counts
+                    .get(&(shelf_name.clone(), book_name.clone()))
+                    .copied()
+                    .unwrap_or(0),
+            })
+            .collect::<Vec<_>>();
+        books.sort_by(|left, right| {
+            (&left.shelf_name, &left.book_name).cmp(&(&right.shelf_name, &right.book_name))
+        });
+
+        Ok(AdminLibrary {
+            shelves,
+            books,
+            entries: session.list_entries_cache.clone(),
+        })
+    }
+
+    pub async fn admin_entry(
+        &self,
+        session_selector: &str,
+        shelf_name: &str,
+        book_name: &str,
+        entry_name: &str,
+    ) -> anyhow::Result<protocol::MessageEntry> {
+        let sessions = self.sessions.read().await;
+        let session = sessions
+            .iter()
+            .find(|(id, session)| {
+                id.to_string() == session_selector
+                    || session.metadata.session_name == session_selector
+            })
+            .map(|(_, session)| session)
+            .with_context(|| format!("unknown session '{session_selector}'"))?;
+        let (_, key) = entry_path_for(entry_name, Some(shelf_name), Some(book_name));
+        session
+            .entries
+            .get(&key)
+            .map(message_entry_from)
+            .with_context(|| format!("entry '{entry_name}' not found"))
     }
 
     pub async fn master_instructions(

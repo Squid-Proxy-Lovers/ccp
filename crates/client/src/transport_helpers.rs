@@ -11,8 +11,8 @@ use crate::enrollment_structs::StoredEnrollment;
 
 fn normalized_endpoint(endpoint: &str) -> anyhow::Result<String> {
     let url = Url::parse(endpoint).context("invalid HTTP endpoint URL")?;
-    if url.scheme() != "http" {
-        bail!("server endpoint must use plaintext http://");
+    if !matches!(url.scheme(), "http" | "https") {
+        bail!("server endpoint must use http:// or https://");
     }
     if url.host_str().is_none() {
         bail!("HTTP endpoint missing host");

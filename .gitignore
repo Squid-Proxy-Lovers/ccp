@@ -37,3 +37,4 @@ runtime-journal.jsonl
 
 # Misc
 /dump/
+/.cloudflared/
