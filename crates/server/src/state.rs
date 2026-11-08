@@ -428,16 +428,60 @@ impl SessionCache {
     }
 
     fn insert_entry(&mut self, key: String, entry: CachedMessagePack) -> Option<CachedMessagePack> {
+        let previous = self.insert_entry_deferred(key, entry);
+        self.rebuild_list_entries_cache();
+        self.invalidate_entry_search_results();
+        self.invalidate_context_search_results();
+        previous
+    }
+
+    /// Startup bulk-load insert. Counts stay exact, but the sorted list cache,
+    /// library descriptions in summaries and query caches are only brought up
+    /// to date by [`Self::finish_bulk_load`]. Rebuilding them per entry made
+    /// startup quadratic in the number of entries in a session.
+    fn insert_entry_deferred(
+        &mut self,
+        key: String,
+        entry: CachedMessagePack,
+    ) -> Option<CachedMessagePack> {
         let previous = self.entries.remove(&key);
         if let Some(previous) = &previous {
             self.decrement_entry_counts(previous);
         }
         self.increment_entry_counts(&entry);
         self.entries.insert(key, entry);
+        previous
+    }
+
+    /// Bring every derived cache up to date once after a bulk load. Produces
+    /// the same state as refreshing after each insert and library change:
+    /// each summary carries the current shelf and book descriptions.
+    fn finish_bulk_load(&mut self) {
+        for entry in self.entries.values_mut() {
+            let shelf_description = self
+                .shelves
+                .get(entry.path.shelf_name())
+                .map(|shelf| shelf.description.clone())
+                .unwrap_or_default();
+            let book_description = self
+                .books
+                .get(&(
+                    entry.path.shelf_name().to_string(),
+                    entry.path.book_name().to_string(),
+                ))
+                .map(|book| book.description.clone())
+                .unwrap_or_default();
+            if entry.summary.shelf_description != shelf_description
+                || entry.summary.book_description != book_description
+            {
+                entry.summary.shelf_description = shelf_description;
+                entry.summary.book_description = book_description;
+                entry.entry_search = build_entry_search_cache(&entry.summary);
+            }
+        }
         self.rebuild_list_entries_cache();
         self.invalidate_entry_search_results();
         self.invalidate_context_search_results();
-        previous
     }
 
     fn remove_entry(&mut self, key: &str) -> Option<CachedMessagePack> {

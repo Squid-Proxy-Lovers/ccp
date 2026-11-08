@@ -2130,3 +2130,138 @@ async fn import_v2_flushes_query_caches() {
         "context_query_cache should be flushed after import"
     );
 }
+
+/// Startup loads entries with deferred cache rebuilds. The result must match
+/// rebuilding after every entry and library change, as live commands do.
+#[test]
+fn bulk_load_matches_incremental_library_state() {
+    enum Op {
+        Shelf(&'static str, &'static str),
+        Book(&'static str, &'static str, &'static str),
+        Entry(
+            String,
+            Option<&'static str>,
+            Option<&'static str>,
+            &'static str,
+        ),
+    }
+    let mut ops = vec![
+        Op::Shelf("main", "Main shelf"),
+        Op::Book("main", "alpha", "Alpha book"),
+    ];
+    for index in 0..40 {
+        ops.push(Op::Entry(
+            format!("a-{index:02}"),
+            Some("main"),
+            Some("alpha"),
+            "alpha entry",
+        ));
+    }
+    ops.push(Op::Book("main", "beta", ""));
+    for index in 0..15 {
+        ops.push(Op::Entry(
+            format!("b-{index:02}"),
+            Some("main"),
+            Some("beta"),
+            "beta entry",
+        ));
+    }
+    // Library changes after entries exist, a replaced entry and default-shelf entries.
+    ops.push(Op::Shelf("main", "Main shelf, renamed"));
+    ops.push(Op::Book("main", "alpha", "Alpha book v2"));
+    ops.push(Op::Entry(
+        "a-03".to_string(),
+        Some("main"),
+        Some("alpha"),
+        "replacement",
+    ));
+    for index in 0..5 {
+        ops.push(Op::Entry(
+            format!("loose-{index}"),
+            None,
+            None,
+            "default shelf",
+        ));
+    }
+    ops.push(Op::Shelf("other", "Other shelf"));
+    ops.push(Op::Entry(
+        "o-1".to_string(),
+        Some("other"),
+        Some("missing-book"),
+        "unknown book",
+    ));
+
+    let metadata = SessionMetadata {
+        session_name: "bulk".to_string(),
+        session_id: 1,
+        description: String::new(),
+        owner: String::new(),
+        labels: Vec::new(),
+        visibility: "public".to_string(),
+        purpose: String::new(),
+    };
+    let mut incremental = SessionCache::new(metadata.clone(), true);
+    let mut bulk = SessionCache::new(metadata, true);
+    for op in &ops {
+        match op {
+            Op::Shelf(shelf, description) => {
+                incremental.add_shelf(shelf, Some(description));
+                incremental.refresh_library_metadata(shelf, None);
+                bulk.add_shelf(shelf, Some(description));
+            }
+            Op::Book(shelf, book, description) => {
+                let _ = incremental.add_book(shelf, book, Some(description));
+                incremental.refresh_library_metadata(shelf, Some(book));
+                let _ = bulk.add_book(shelf, book, Some(description));
+            }
+            Op::Entry(name, shelf, book, description) => {
+                for (session, deferred) in [(&mut incremental, false), (&mut bulk, true)] {
+                    let (path, key) = entry_path_for(name, *shelf, *book);
+                    let entry = session.build_entry(
+                        path,
+                        description.to_string(),
+                        vec!["label".to_string()],
+                        format!("context for {name}"),
+                        "1".to_string(),
+                        "1".to_string(),
+                        Vec::new(),
+                    );
+                    if deferred {
+                        session.insert_entry_deferred(key, entry);
+                    } else {
+                        session.insert_entry(key, entry);
+                    }
+                }
+            }
+        }
+    }
+    bulk.finish_bulk_load();
+
+    assert_eq!(bulk.list_entries_cache, incremental.list_entries_cache);
+    assert_eq!(bulk.entries.len(), incremental.entries.len());
+    for (key, expected) in &incremental.entries {
+        let actual = &bulk.entries[key];
+        assert_eq!(actual.summary, expected.summary, "summary for {key}");
+        assert_eq!(
+            actual.entry_search.literal_haystack, expected.entry_search.literal_haystack,
+            "{key}"
+        );
+        assert_eq!(
+            actual.entry_search.fuzzy_fields, expected.entry_search.fuzzy_fields,
+            "{key}"
+        );
+        assert_eq!(
+            actual.entry_search.fuzzy_tokens, expected.entry_search.fuzzy_tokens,
+            "{key}"
+        );
+    }
+    assert_eq!(bulk.shelf_entry_counts, incremental.shelf_entry_counts);
+    assert_eq!(bulk.book_entry_counts, incremental.book_entry_counts);
+    assert_eq!(bulk.shelf_book_counts, incremental.shelf_book_counts);
+    assert!(
+        bulk.list_entries_cache
+            .iter()
+            .any(|summary| summary.book_description == "Alpha book v2"),
+        "later book description reached existing entries"
+    );
+}

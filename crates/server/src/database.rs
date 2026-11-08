@@ -28,6 +28,10 @@ impl ServerState {
         for entry in load_entries(state.journal.path())? {
             state.apply_journal_entry(entry).await;
         }
+        // Loading and replay defer the per-entry cache rebuilds; do them once.
+        for session in state.sessions.write().await.values_mut() {
+            session.finish_bulk_load();
+        }
 
         Ok(state)
     }
@@ -85,8 +89,8 @@ impl ServerState {
                 description,
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
+                    // Entry summaries pick up the description in finish_bulk_load.
                     session.add_shelf(&shelf_name, Some(&description));
-                    session.refresh_library_metadata(&shelf_name, None);
                 }
             }
             JournalEntry::AddBook {
@@ -96,8 +100,8 @@ impl ServerState {
                 description,
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
+                    // Entry summaries pick up the description in finish_bulk_load.
                     let _ = session.add_book(&shelf_name, &book_name, Some(&description));
-                    session.refresh_library_metadata(&shelf_name, Some(&book_name));
                 }
             }
             JournalEntry::AddEntry {
@@ -127,7 +131,7 @@ impl ServerState {
                         updated_at,
                         history,
                     );
-                    session.insert_entry(key, entry);
+                    session.insert_entry_deferred(key, entry);
                 }
             }
             // Transfer journal entries are audit records only; state is fully
@@ -847,7 +851,7 @@ fn load_message_packs(
                 updated_at,
                 Vec::new(),
             );
-            session.insert_entry(key, entry);
+            session.insert_entry_deferred(key, entry);
         }
     }
     Ok(())
