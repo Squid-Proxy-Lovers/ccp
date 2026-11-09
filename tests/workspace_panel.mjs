@@ -5,6 +5,10 @@ import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/web/src/lib/model.js', import.meta.url), 'utf8');
 const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
+const draftsSource = await readFile(new URL('../crates/server/web/src/lib/drafts.js', import.meta.url), 'utf8');
+const {acquireDraft, dropDraft, peekDraft, hasDraftContent, hasAnyDraftContent, draftsRecoveryParts, recoveryText, draftLabel} =
+  await import('data:text/javascript;base64,' + Buffer.from(draftsSource).toString('base64'));
+
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
 }});
@@ -741,4 +745,70 @@ test('existing principal UUIDs are canonical before freezing and verifying a key
     assert.throws(() => principalIdentity('existing', value));
   }
   assert.throws(() => principalIdentity('other', lower));
+});
+
+test('a dropped form draft is actually gone; re-acquiring it returns a live, independent object', () => {
+  const drafts = {};
+  const first = acquireDraft(drafts, 'create-workspace');
+  first.name = 'Orphan';
+  assert.equal(drafts['create-workspace'], first);
+  dropDraft(drafts, 'create-workspace');
+  assert.equal('create-workspace' in drafts, false);
+  // The caller's old reference is now orphaned: it keeps its stale value but no
+  // longer reaches the live store, so edits to it would never resurface.
+  assert.equal(first.name, 'Orphan');
+  const second = acquireDraft(drafts, 'create-workspace');
+  assert.notEqual(second, first);
+  assert.deepEqual(second, {});
+  second.name = 'Fresh';
+  assert.equal(drafts['create-workspace'].name, 'Fresh');
+  assert.equal(first.name, 'Orphan');
+});
+
+test('peeking a form draft never creates it, unlike acquiring', () => {
+  const drafts = {};
+  assert.deepEqual(peekDraft(drafts, 'context.book.ws.shelf'), {});
+  assert.equal('context.book.ws.shelf' in drafts, false);
+  acquireDraft(drafts, 'context.book.ws.shelf').name = 'Notes';
+  assert.deepEqual(peekDraft(drafts, 'context.book.ws.shelf'), {name: 'Notes'});
+});
+
+test('draft content is blank-trimmed, so sign-out treats whitespace-only fields as nothing to lose', () => {
+  assert.equal(hasDraftContent({name: '', description: ''}), false);
+  assert.equal(hasDraftContent({name: '   ', description: '\n'}), false);
+  assert.equal(hasDraftContent({name: 'Research', description: ''}), true);
+  assert.equal(hasAnyDraftContent({}), false);
+  assert.equal(hasAnyDraftContent({a: {name: ''}, b: {name: '  '}}), false);
+  assert.equal(hasAnyDraftContent({a: {name: ''}, b: {name: 'Shelf'}}), true);
+});
+
+test('an acknowledged shelf or book create drops out of recovery text once its draft is dropped', () => {
+  const drafts = {'context.shelf.ws': {name: 'Research', description: ''}, 'context.book.ws.shelf1': {name: '', description: ''}};
+  const before = recoveryText(null, '', drafts);
+  assert.match(before, /Research/);
+  assert.match(before, /name: Research/);
+  // The create for this shelf is now confirmed server-side; its draft is dropped
+  // exactly like entryWrite.ts clears `app.pending` once a write is confirmed.
+  dropDraft(drafts, 'context.shelf.ws');
+  const after = recoveryText(null, '', drafts);
+  assert.doesNotMatch(after, /Research/);
+});
+
+test('discarding one draft leaves other unsaved work visible in recovery text', () => {
+  const drafts = {'context.book.ws.shelf1': {name: 'Second shelf book', description: ''}};
+  const withNote = recoveryText(null, 'An unsaved append note', drafts);
+  assert.match(withNote, /unsaved append note/);
+  assert.match(withNote, /Second shelf book/);
+  // Discarding the separate note (app.draft) must not also discard the kept
+  // creation draft that recoveryText reports independently.
+  const noteDiscarded = recoveryText(null, '', drafts);
+  assert.doesNotMatch(noteDiscarded, /unsaved append note/);
+  assert.match(noteDiscarded, /Second shelf book/);
+  assert.deepEqual(draftsRecoveryParts({}), []);
+});
+
+test('an uncertain pending write takes recovery precedence over a plain text draft', () => {
+  assert.equal(recoveryText({body: 'PENDING_INTENT'}, 'ignored draft text', {}), 'PENDING_INTENT');
+  assert.equal(recoveryText(null, 'kept draft text', {}), 'kept draft text');
+  assert.equal(draftLabel('context.book.11111111-1111-4111-8111-111111111111'), 'Context book draft');
 });

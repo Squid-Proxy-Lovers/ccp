@@ -8,6 +8,7 @@
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
 import {signature, takeFragment, wire, canWrite} from './model.js';
+import {acquireDraft, dropDraft, peekDraft, hasAnyDraftContent, recoveryText as draftsRecoveryText} from './drafts.js';
 import {notice, clearToasts} from './notify.svelte';
 import {confirmAction} from './ui/confirm.svelte';
 import type {Session, Workspace, PendingWork, View} from './types';
@@ -17,13 +18,6 @@ interface Inspection { workspace: Workspace; owner_id: string | null; [key: stri
 export interface CreatedWorkspace { workspace_id: string; owner_key: string }
 
 const NO_OPERATION_ID = ['lifecycle', 'security', 'transfer', 'admission', 'enrollment', 'client_access'];
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** A readable name for a form-draft key such as `context.book.<uuid>.<uuid>`: "Context book draft". */
-function draftLabel(key: string): string {
-  const words = key.split(/[.:/]/).filter(part => part && !UUID.test(part)).join(' ').replace(/[-_]+/g, ' ');
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)} draft`;
-}
 
 class App {
   session = $state.raw<Session | null>(null);
@@ -62,25 +56,13 @@ class App {
   // ---- drafts -------------------------------------------------------------
   setDraft(text: string): void { this.dirty = true; this.draft = text; }
   clean(): void { this.dirty = false; this.draft = ''; }
-  formDraft(key: string): Record<string, string> {
-    this.drafts[key] ??= {};
-    return this.drafts[key];
-  }
-  dropFormDraft(key: string): void { delete this.drafts[key]; }
-  get hasFormDrafts(): boolean {
-    return Object.values(this.drafts).some(fields => Object.values(fields).some(value => value.trim() !== ''));
-  }
+  formDraft(key: string): Record<string, string> { return acquireDraft(this.drafts, key); }
+  /** Reads a form draft without creating it, for a check that must not mutate during render. */
+  peekFormDraft(key: string): Record<string, string> { return peekDraft(this.drafts, key); }
+  dropFormDraft(key: string): void { dropDraft(this.drafts, key); }
+  get hasFormDrafts(): boolean { return hasAnyDraftContent(this.drafts); }
   /** Unsaved local work as plain text: the pending or edited body, then each form draft by name. */
-  recoveryText(): string {
-    const parts: string[] = [];
-    if (this.pending) parts.push(this.pending.body);
-    else if (this.draft) parts.push(this.draft);
-    for (const [key, fields] of Object.entries(this.drafts)) {
-      const filled = Object.entries(fields).filter(([, value]) => value.trim());
-      if (filled.length) parts.push([draftLabel(key), ...filled.map(([name, value]) => `${name}: ${value}`)].join('\n'));
-    }
-    return parts.join('\n\n');
-  }
+  recoveryText(): string { return draftsRecoveryText(this.pending, this.draft, this.drafts); }
 
   mayLeave(): boolean {
     if (this.dirty || this.pending) {
