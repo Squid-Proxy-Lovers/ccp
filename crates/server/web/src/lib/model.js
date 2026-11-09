@@ -18,6 +18,14 @@ export function exactRevision(value) {
   return value;
 }
 
+// Strict lowercase, non-nil UUID. Case-insensitive checks (model.js principalIdentity,
+// drafts.js draftLabel) have different semantics and stay separate.
+export function isStrictUuid(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== '00000000-0000-0000-0000-000000000000';
+}
+
 export class Intent {
   constructor(session, workspace, change, operation = crypto.randomUUID()) {
     this.session = signature(session);
@@ -521,7 +529,7 @@ export class StatusClearIntent {
     const revision = exactRevision(report.revision);
     if (revision === Number.MAX_SAFE_INTEGER) throw new Error('The next status revision exceeds the browser’s exact numeric range. Use the API.');
     for (const id of [workspace.id, report.status_id, report.client_id, operation]) {
-      if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(id)) throw new Error('Status targets require canonical non-nil UUIDs.');
+      if (!isStrictUuid(id)) throw new Error('Status targets require canonical non-nil UUIDs.');
     }
     this.kind = 'status_clear'; this.workspace_id = workspace.id; this.status_id = report.status_id; this.client_id = report.client_id;
     this.path = '/api/v1/admin/work/status/clear';
@@ -541,9 +549,7 @@ export class StatusClearIntent {
   }
 }
 
-const deletionUuid = value => typeof value === 'string'
-  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-  && value !== '00000000-0000-0000-0000-000000000000';
+const deletionUuid = isStrictUuid;
 
 export function canDeleteWorkspace(session, workspace) {
   return workspace?.archived === true && canChangeLifecycle(session, workspace);

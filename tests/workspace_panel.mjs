@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 const source = await readFile(new URL('../crates/server/web/src/lib/model.js', import.meta.url), 'utf8');
-const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire, isStrictUuid} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const draftsSource = await readFile(new URL('../crates/server/web/src/lib/drafts.js', import.meta.url), 'utf8');
 const {acquireDraft, dropDraft, peekDraft, hasDraftContent, hasAnyDraftContent, draftsRecoveryParts, recoveryText, draftLabel} =
@@ -748,6 +748,16 @@ test('existing principal UUIDs are canonical before freezing and verifying a key
     assert.throws(() => principalIdentity('existing', value));
   }
   assert.throws(() => principalIdentity('other', lower));
+});
+
+test('the shared strict UUID check accepts only canonical lowercase, non-nil UUIDs', () => {
+  const canonical = '12345678-1111-2222-3333-123456789abc';
+  assert.equal(isStrictUuid(canonical), true);
+  assert.equal(isStrictUuid(canonical.toUpperCase()), false);
+  assert.equal(isStrictUuid('00000000-0000-0000-0000-000000000000'), false);
+  assert.equal(isStrictUuid('not-a-uuid'), false);
+  assert.equal(isStrictUuid(123), false);
+  assert.equal(isStrictUuid(null), false);
 });
 
 test('a dropped form draft is actually gone; re-acquiring it returns a live, independent object', () => {
