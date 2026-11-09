@@ -136,17 +136,18 @@ expect_success failure bash -c 'exit 7'
 
 class TestIntegrityGateTests(unittest.TestCase):
     BASE = "#[test]\nfn checks() {\n    assert_eq!(1, 1);\n}\n"
+    MJS_BASE = "test('checks', () => {\n  assert.equal(1, 1);\n});\n"
 
-    def run_check(self, change, allow=False):
+    def run_check(self, change, allow=False, name="lib.rs", base=None):
         checker = load_script("check-test-integrity.py")
         git = shutil.which("git")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "lib.rs").write_text(self.BASE)
+            (root / name).write_text(self.BASE if base is None else base)
             # Fixed Git commands initialize and commit only the fixture repository.
             for command in (
                 ["init", "--quiet"],
-                ["add", "lib.rs"],
+                ["add", name],
                 [
                     "-c",
                     "user.name=t",
@@ -161,7 +162,7 @@ class TestIntegrityGateTests(unittest.TestCase):
                 ],
             ):
                 subprocess.run([git, *command], cwd=root, check=True)  # noqa: S603
-            (root / "lib.rs").write_text(change)
+            (root / name).write_text(change)
             environment = {"CCP_ALLOW_TEST_REDUCTION": "1"} if allow else {}
             with (
                 patch.object(checker, "ROOT", root),
@@ -210,6 +211,38 @@ class TestIntegrityGateTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_check(ignored)
         self.run_check(ignored, allow=True)
+
+    def test_mjs_unrelated_additions_cannot_offset_file_reductions(self):
+        checker = load_script("check-test-integrity.py")
+        base = {"original.mjs": checker.count("original.mjs", self.MJS_BASE)}
+        for replacement in ("", "test('checks', () => {});\n"):
+            with self.subTest(replacement=replacement), contextlib.redirect_stdout(io.StringIO()):
+                head = {
+                    "original.mjs": checker.count("original.mjs", replacement),
+                    "unrelated.mjs": checker.count("unrelated.mjs", self.MJS_BASE),
+                }
+                problems = checker.compare(base, head)
+                self.assertIn("original.mjs: assertions 1 -> 0", problems)
+                if not replacement:
+                    self.assertIn("original.mjs: tests 1 -> 0", problems)
+
+    def test_mjs_removed_skip_cannot_offset_a_new_skip_elsewhere(self):
+        checker = load_script("check-test-integrity.py")
+        skipped = self.MJS_BASE.replace("test(", "test.skip(", 1)
+        base = {"original.mjs": checker.count("original.mjs", skipped)}
+        head = {
+            "original.mjs": checker.count("original.mjs", self.MJS_BASE),
+            "unrelated.mjs": checker.count("unrelated.mjs", skipped),
+        }
+        with contextlib.redirect_stdout(io.StringIO()):
+            problems = checker.compare(base, head)
+        self.assertIn("unrelated.mjs: skips 0 -> 1", problems)
+
+    def test_mjs_new_skip_fails_unless_reviewed(self):
+        skipped = self.MJS_BASE.replace("test(", "test.skip(", 1)
+        with self.assertRaises(SystemExit):
+            self.run_check(skipped, name="sample.mjs", base=self.MJS_BASE)
+        self.run_check(skipped, allow=True, name="sample.mjs", base=self.MJS_BASE)
 
 
 class NativeResolverTests(unittest.TestCase):

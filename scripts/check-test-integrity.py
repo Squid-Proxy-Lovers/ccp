@@ -20,11 +20,12 @@ from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_SUFFIXES = (".rs", ".py", ".sh")
+SOURCE_SUFFIXES = (".rs", ".py", ".sh", ".mjs")
 PATTERNS = {
     "tests": {
         ".rs": re.compile(r"#\[(?:tokio::)?test\b"),
         ".py": re.compile(r"^\s*(?:async\s+)?def test_\w+", re.MULTILINE),
+        ".mjs": re.compile(r"(?<![\w.])test(?:\.\w+)?\s*\("),
     },
     "skips": {
         ".rs": re.compile(r"#\[ignore\b"),
@@ -32,11 +33,13 @@ PATTERNS = {
             r"@unittest\.skip|\.skipTest\(|unittest\.expectedFailure|pytest\.mark\.(?:skip|xfail)"
         ),
         ".sh": re.compile(r"^\s*skip\s", re.MULTILINE),
+        ".mjs": re.compile(r"\.skip\s*\(|\{\s*skip\s*:|\.todo\s*\("),
     },
     "assertions": {
         ".rs": re.compile(r"\b(?:debug_)?assert(?:_eq|_ne)?!"),
         ".py": re.compile(r"\bself\.assert\w+\(|^\s*assert\s", re.MULTILINE),
         ".sh": re.compile(r"^\s*expect_(?:success|contains|not_contains)\b", re.MULTILINE),
+        ".mjs": re.compile(r"\bassert\.\w+\s*\("),
     },
 }
 
