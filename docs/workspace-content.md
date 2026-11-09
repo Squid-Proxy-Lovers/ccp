@@ -115,7 +115,8 @@ in an active workspace. Ordinary writers and global admin keys cannot do this.
 The [HTTPS adapter](workspace-content-http.md#archive-or-restore-a-shelf) exposes
 this operation to scoped admins, plus state/summary reads for current readers.
 The normal client and MCP bridge can read shelf state and archive summaries.
-Shelf-management commands in the CLI/MCP and the human panel remain subsequent work.
+The desktop panel can also issue shelf archive/restore commands; CLI/MCP
+shelf-management write commands remain subsequent work.
 
 Archive changes the parent shelf's visibility in one transaction. Its books,
 entries, ownership, metadata, versions and entry-operation receipts stay intact.
@@ -206,11 +207,12 @@ This is logical database-row deletion, with no forensic erasure promise for
 SQLite free pages, journals or separate backups. No existing data is purged by
 the upgrade itself. The
 [HTTPS admin adapter](workspace-content-http.md#permanently-purge-an-archived-entry)
-now exposes this operation. CLI/MCP purge commands, human confirmation screens,
-and whole-shelf/book/workspace purge remain subsequent work.
+now exposes this operation, and the desktop panel provides the matching human
+confirmation screen. CLI/MCP purge commands and whole-shelf/book/workspace
+purge remain subsequent work.
 [Optional timed entry retention](workspace-retention.md) is available through
-explicit scoped HTTPS policy changes and the workspace-mode worker. The
-verified legacy-content conversion gate remains in force.
+explicit scoped HTTPS policy changes, the desktop panel and the workspace-mode
+worker. The verified legacy-content conversion gate remains in force.
 
 ## Schema and legacy data
 

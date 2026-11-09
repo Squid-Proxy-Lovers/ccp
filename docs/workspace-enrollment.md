@@ -135,7 +135,7 @@ Native CLI/MCP compatibility remains separately tested. Actual localhost
 HTTPS/mTLS enrollment, admission, discovery and renewal flows are tested by the
 limited API batch. [Initial client-profile bootstrap](workspace-client.md) is
 tested separately. Client joining, automatic renewal/recovery, context selection,
-MCP integration and the browser UI remain later work.
+MCP integration and the browser UI are also covered separately.
 
 Renewal tests cover current bound-scope capture, changed roles, archived reads,
 revocation/disable/expiry, exact retry, competing and identical concurrent
