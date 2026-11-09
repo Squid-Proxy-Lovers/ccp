@@ -270,10 +270,7 @@ PY
     # Verify every component before replacing any installed binary.
     for asset in "ccp-client" "ccp-server"; do
         if [ "$asset" = "ccp-server" ] && [ "$MODE" = "client" ]; then continue; fi
-        if ! chmod +x "$RELEASE_STAGE/$asset-$platform" || ! cp "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset"; then
-            err "Could not install $asset."
-            exit 1
-        fi
+        publish_binary "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset" || exit 1
     done
     cp "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" || exit 1
 }

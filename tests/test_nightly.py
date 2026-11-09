@@ -696,6 +696,16 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
         self.assertEqual((self.install_dir / "ccp-client").read_bytes(), b"working installation")
         self.assertFalse(any(call[0] == "pip" for call in calls))
 
+    def test_nightly_interrupted_copy_preserves_installed_binary(self):
+        (self.install_dir / "ccp-client").write_bytes(b"working installation")
+        result, calls = self.install(
+            "--client", "--channel", "nightly", "--version", TAG, failure="cp"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual((self.install_dir / "ccp-client").read_bytes(), b"working installation")
+        self.assertEqual(sorted(p.name for p in self.install_dir.iterdir()), ["ccp-client"])
+        self.assertFalse(any(call[0] == "pip" for call in calls))
+
     def test_mcp_failure_does_not_report_completed_installation(self):
         result, _ = self.install(
             "--client", "--channel", "nightly", "--version", TAG, failure="pip"
