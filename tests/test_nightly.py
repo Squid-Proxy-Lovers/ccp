@@ -468,8 +468,7 @@ class InstallerTests(unittest.TestCase):
         stable = dict(release(), tag_name="v0.1.0", prerelease=False)
         (self.fixtures / "releases-1.json").write_text(json.dumps([stable, release(draft=True)]))
         (self.fixtures / "releases-2.json").write_text(json.dumps([release()]))
-        stub = """#!/usr/bin/env python3
-import json, os, pathlib, shutil, sys
+        stub = f"#!{sys.executable}\n" + """import json, os, pathlib, shutil, sys
 from urllib.parse import urlparse, parse_qs
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -584,6 +583,64 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("MCP bridge installed", result.stdout)
         self.assertNotIn("Done.", result.stdout)
+
+    def test_missing_python3_refuses_mcp_bridge_and_completion(self):
+        (self.root / "mcp").mkdir()
+        env = dict(
+            os.environ,
+            HOME=str(self.home_dir),
+            TMPDIR=str(self.root),
+            # No python3 anywhere on PATH; the stub scripts run via an
+            # absolute-path shebang, so they are unaffected.
+            PATH=f"{self.bin_dir}:/bin",
+            NIGHTLY_TEST_LOG=str(self.log),
+            NIGHTLY_TEST_FIXTURES=str(self.fixtures),
+            NIGHTLY_TEST_FAILURE="",
+        )
+        argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), "--client"]
+        result = subprocess.run(  # noqa: S603
+            argv, cwd=self.root, env=env, capture_output=True, text=True, start_new_session=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python 3 is required", result.stdout + result.stderr)
+        self.assertNotIn("Done.", result.stdout)
+
+    def mcp_bridge_fixture(self):
+        (self.root / "mcp").mkdir()
+        mcp_cmd = self.home_dir / ".ccp-mcp/venv/bin/ccp-mcp-server"
+        mcp_cmd.write_text("stub")
+        mcp_cmd.chmod(0o755)
+
+    def test_codex_config_write_failure_is_reported_honestly(self):
+        self.mcp_bridge_fixture()
+        codex_dir = self.home_dir / ".codex"
+        codex_dir.mkdir(parents=True)
+        codex_config = codex_dir / "config.toml"
+        codex_config.write_text("")
+        codex_config.chmod(0o444)
+        try:
+            result, _ = self.install("--client")
+        finally:
+            codex_config.chmod(0o644)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Done.", result.stdout)
+        self.assertNotIn(f"Added to {codex_config}", result.stdout)
+        self.assertIn(f"Could not update {codex_config}", result.stdout)
+
+    def test_cursor_config_create_failure_is_reported_honestly(self):
+        self.mcp_bridge_fixture()
+        cursor_dir = self.home_dir / ".cursor"
+        cursor_dir.mkdir(parents=True)
+        cursor_dir.chmod(0o555)
+        try:
+            result, _ = self.install("--client")
+        finally:
+            cursor_dir.chmod(0o755)
+        cursor_config = cursor_dir / "mcp.json"
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Done.", result.stdout)
+        self.assertNotIn(f"Created {cursor_config}", result.stdout)
+        self.assertIn(f"Could not create {cursor_config}", result.stdout)
 
     def test_source_success_publishes_executable_bytes(self):
         self.source_fixture()

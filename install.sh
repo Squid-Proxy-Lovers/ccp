@@ -320,8 +320,8 @@ ensure_path() {
 
 install_mcp_bridge() {
     if ! command -v python3 &>/dev/null; then
-        warn "Python 3 is required for the MCP bridge. Skipping."
-        return
+        err "Python 3 is required for the MCP bridge."
+        return 1
     fi
 
     local mcp_home="$HOME/.ccp-mcp"
@@ -406,7 +406,7 @@ MCPEOF
                 codex_env="$codex_env
 CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
             fi
-            cat >> "$codex_config" <<TOMLEOF
+            if cat >> "$codex_config" <<TOMLEOF
 
 [mcp_servers.ccp]
 command = "$mcp_cmd"
@@ -414,7 +414,11 @@ command = "$mcp_cmd"
 [mcp_servers.ccp.env]
 $codex_env
 TOMLEOF
-            ok "Added to $codex_config"
+            then
+                ok "Added to $codex_config"
+            else
+                warn "Could not update $codex_config"
+            fi
         else
             ok "$codex_config already configured"
         fi
@@ -451,8 +455,11 @@ with open('$tmp', 'w') as f:
     if [ -d "$HOME/.cursor" ] || [ -d "$HOME/Library/Application Support/Cursor" ]; then
         mkdir -p "$HOME/.cursor"
         if [ ! -f "$cursor_config" ]; then
-            echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"
-            ok "Created $cursor_config"
+            if echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"; then
+                ok "Created $cursor_config"
+            else
+                warn "Could not create $cursor_config"
+            fi
         elif ! python3 -c "import json; cfg=json.load(open('$cursor_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
             local tmp
             tmp="$(mktemp)"
