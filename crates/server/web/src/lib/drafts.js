@@ -60,6 +60,13 @@ export function draftLabels(drafts) {
   return Object.entries(drafts).filter(([, fields]) => hasDraftContent(fields)).map(([key]) => draftLabel(key));
 }
 
+/** A shelf row's badge: "New" wins over a kept book draft under it; neither
+ * mutates anything, so the caller must pass an already-peeked draft. */
+export function shelfBadgeLabel(isNew, bookDraftFields) {
+  if (isNew) return 'New';
+  return hasDraftContent(bookDraftFields) ? 'Book draft kept' : undefined;
+}
+
 /** One recovery block per non-empty draft: its label, then `field: value` lines. */
 export function draftsRecoveryParts(drafts) {
   const parts = [];

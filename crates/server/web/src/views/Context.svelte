@@ -13,8 +13,9 @@
   import Empty from '../lib/ui/Empty.svelte';
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
-  import {hasDraftContent} from '../lib/drafts.js';
+  import {shelfBadgeLabel} from '../lib/drafts.js';
   import {submitDraftCreate} from '../lib/draftCreate.js';
+  import {shelfDraftKey, bookDraftKey} from '../lib/draftKeys.js';
   import {creationConfirmedText} from './context/creationConfirm.js';
   import ListPane from './context/ListPane.svelte';
   import CreateNodeForm from './context/CreateNodeForm.svelte';
@@ -63,9 +64,8 @@
   // A shelf's own create-form shows its kept draft once selected; this badge
   // makes a kept book draft under a shelf discoverable before that shelf is
   // reselected, since Context.svelte remounts with `shelf` reset to null.
-  const shelfBadge = (item: Shelf) => isNew(item) ?? (
-    hasDraftContent(app.peekFormDraft(`context.book.${workspaceId}.${item.id}`)) ? 'Book draft kept' : undefined
-  );
+  // peekFormDraft (not formDraft) so rendering the list never creates a draft.
+  const shelfBadge = (item: Shelf) => shelfBadgeLabel(created.has(item.id), app.peekFormDraft(bookDraftKey(workspaceId, item.id)));
   const paneClass = (pane: Stage) => (stage === pane ? 'flex' : 'hidden md:flex');
 
   // ---- detail -------------------------------------------------------------
@@ -162,12 +162,9 @@
     draftKey: string, submitted: Record<string, string>, reveal: (item: T) => Promise<string>): Promise<boolean> {
     if (!app.mayLeave()) return false;
     const outcome = await submitDraftCreate({
-      write: () => app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}, (data: T) => {
-        app.dropFormDraftIfCurrent(draftKey, submitted);
-        return creationConfirmedText(kind, data);
-      }),
-      dropIfCurrent: () => app.dropFormDraftIfCurrent(draftKey, submitted),
-      isCurrent: () => app.isCurrentFormDraft(draftKey, submitted),
+      drafts: app.drafts, key: draftKey, submitted,
+      request: confirmed => app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}, confirmed),
+      confirmedText: data => creationConfirmedText(kind, data as T),
     });
     if (!outcome.ok) {
       if (app.locked) return false;
@@ -199,7 +196,7 @@
   };
 
   const createShelf = (submitted: Record<string, string>) => create<Shelf>('shelf', 'shelves/create',
-    {name: submitted.name ?? '', description: submitted.description ?? ''}, `context.shelf.${workspaceId}`, submitted, item => {
+    {name: submitted.name ?? '', description: submitted.description ?? ''}, shelfDraftKey(workspaceId), submitted, item => {
     shelf = item; book = null; entry = null; archivedEntries = false;
     books.clear(); entries.clear(); closeDetail();
     stage = 'shelves';
@@ -210,7 +207,7 @@
     const parent = shelf;
     if (!parent) return Promise.resolve(false);
     return create<Book>('book', 'books/create', {shelf_id: parent.id, name: submitted.name ?? '', description: submitted.description ?? ''},
-      `context.book.${workspaceId}.${parent.id}`, submitted, item => {
+      bookDraftKey(workspaceId, parent.id), submitted, item => {
       book = item; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'books';
@@ -319,7 +316,7 @@
       {/snippet}
       {#snippet footer()}
         {#if writable}
-          <CreateNodeForm kind="shelf" draftKey={`context.shelf.${workspaceId}`} oncreate={createShelf} />
+          <CreateNodeForm kind="shelf" draftKey={shelfDraftKey(workspaceId)} oncreate={createShelf} />
         {:else}<p class="text-xs text-muted-foreground">Read-only with this key or workspace state.</p>{/if}
       {/snippet}
     </ListPane>
@@ -335,7 +332,7 @@
         {/snippet}
         {#snippet footer()}
           {#if writable}
-            {#key shelf?.id}<CreateNodeForm kind="book" draftKey={`context.book.${workspaceId}.${shelf?.id}`} oncreate={createBook} />{/key}
+            {#key shelf?.id}<CreateNodeForm kind="book" draftKey={bookDraftKey(workspaceId, shelf?.id ?? '')} oncreate={createBook} />{/key}
           {/if}
         {/snippet}
       </ListPane>

@@ -12,7 +12,7 @@
   import {confirmAction} from '../../lib/ui/confirm.svelte';
   import {hasDraftContent} from '../../lib/drafts.js';
   import {discardDraft} from '../../lib/draftDiscard.js';
-  import {identitySwitchInFlight} from '../../lib/identitySwitch.js';
+  import {formFrozen} from '../../lib/identitySwitch.js';
 
   let {kind, draftKey, oncreate}: {
     kind: 'shelf' | 'book'; draftKey: string;
@@ -31,7 +31,7 @@
   // Reopen the form when returning to a kept draft.
   let open = $state(Boolean(initial.name || initial.description));
   const key = $derived(`create-${kind}`);
-  const frozen = $derived(identitySwitchInFlight(app.busy, app.busyKey));
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, key));
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
@@ -46,9 +46,9 @@
   async function discard() {
     const current = draft;
     const dropped = await discardDraft({
-      isBlocked: () => app.working(key),
+      drafts: app.drafts, key: draftKey, current,
+      isBlocked: () => formFrozen(app.busy, app.busyKey, key),
       confirm: () => confirmAction({title: 'Discard draft?', body: `Discard this local ${kind} draft?`, confirm: 'Discard draft', destructive: true}),
-      drop: () => app.dropFormDraftIfCurrent(draftKey, current),
     });
     if (!dropped) return;
     draft = acquire();
@@ -73,7 +73,7 @@
     </Field>
     <div class="flex justify-end gap-2">
       <Button type="submit" size="sm" busy={app.working(key)} disabled={frozen}>Create {kind}</Button>
-      {#if hasDraftContent(draft)}<Button type="button" variant="ghost" size="sm" onclick={discard} disabled={frozen || app.working(key)}>Discard draft</Button>{/if}
+      {#if hasDraftContent(draft)}<Button type="button" variant="ghost" size="sm" onclick={discard} disabled={frozen}>Discard draft</Button>{/if}
     </div>
   </form>
 </details>

@@ -21,10 +21,11 @@
   import {confirmAction} from '../lib/ui/confirm.svelte';
   import {hasDraftContent} from '../lib/drafts.js';
   import {discardDraft} from '../lib/draftDiscard.js';
-  import {identitySwitchInFlight} from '../lib/identitySwitch.js';
+  import {formFrozen} from '../lib/identitySwitch.js';
+  import {WORKSPACE_DRAFT_KEY} from '../lib/draftKeys.js';
   import type {Workspace} from '../lib/types';
 
-  const FORM = 'create-workspace';
+  const FORM = WORKSPACE_DRAFT_KEY;
 
   function acquire(): Record<string, string> {
     const draft = app.formDraft(FORM);
@@ -33,7 +34,7 @@
     return draft;
   }
   let draft = $state.raw(acquire());
-  const frozen = $derived(identitySwitchInFlight(app.busy, app.busyKey));
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, FORM));
 
   function page(cursor: string | null, key: string) {
     void app.run(async () => { if (app.mayLeave()) await app.loadWorkspaces(cursor); }, key);
@@ -48,7 +49,8 @@
     const submitted = draft;
     void app.run(async () => {
       if (!app.mayLeave()) return;
-      await app.createWorkspace(submitted.name ?? '', submitted.owner ?? '', FORM, submitted);
+      const result = await app.createWorkspace(submitted.name ?? '', submitted.owner ?? '', FORM, submitted);
+      if (!result) return;
       draft = acquire();
       if (!app.locked) notice('Workspace created. Copy its owner key privately before navigating away.', 'success');
     }, FORM);
@@ -57,9 +59,9 @@
   async function discard() {
     const current = draft;
     const dropped = await discardDraft({
-      isBlocked: () => app.working(FORM),
+      drafts: app.drafts, key: FORM, current,
+      isBlocked: () => formFrozen(app.busy, app.busyKey, FORM),
       confirm: () => confirmAction({title: 'Discard draft?', body: 'Discard this local workspace draft?', confirm: 'Discard draft', destructive: true}),
-      drop: () => app.dropFormDraftIfCurrent(FORM, current),
     });
     if (!dropped) return;
     draft = acquire();
@@ -146,7 +148,7 @@
         </Field>
         <div class="flex flex-wrap gap-2">
           <Button type="submit" busy={app.working(FORM)} disabled={frozen}><Plus /> Create workspace</Button>
-          {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard} disabled={frozen || app.working(FORM)}>Discard draft</Button>{/if}
+          {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard} disabled={frozen}>Discard draft</Button>{/if}
         </div>
       </form>
       <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
