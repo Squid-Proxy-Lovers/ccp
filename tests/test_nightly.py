@@ -238,7 +238,7 @@ class ReleaseContractTests(unittest.TestCase):
         value = self.manifest.value()
         self.assertEqual(value["repository"], "Squid-Proxy-Lovers/ccp")
         self.assertEqual(value["source_sha"], SHA)
-        self.assertEqual(value["package_version"], "0.1.0")
+        self.assertEqual(value["package_version"], "0.2.0")
         self.assertEqual(
             value["contracts"],
             {

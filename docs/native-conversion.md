@@ -1,6 +1,6 @@
 # Convert an offline native instance
 
-Unreleased server schema25. `server legacy-convert` converts a complete native
+Server schema25, first released in 0.2.0. `server legacy-convert` converts a complete native
 schema-2 database into a **fresh workspace instance at a new destination**. The
 source directory stays intact for rollback. It does not upgrade an existing
 workspace instance, merge databases or carry native authentication into the new

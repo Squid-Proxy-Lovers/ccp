@@ -66,6 +66,44 @@ jobs:
             target/release/server
             target/release/client
 
+  macos-client:
+    needs: [test]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Build reviewed dependencies
+        run: cargo build --release --workspace --locked
+      - name: Client tests
+        run: cargo test --package client --locked -- --test-threads=1
+      - name: CLI integration
+        run: bash tests/run.sh --skip-build
+      - run: python -m pip install ./mcp
+      - name: Real MCP to CLI to TLS server
+        env:
+          CCP_SERVER_BIN: ${{ github.workspace }}/target/release/server
+          CCP_CLIENT_BIN: ${{ github.workspace }}/target/release/client
+        run: |
+          python tests/mcp_smoke.py
+          python tests/workspace_mcp_smoke.py
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -306,7 +344,7 @@ jobs:
           python tests/workspace_mcp_smoke.py
 
   build:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client]
     strategy:
       matrix:
         include:
@@ -457,7 +495,7 @@ jobs:
           generate_release_notes: true
 
   docker:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client]
     runs-on: ubuntu-latest
     permissions:
       contents: read

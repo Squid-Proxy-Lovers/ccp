@@ -1,13 +1,13 @@
 [package]
 name = "server"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
 anyhow = "1.0"
-ccp-transport = { version = "0.1.0", path = "../transport" }
+ccp-transport = { version = "0.2.0", path = "../transport" }
 clap = { version = "4.5", features = ["derive"] }
 getrandom = "0.2"
 hmac = "0.12"
@@ -15,7 +15,7 @@ httparse = "1.9"
 http-body-util = "0.1.5"
 hyper = { version = "1.12", features = ["http1", "server"] }
 hyper-util = { version = "0.1.21", features = ["tokio"] }
-protocol = { version = "0.1.0", path = "../protocol" }
+protocol = { version = "0.2.0", path = "../protocol" }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 rustls = { version = "0.23.46", features = ["ring"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
