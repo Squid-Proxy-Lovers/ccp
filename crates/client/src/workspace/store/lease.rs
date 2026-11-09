@@ -32,7 +32,10 @@ fn acquire(path: &Path) -> rusqlite::Result<Connection> {
     loop {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         connection.busy_timeout(Duration::ZERO)?;
-        connection.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
+        // rusqlite's typed pragma_update validates the pragma name with its own
+        // query first, which can itself return BUSY under contention; a raw
+        // statement sets the pragma without touching the database at all.
+        connection.execute_batch("PRAGMA locking_mode = EXCLUSIVE;")?;
         match connection.execute_batch("BEGIN EXCLUSIVE; COMMIT;") {
             Ok(()) => return Ok(connection),
             Err(error) => {

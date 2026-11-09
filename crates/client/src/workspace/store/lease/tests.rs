@@ -100,6 +100,32 @@ fn empty_foreign_and_concurrently_changed_formats_are_never_initialized_or_used(
 }
 
 #[test]
+fn opener_retries_through_busy_while_another_connection_holds_the_lease() {
+    let path = database();
+    let holder = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+    holder
+        .pragma_update(None, "locking_mode", "EXCLUSIVE")
+        .unwrap();
+    holder.execute_batch("BEGIN EXCLUSIVE; COMMIT;").unwrap();
+    let opener_path = path.clone();
+    let start = Instant::now();
+    let opener = std::thread::spawn(move || acquire(&opener_path));
+    std::thread::sleep(Duration::from_millis(200));
+    drop(holder);
+    let result = opener.join().unwrap();
+    assert!(
+        result.is_ok(),
+        "opener must retry through contention instead of failing on the first attempt: {:?}",
+        result.err()
+    );
+    assert!(
+        start.elapsed() >= Duration::from_millis(150),
+        "opener returned before the held lease was released; it did not actually wait"
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn a_crash_left_hot_journal_is_recovered_before_validation_and_exclusive_use() {
     let directory = std::env::temp_dir().join(format!("ccp-hot-lease-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();
