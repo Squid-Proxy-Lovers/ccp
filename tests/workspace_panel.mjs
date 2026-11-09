@@ -22,6 +22,9 @@ const {discardDraft} = await import('data:text/javascript;base64,' + Buffer.from
 const identitySwitchSource = await readFile(new URL('../crates/server/web/src/lib/identitySwitch.js', import.meta.url), 'utf8');
 const {confirmIdentitySwitch, identitySwitchInFlight} = await import('data:text/javascript;base64,' + Buffer.from(identitySwitchSource).toString('base64'));
 
+const focusHandoffSource = await readFile(new URL('../crates/server/web/src/lib/focusHandoff.js', import.meta.url), 'utf8');
+const {focusHandoffKey} = await import('data:text/javascript;base64,' + Buffer.from(focusHandoffSource).toString('base64'));
+
 /** A promise whose resolution is controlled from outside, for simulating an in-flight request. */
 function defer() {
   let resolve, reject;
@@ -1017,6 +1020,19 @@ test('confirmIdentitySwitch names the kept drafts and honors the decision either
 
   const stayed = await confirmIdentitySwitch({hasDrafts: () => true, labels: () => labels, confirm: () => Promise.resolve(false)});
   assert.equal(stayed, false);
+});
+
+// ---- the focus-handoff effect's dependency key must change when `activating` does ----
+
+test('focusHandoffKey changes with activating, independently of session, locked, workspace and view', () => {
+  const base = focusHandoffKey({}, false, true, 'ws', 'overview');
+  assert.notEqual(focusHandoffKey({}, false, false, 'ws', 'overview'), base);
+  assert.notEqual(focusHandoffKey(null, false, true, 'ws', 'overview'), base);
+  assert.notEqual(focusHandoffKey({}, true, true, 'ws', 'overview'), base);
+  assert.notEqual(focusHandoffKey({}, false, true, 'other', 'overview'), base);
+  assert.notEqual(focusHandoffKey({}, false, true, 'ws', 'context'), base);
+  assert.equal(focusHandoffKey({}, false, true, 'ws', 'overview'), base);
+  assert.equal(focusHandoffKey({}, false, true, undefined, 'overview'), focusHandoffKey({}, false, true, '', 'overview'));
 });
 
 import './workspace_panel_wiring.mjs';

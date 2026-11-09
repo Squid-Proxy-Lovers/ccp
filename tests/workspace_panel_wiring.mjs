@@ -15,6 +15,7 @@ import {readFile} from 'node:fs/promises';
 const read = path => readFile(new URL(`../crates/server/web/src/${path}`, import.meta.url), 'utf8');
 
 const app = await read('lib/app.svelte.ts');
+const appSvelte = await read('App.svelte');
 const context = await read('views/Context.svelte');
 const workspaces = await read('views/Workspaces.svelte');
 const createNodeForm = await read('views/context/CreateNodeForm.svelte');
@@ -47,6 +48,19 @@ test('[source] app.svelte.ts\'s createWorkspace passes a confirmed callback that
   // confirmed-but-session-lost create still stops offering it as unsaved work.
   const confirmedCallback = createWorkspace.slice(createWorkspace.indexOf('data =>'), createWorkspace.indexOf('}),'));
   assert.match(confirmedCallback, /dropFormDraftIfCurrent\(/);
+});
+
+test('[source] App.svelte computes the focus-handoff key with focusHandoffKey, including activating', () => {
+  assert.match(appSvelte, /from '\.\/lib\/focusHandoff\.js'/);
+  const call = appSvelte.slice(appSvelte.indexOf('focusHandoffKey('), appSvelte.indexOf('focusHandoffKey(') + 120);
+  assert.match(call, /focusHandoffKey\(\s*app\.session,\s*app\.locked,\s*app\.activating,/);
+});
+
+test('[source] App.svelte\'s focus-handoff effect closes a leftover mobile drawer before focusing', () => {
+  const start = appSvelte.indexOf('const key = focusHandoffKey');
+  const effect = appSvelte.slice(start, appSvelte.indexOf('$effect(', start + 1));
+  assert.match(effect, /drawer\s*=\s*false/);
+  assert.match(effect, /getElementById\('page-title'\)\?\.focus\(/);
 });
 
 test('[source] Context.svelte uses creationConfirmedText for the confirmed shelf/book create callback', () => {

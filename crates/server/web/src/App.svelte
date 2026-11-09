@@ -18,6 +18,7 @@
   import DeletionTracker from './views/DeletionTracker.svelte';
   import {app} from './lib/app.svelte';
   import {theme} from './lib/theme.svelte';
+  import {focusHandoffKey} from './lib/focusHandoff.js';
 
   let drawer = $state(false);
   let drawerDialog: HTMLDialogElement | undefined = $state();
@@ -31,7 +32,7 @@
   // that entered the activating state.
   let previous = '';
   $effect(() => {
-    const key = `${app.session ? 'in' : 'out'}:${app.locked}:${app.activating}:${app.workspace?.id ?? ''}:${app.view}`;
+    const key = focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view);
     if (key === previous || !app.booted) return;
     const first = previous === '';
     previous = key;
