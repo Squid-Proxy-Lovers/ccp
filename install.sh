@@ -149,6 +149,10 @@ detect_platform() {
 
 publish_binary() {
     local source="$1" dest="$2"
+    if [ -e "$dest" ] && [ ! -f "$dest" ]; then
+        err "$dest exists and is not a regular file; refusing to overwrite it."
+        return 1
+    fi
     PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
     if ! cp "$source" "$PUBLISH_STAGE" || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
         err "Could not publish $dest."
@@ -162,6 +166,10 @@ publish_binary() {
 download_binary() {
     local name="$1" dest="$2"
     local platform
+    if [ -e "$dest" ] && [ ! -f "$dest" ]; then
+        err "$dest exists and is not a regular file; refusing to overwrite it."
+        return 1
+    fi
     platform="$(detect_platform)"
     local url="https://github.com/${REPO}/releases/latest/download/${name}-${platform}"
 

@@ -517,6 +517,15 @@ elif name in ('cp', 'chmod', 'mv', 'mkdir'):
     subprocess.run([shutil.which(name, path='/usr/bin:/bin'), *args], check=True)
 elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
     sys.exit(1)
+elif name == 'cat':
+    # Every "cat" call in install.sh takes no positional arguments; it
+    # only ever copies a heredoc on stdin to stdout (or a redirected
+    # file). Failing it here simulates a write failure that no amount
+    # of privilege can bypass, unlike a chmod-based permission denial.
+    data = sys.stdin.buffer.read()
+    if os.environ.get('NIGHTLY_TEST_FAILURE') == 'cat':
+        sys.exit(1)
+    sys.stdout.buffer.write(data)
 """
         )
         for command in (
@@ -530,6 +539,7 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
             "mv",
             "mkdir",
             "mktemp",
+            "cat",
         ):
             path = self.bin_dir / command
             path.write_text(stub)
@@ -554,6 +564,30 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
         target = self.install_dir / "ccp-client"
         self.assertEqual(target.read_bytes(), b"ccp-client-linux-x86_64")
         self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+
+    def test_stable_install_refuses_directory_destination(self):
+        (self.root / "mcp").mkdir()
+        target = self.install_dir / "ccp-client"
+        target.mkdir()
+        marker = target / "do-not-move-me"
+        marker.write_text("placeholder")
+        result, _ = self.install("--client")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Done.", result.stdout)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [marker])
+
+    def test_nightly_install_refuses_directory_destination(self):
+        (self.root / "mcp").mkdir()
+        target = self.install_dir / "ccp-client"
+        target.mkdir()
+        marker = target / "do-not-move-me"
+        marker.write_text("placeholder")
+        result, _ = self.install("--client", "--channel", "nightly", "--version", TAG)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Done.", result.stdout)
+        self.assertTrue(target.is_dir())
+        self.assertEqual(list(target.iterdir()), [marker])
 
     def test_stable_failed_transfer_preserves_installed_bytes(self):
         target = self.install_dir / "ccp-client"
@@ -589,18 +623,31 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
 
     def test_missing_python3_refuses_mcp_bridge_and_completion(self):
         (self.root / "mcp").mkdir()
+        bash = shutil.which("bash")
+        self.assertIsNotNone(bash, "bash must exist on the test host")
+        # Build an allowlist directory holding only the few real binaries
+        # install.sh needs before it reaches the python3 check (cat for the
+        # banner heredoc, rm for the post-install cleanup); every other
+        # command it runs is already one of the stub overrides in
+        # self.bin_dir. A denylist approach (e.g. keeping "/bin" on PATH)
+        # is not portable: on Debian/Ubuntu "/bin" is a symlink to
+        # "/usr/bin", which also contains python3.
+        safe_bin = self.root / "no-python-bin"
+        safe_bin.mkdir()
+        for tool in ("cat", "rm"):
+            resolved = shutil.which(tool)
+            self.assertIsNotNone(resolved, f"{tool} must exist on the test host")
+            os.symlink(resolved, safe_bin / tool)
         env = dict(
             os.environ,
             HOME=str(self.home_dir),
             TMPDIR=str(self.root),
-            # No python3 anywhere on PATH; the stub scripts run via an
-            # absolute-path shebang, so they are unaffected.
-            PATH=f"{self.bin_dir}:/bin",
+            PATH=f"{self.bin_dir}:{safe_bin}",
             NIGHTLY_TEST_LOG=str(self.log),
             NIGHTLY_TEST_FIXTURES=str(self.fixtures),
             NIGHTLY_TEST_FAILURE="",
         )
-        argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), "--client"]
+        argv = [bash, str(self.installer), "--install-dir", str(self.install_dir), "--client"]
         result = subprocess.run(  # noqa: S603
             argv, cwd=self.root, env=env, capture_output=True, text=True, start_new_session=True
         )
@@ -615,31 +662,30 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
         mcp_cmd.chmod(0o755)
 
     def test_codex_config_write_failure_is_reported_honestly(self):
+        # A chmod-based permission denial is silently bypassed when the test
+        # runs as root, so this fails the "cat" that appends to the config
+        # instead: a failure no privilege level can route around.
         self.mcp_bridge_fixture()
         codex_dir = self.home_dir / ".codex"
         codex_dir.mkdir(parents=True)
         codex_config = codex_dir / "config.toml"
         codex_config.write_text("")
-        codex_config.chmod(0o444)
-        try:
-            result, _ = self.install("--client")
-        finally:
-            codex_config.chmod(0o644)
+        result, _ = self.install("--client", failure="cat")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Done.", result.stdout)
         self.assertNotIn(f"Added to {codex_config}", result.stdout)
         self.assertIn(f"Could not update {codex_config}", result.stdout)
 
     def test_cursor_config_create_failure_is_reported_honestly(self):
+        # A directory where install.sh expects to create a file fails the
+        # redirect with EISDIR regardless of permissions, unlike a
+        # chmod-based denial that root silently bypasses.
         self.mcp_bridge_fixture()
         cursor_dir = self.home_dir / ".cursor"
         cursor_dir.mkdir(parents=True)
-        cursor_dir.chmod(0o555)
-        try:
-            result, _ = self.install("--client")
-        finally:
-            cursor_dir.chmod(0o755)
         cursor_config = cursor_dir / "mcp.json"
+        cursor_config.mkdir()
+        result, _ = self.install("--client")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Done.", result.stdout)
         self.assertNotIn(f"Created {cursor_config}", result.stdout)
@@ -680,7 +726,9 @@ elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
     def test_nightly_discovery_paginates_and_installs_matching_mcp(self):
         result, calls = self.install("--client", "--channel", "nightly")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.install_dir / "ccp-client").read_bytes(), b"ccp-client-linux-x86_64")
+        target = self.install_dir / "ccp-client"
+        self.assertEqual(target.read_bytes(), b"ccp-client-linux-x86_64")
+        self.assertEqual(target.stat().st_mode & 0o777, 0o755)
         self.assertFalse((self.install_dir / "ccp-server").exists())
         self.assertEqual(
             json.loads((self.install_dir / "ccp-nightly.json").read_text())["source_sha"], SHA
