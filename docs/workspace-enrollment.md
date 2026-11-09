@@ -5,8 +5,11 @@ certificate requests. It creates a registered client identity, credential,
 workspace grant, certificate binding, quota update, retry receipt and audit in
 one SQLite write transaction. The limited [workspace HTTPS API](workspace-http-api.md)
 now exposes new enrollment, existing-client admission and renewal using these
-checks. [Initial client profiles and enrollment](workspace-client.md) are connected;
-Remaining client lifecycle/MCP and browser flows remain later integration work.
+checks. [Client profiles, enrollment, renewal, recovery and
+discovery](workspace-client.md) are connected, along with the [browser
+UI](workspace-browser-session.md). The MCP bridge exposes discovery, content
+and status tools over the same enrolled profile, but has no enrollment tools
+of its own.
 
 ## New admission and retries
 

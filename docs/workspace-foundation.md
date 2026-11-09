@@ -26,8 +26,8 @@ now exposes TLS-only invitation/enrollment/discovery and scoped admin surfaces.
 The [browser-session API](workspace-browser-session.md) provides the authentication
 boundary and a [desktop login/access/context panel](workspace-browser-session.md#use-the-desktop-panel).
 The panel also covers settings, key/admin management, ownership transfer,
-invitations, initial-group enrollment, recovery/readmission and shelf
-archive/purge, as documented there.
+invitations, initial-group enrollment, recovery/readmission, shelf
+archive/restore and purging individual archived entries, as documented there.
 [Content endpoints](workspace-content-http.md) expose hierarchy and entry actions;
 [Shelf archive/restore](workspace-content-http.md#archive-or-restore-a-shelf) is
 also exposed through scoped admin HTTPS, with state/archive summaries available
@@ -87,9 +87,10 @@ Internal certificate enrollment and renewal are documented in
 [Workspace enrollment](workspace-enrollment.md). Their limited
 [workspace HTTPS adapters](workspace-http-api.md) now support actual TLS requests;
 the [workspace client](workspace-client.md) adds trust/profiles/enrollment,
-renewal, recovery and discovery, and the
-[workspace MCP bridge](workspace-mcp.md) exposes the same lifecycle and
-content operations.
+renewal, recovery and discovery. The
+[workspace MCP bridge](workspace-mcp.md) has no enrollment, renewal, recovery
+or administrative tools, but exposes the same discovery plus content and
+status operations over stdio.
 
 A client data action requires a live, unexpired, nonrevoked, unsuperseded credential, an
 enabled client, a live workspace grant bound to that credential, a suitable

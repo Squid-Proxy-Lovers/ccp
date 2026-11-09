@@ -21,8 +21,10 @@ Ordinary current read/write clients and scoped workspace owners/admins can creat
 non-destructive shelves and books. Read-only clients can read them. Global admin
 keys retain cross-workspace reads but cannot borrow their principal's workspace
 write role. Whole-shelf archive/restore uses the separate scoped archive-management
-capability; creating a shelf does not grant that power. Permanent purge remains
-subsequent work.
+capability; creating a shelf does not grant that power. Whole-shelf/book
+permanent purge remains subsequent work;
+[individual entry purge](#permanently-purge-an-archived-entry) is available to
+scoped admins.
 
 Names are trimmed and contain 1–256 UTF-8 bytes without control characters.
 Descriptions preserve their exact text and are limited to 4096 UTF-8 bytes.
@@ -105,7 +107,7 @@ timed retention are separate from ordinary client writes. The
 [internal explicit purge core](#permanently-purge-an-archived-entry) is available
 to scoped admins through the
 [admin HTTPS purge route](workspace-content-http.md#permanently-purge-an-archived-entry).
-CLI/MCP purge commands and timed cleanup remain later work. Manual retention is the default.
+CLI/MCP commands for either remain later work. Manual retention is the default.
 
 ## Recover a whole shelf
 
