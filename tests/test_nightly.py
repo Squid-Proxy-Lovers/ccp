@@ -301,12 +301,12 @@ class ReleaseContractTests(unittest.TestCase):
 
     def test_release_selection_pins_stable_version_or_main_nightly_source(self):
         self.assertEqual(
-            self.contract.source_ref("stable", "v0.1.0", self.manifest), "refs/tags/v0.1.0"
+            self.contract.source_ref("stable", "v0.2.0", self.manifest), "refs/tags/v0.2.0"
         )
         self.assertEqual(self.contract.source_ref("nightly", TAG, self.manifest), "refs/heads/main")
         for channel, tag in [
             ("stable", "latest"),
-            ("stable", "v0.2.0"),
+            ("stable", "v0.3.0"),
             ("nightly", "nightly"),
             ("nightly", TAG.replace("a" * 12, "b" * 12)),
             ("custom", TAG),
@@ -366,13 +366,13 @@ class ReleaseContractTests(unittest.TestCase):
                 patch.object(self.contract.subprocess, "run", side_effect=error),
                 self.assertRaises(ValueError) as caught,
             ):
-                self.contract.verify(self.dist, "stable", "v0.1.0", "linux-x86_64")
+                self.contract.verify(self.dist, "stable", "v0.2.0", "linux-x86_64")
             self.assertNotIn("PRIVATE_VERIFIER", str(caught.exception))
             self.assertIn("no checksum fallback", str(caught.exception))
         self.assertEqual({p.name: p.read_bytes() for p in self.dist.iterdir()}, before)
         (self.dist / self.contract.PROVENANCE).unlink()
         with patch.object(self.contract.subprocess, "run") as verifier, self.assertRaises(OSError):
-            self.contract.verify(self.dist, "stable", "v0.1.0", "linux-x86_64")
+            self.contract.verify(self.dist, "stable", "v0.2.0", "linux-x86_64")
         verifier.assert_not_called()
 
     def test_corrupt_pair_or_symlink_is_refused_even_after_publisher_verification(self):
@@ -414,10 +414,10 @@ class ReleaseContractTests(unittest.TestCase):
         for name in ["client", "server", "protocol"]:
             path = other / "crates" / name / "Cargo.toml"
             path.parent.mkdir(parents=True)
-            path.write_text('version = "0.1.0"\n')
+            path.write_text('version = "0.2.0"\n')
         path = other / "mcp/pyproject.toml"
         path.parent.mkdir()
-        path.write_text('version = "0.2.0"\n')
+        path.write_text('version = "0.3.0"\n')
         with self.assertRaisesRegex(ValueError, "versions differ"):
             self.contract.source_version(other)
         path.write_text("const SOMETHING_ELSE: u32 = 5;\n")
@@ -465,7 +465,7 @@ class InstallerTests(unittest.TestCase):
             )
         )
         # A stable release and a draft are deliberately ahead of the valid nightly.
-        stable = dict(release(), tag_name="v0.1.0", prerelease=False)
+        stable = dict(release(), tag_name="v0.2.0", prerelease=False)
         (self.fixtures / "releases-1.json").write_text(json.dumps([stable, release(draft=True)]))
         (self.fixtures / "releases-2.json").write_text(json.dumps([release()]))
         stub = """#!/usr/bin/env python3

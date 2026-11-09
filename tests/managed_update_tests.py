@@ -53,7 +53,7 @@ class ManagedUpdateTests(unittest.TestCase):
             "pending": False,
             "server": {
                 "instance_id": str(uuid4()),
-                "package_version": "0.1.0",
+                "package_version": "0.2.0",
                 "native_wire": 1,
                 "workspace_api": 1,
             },
@@ -68,7 +68,7 @@ class ManagedUpdateTests(unittest.TestCase):
     def api(self, path):
         self.api_calls.append(path)
         if path.startswith("releases"):
-            return {"tag_name": "v0.1.0", "draft": False, "prerelease": False}
+            return {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
         base, candidate = path.removeprefix("compare/").split("...")
         candidate = candidate.split("?")[0]
         return {
@@ -183,14 +183,14 @@ class ManagedUpdateTests(unittest.TestCase):
         self.assertEqual(policy.load(self.store.root).source_floor, "c" * 40)
 
     def test_exact_tag_pin_retains_authenticated_source_even_when_current_is_manually_changed(self):
-        self.configure(pin="v0.1.0")
+        self.configure(pin="v0.2.0")
         self.assertEqual(policy.load(self.store.root).pin_source, "a" * 40)
         self.f.prepare("b" * 40)
         with self.boundaries(), self.assertRaisesRegex(ValueError, "Pinned release source changed"):
             updater.update(self.store)
         second = self.f.stage()
         self.store.activate(second.generation_id, 1)
-        self.configure(pin="v0.1.0")
+        self.configure(pin="v0.2.0")
         self.assertEqual(policy.load(self.store.root).pin_source, "a" * 40)
 
     def test_disable_during_preflight_revokes_automatic_selection_but_keeps_ready_candidate(self):
@@ -564,7 +564,7 @@ class ManagedNetworkTests(unittest.TestCase):
             self.assertEqual(factory.return_value.open.call_count, 1)
 
         def duplicate(_url, sink, _limit):
-            sink.write(b'{"tag_name":"v0.1.0","tag_name":"v9.0.0"}')
+            sink.write(b'{"tag_name":"v0.2.0","tag_name":"v9.0.0"}')
 
         with patch.object(net, "receive", side_effect=duplicate), self.assertRaises(ValueError):
             net.api("releases/latest")
@@ -584,7 +584,7 @@ class ManagedNetworkTests(unittest.TestCase):
         sink = io.BytesIO()
         with patch.object(net.urllib.request, "build_opener") as factory:
             factory.return_value.open.side_effect = [redirect, Response(b"exact")]
-            net.receive(net.DOWNLOAD + "v0.1.0/ccp-mcp.tar.gz", sink, 5)
+            net.receive(net.DOWNLOAD + "v0.2.0/ccp-mcp.tar.gz", sink, 5)
         self.assertEqual(sink.getvalue(), b"exact")
         calls = factory.return_value.open.call_args_list
         self.assertEqual(len(calls), 2)
@@ -601,11 +601,11 @@ class ManagedNetworkTests(unittest.TestCase):
         )
 
     def test_discovery_honors_channel_pin_bounds_and_never_uses_dates_for_ordering(self):
-        stable = {"tag_name": "v0.1.0", "draft": False, "prerelease": False}
+        stable = {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
         nightly = {"tag_name": "nightly-1900-01-01-" + "b" * 12, "draft": False, "prerelease": True}
         with patch.object(net, "api", return_value=stable) as api:
-            self.assertEqual(release.discover("stable", "v0.1.0"), "v0.1.0")
-            api.assert_called_once_with("releases/tags/v0.1.0")
+            self.assertEqual(release.discover("stable", "v0.2.0"), "v0.2.0")
+            api.assert_called_once_with("releases/tags/v0.2.0")
         with patch.object(net, "api", return_value=[stable, nightly]):
             self.assertEqual(release.discover("nightly", None), nightly["tag_name"])
         with (
@@ -620,7 +620,7 @@ class ManagedNetworkTests(unittest.TestCase):
             {**stable, "draft": 0},
         ]:
             with patch.object(net, "api", return_value=row), self.assertRaises(ValueError):
-                release.discover("stable", "v0.1.0")
+                release.discover("stable", "v0.2.0")
         with (
             patch.object(
                 net,

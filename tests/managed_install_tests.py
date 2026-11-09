@@ -47,7 +47,7 @@ class ManagedInstallTests(unittest.TestCase):
         preflight.assert_not_called()
         self.assertEqual(result["result"], "installed")
         self.assertEqual(result["generation"]["channel"], "stable")
-        self.assertEqual(result["generation"]["tag"], "v0.1.0")
+        self.assertEqual(result["generation"]["tag"], "v0.2.0")
         self.assertEqual(result["pointer"]["revision"], 1)
         self.assertFalse(result["update_policy_created"])
         self.assertFalse(policy.present(self.store.root))
@@ -87,9 +87,9 @@ class ManagedInstallTests(unittest.TestCase):
         self.assertFalse(policy.present(self.store.root))
         self.assertEqual(self.f.config.read_bytes(), config)
         with self.f.boundaries():
-            result = initial.install(self.store, "stable", "v0.1.0", 0)
-        self.assertEqual(result["generation"]["tag"], "v0.1.0")
-        self.assertEqual(self.f.api_calls[-1], "releases/tags/v0.1.0")
+            result = initial.install(self.store, "stable", "v0.2.0", 0)
+        self.assertEqual(result["generation"]["tag"], "v0.2.0")
+        self.assertEqual(self.f.api_calls[-1], "releases/tags/v0.2.0")
 
     def test_unknown_previous_policy_or_invalid_input_never_starts_initial_download(self):
         for channel, tag, revision in [
@@ -119,7 +119,7 @@ class ManagedInstallTests(unittest.TestCase):
 
     def test_concurrent_manual_selection_wins_and_new_ready_candidate_is_retained(self):
         with self.f.boundaries():
-            competing = self.store.stage(self.f.f.inputs, "stable", "v0.1.0")
+            competing = self.store.stage(self.f.f.inputs, "stable", "v0.2.0")
 
         def select_competing(path, manifest):
             fake_build(path, manifest)

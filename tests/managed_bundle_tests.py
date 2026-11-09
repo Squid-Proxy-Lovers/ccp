@@ -81,7 +81,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(contract, "verify_provenance"),
             patch.object(build_module, "build", side_effect=fake_build),
         ):
-            return self.store.stage(self.inputs, "stable", "v0.1.0")
+            return self.store.stage(self.inputs, "stable", "v0.2.0")
 
     def test_private_stage_reopen_activation_noop_and_software_only_rollback(self):
         first = self.stage()
@@ -122,7 +122,7 @@ class ManagedBundleTests(unittest.TestCase):
                 ),
                 self.assertRaises(ValueError),
             ):
-                self.store.stage(self.inputs, "stable", "v0.1.0")
+                self.store.stage(self.inputs, "stable", "v0.2.0")
             self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
             self.assertEqual(
                 [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
@@ -135,7 +135,7 @@ class ManagedBundleTests(unittest.TestCase):
         pointer = (self.store.root / "current.json").read_bytes()
         info = {
             "format": 1,
-            "package_version": "0.1.0",
+            "package_version": "0.2.0",
             "native_wire": 1,
             "workspace_api": 1,
             "client_profile_read_min": 1,
@@ -153,7 +153,7 @@ class ManagedBundleTests(unittest.TestCase):
                 patch.object(build_module, "run", side_effect=replies),
                 self.assertRaises(ValueError),
             ):
-                self.store.stage(self.inputs, "stable", "v0.1.0")
+                self.store.stage(self.inputs, "stable", "v0.2.0")
             self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
             self.assertEqual(
                 [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
@@ -171,7 +171,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(contract, "verify_provenance", side_effect=verified),
             patch.object(build_module, "build", side_effect=fake_build),
         ):
-            generation = self.store.stage(self.inputs, "stable", "v0.1.0")
+            generation = self.store.stage(self.inputs, "stable", "v0.2.0")
         self.assertEqual((generation.path / "release/ccp-mcp.tar.gz").read_bytes(), original)
         self.assertTrue((generation.path / "source/ccp-mcp/src/module.py").exists())
 
@@ -197,7 +197,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module, "build", side_effect=substitute),
             self.assertRaises(ValueError),
         ):
-            self.store.stage(self.inputs, "stable", "v0.1.0")
+            self.store.stage(self.inputs, "stable", "v0.2.0")
         self.assertEqual((self.store.root / "current.json").read_bytes(), before)
         self.assertEqual(
             [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
@@ -213,7 +213,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module, "build") as builder,
             self.assertRaises(ValueError),
         ):
-            self.store.stage(self.inputs, "stable", "v0.1.0")
+            self.store.stage(self.inputs, "stable", "v0.2.0")
         builder.assert_not_called()
         client.unlink()
         client.symlink_to(self.inputs / "build-info.json")
@@ -378,7 +378,7 @@ class ManagedBundleTests(unittest.TestCase):
             self.assertEqual(result["mcp"], str(first.path / "venv/bin/python"))
             self.assertEqual(result["status"]["pointer"]["current"], first.generation_id)
             for writer in [
-                lambda: self.store.stage(self.inputs, "stable", "v0.1.0"),
+                lambda: self.store.stage(self.inputs, "stable", "v0.2.0"),
                 lambda: self.store.activate(second.generation_id, 1),
                 lambda: self.store.rollback(1),
             ]:
@@ -448,7 +448,7 @@ class ManagedBundleTests(unittest.TestCase):
 
         def stage():
             try:
-                results.append(self.store.stage(self.inputs, "stable", "v0.1.0"))
+                results.append(self.store.stage(self.inputs, "stable", "v0.2.0"))
             except (OSError, ValueError, AssertionError) as error:
                 errors.append(str(error))
 
