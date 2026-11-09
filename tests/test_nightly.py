@@ -468,7 +468,9 @@ class InstallerTests(unittest.TestCase):
         stable = dict(release(), tag_name="v0.1.0", prerelease=False)
         (self.fixtures / "releases-1.json").write_text(json.dumps([stable, release(draft=True)]))
         (self.fixtures / "releases-2.json").write_text(json.dumps([release()]))
-        stub = f"#!{sys.executable}\n" + """import json, os, pathlib, shutil, sys
+        stub = (
+            f"#!{sys.executable}\n"
+            + """import json, os, pathlib, shutil, sys
 from urllib.parse import urlparse, parse_qs
 name = pathlib.Path(sys.argv[0]).name
 args = sys.argv[1:]
@@ -516,6 +518,7 @@ elif name in ('cp', 'chmod', 'mv', 'mkdir'):
 elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
     sys.exit(1)
 """
+        )
         for command in (
             "curl",
             "uname",
