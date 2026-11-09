@@ -189,6 +189,11 @@ class App {
 
   async signOut(): Promise<void> {
     if (!this.mayLeave()) return;
+    if (this.hasFormDrafts && !await confirmAction({
+      title: 'Discard local drafts?',
+      body: 'Signing out clears your kept creation drafts. Copy their text first if you need it.',
+      confirm: 'Discard and sign out', destructive: true,
+    })) return;
     const session = await this.verify();
     await wire('/api/v1/admin/session/logout', '{}', session.csrf_token);
     this.reset();
