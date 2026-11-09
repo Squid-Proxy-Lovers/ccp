@@ -14,7 +14,7 @@
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
   import {shelfBadgeLabel} from '../lib/drafts.js';
-  import {submitDraftCreate} from '../lib/draftCreate.js';
+  import {submitDraftCreate, reportCreateFailure} from '../lib/draftCreate.js';
   import {shelfDraftKey, bookDraftKey} from '../lib/draftKeys.js';
   import {creationConfirmedText} from './context/creationConfirm.js';
   import ListPane from './context/ListPane.svelte';
@@ -167,14 +167,7 @@
       confirmedText: data => creationConfirmedText(kind, data as T),
     });
     if (!outcome.ok) {
-      if (app.locked) return false;
-      const error = outcome.error;
-      notice(outcome.keptCurrent
-        ? (outcomeUnknown(error)
-          ? `${message(error)} Your ${kind} draft is kept. Refresh the list to check whether the ${kind} exists before you try again.`
-          : `${message(error)} Your ${kind} draft is kept.`)
-        : `${message(error)} Your original ${kind} draft was discarded or replaced before this finished. Check whether it exists before creating another.`,
-        'destructive');
+      reportCreateFailure({locked: app.locked, outcome, kind, message, outcomeUnknown, notify: notice});
       return false;
     }
     const item = outcome.result as T;

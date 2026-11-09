@@ -5,15 +5,20 @@
   import Button from '../lib/ui/Button.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
   import Field from '../lib/ui/Field.svelte';
+  import Secret from '../lib/ui/Secret.svelte';
   import Logo from './Logo.svelte';
   import DeletionTracker from '../views/DeletionTracker.svelte';
   import {app} from '../lib/app.svelte';
   import {copyText} from '../lib/notify.svelte';
   const recovery = $derived(app.recoveryText());
-  const deletionOnly = $derived(Boolean(app.deletion && (!app.pending || app.pending === app.deletion.reference)));
+  // A create acknowledged right before the session check failed still
+  // surfaces its one-time owner key here; "Sign in again" must not drop it
+  // with no decision, so it counts as something to show and ask about too.
+  const ownerKey = $derived(app.createdWorkspace);
+  const deletionOnly = $derived(Boolean(app.deletion && (!app.pending || app.pending === app.deletion.reference)) && !recovery && !ownerKey);
   const identity = $derived(app.session?.identity);
   const role = $derived(identity?.scope.kind === 'instance' ? 'Instance admin' : `Workspace ${identity?.scope.role ?? ''}`);
-  const label = $derived(deletionOnly ? 'Return to sign in, keep deletion tracking' : recovery ? 'Discard local work and sign in' : 'Sign in again');
+  const label = $derived(deletionOnly ? 'Return to sign in, keep deletion tracking' : (recovery || ownerKey) ? 'Discard local work and sign in' : 'Sign in again');
 </script>
 <div class="relative isolate flex min-h-svh flex-col items-center justify-center gap-10 overflow-hidden bg-background p-6">
   <div class="login-dots pointer-events-none -z-10" aria-hidden="true"></div>
@@ -29,15 +34,19 @@
         Was signed in as <span class="font-medium text-foreground">{identity.principal_name}</span> · {role}
       </p>
     {/if}
-    {#if !recovery && !app.deletion}
+    {#if !recovery && !app.deletion && !ownerKey}
       <Button class="group mt-7 min-w-44" onclick={() => app.discardAndSignIn()}>
         {label} <ArrowRight class="transition-transform duration-200 group-hover:translate-x-0.5" />
       </Button>
     {/if}
   </div>
 
-  {#if recovery || app.deletion}
+  {#if recovery || app.deletion || ownerKey}
     <div class="rise rise-2 w-full max-w-2xl space-y-6 rounded-xl border bg-card/90 p-6 shadow-[0_1px_2px_rgb(0_0_0/0.04),0_12px_32px_-12px_rgb(0_0_0/0.18)] backdrop-blur-sm dark:shadow-[0_0_0_1px_rgb(255_255_255/0.02),0_16px_40px_-16px_rgb(0_0_0/0.9)]">
+      {#if ownerKey}
+        <Secret title={`Workspace owner key for ${ownerKey.workspace_id}`} value={ownerKey.owner_key}
+          ondismiss={() => (app.createdWorkspace = null)} />
+      {/if}
       {#if recovery}
         <div class="space-y-3">
           <Field id="recovery" label="Unsaved local work and original write requests">

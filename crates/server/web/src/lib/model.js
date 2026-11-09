@@ -6,6 +6,16 @@ export const signature = session => JSON.stringify([
   session.identity.scope, session.csrf_token,
 ]);
 
+// The server issues a fresh session token and CSRF on every successful login
+// (crates/server/src/workspace_http/browser/sessions.rs: `issue()` always
+// generates a new random token and HMACs it into a new CSRF, even for the
+// same key), so csrf_token can never be part of an identity comparison: two
+// logins with the same key never produce the same signature(). This compares
+// only the stable identity a session is for.
+export const identityKey = session => JSON.stringify([
+  session.instance_id, session.identity.key_id, session.identity.principal_id, session.identity.scope,
+]);
+
 export function canWrite(session, workspace) {
   return !workspace.archived && session.identity.scope.kind === 'workspace'
     && session.identity.scope.workspace_id === workspace.id;

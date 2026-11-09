@@ -7,10 +7,12 @@
 // - a navigation bumps `generation`, so responses for an older view are dropped;
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
-import {signature, takeFragment, wire, canWrite} from './model.js';
+import {identityKey, takeFragment, wire, canWrite, signature} from './model.js';
 import {acquireDraft, dropDraft, peekDraft, hasAnyDraftContent, draftLabels, recoveryText as draftsRecoveryText} from './drafts.js';
 import {createWorkspaceFlow} from './workspaceCreate.js';
-import {runSignOut, runLogin, runIdentitySwitch, unsavedWorkSummary} from './identitySwitch.js';
+import {runSignOut, runLogin, runIdentitySwitch, hashSwitchBlocked, unsavedWorkSummary} from './identitySwitch.js';
+import {hasUnsavedWork} from './unsavedWork.js';
+import {clearedSessionState} from './sessionReset.js';
 import {notice, clearToasts} from './notify.svelte';
 import {confirmAction} from './ui/confirm.svelte';
 import type {Session, Workspace, PendingWork, View} from './types';
@@ -65,8 +67,9 @@ class App {
   get hasFormDrafts(): boolean { return hasAnyDraftContent(this.drafts); }
   /** True once something would be lost by leaving this identity (sign-out,
    * or signing in as a different key): a kept draft, or an undismissed
-   * one-time owner key. See lib/identitySwitch.js. */
-  get hasUnsavedIdentityWork(): boolean { return this.hasFormDrafts || this.createdWorkspace !== null; }
+   * one-time owner key. See lib/unsavedWork.js -- shared with beforeunload
+   * and LockedView's own discard decision. */
+  get hasUnsavedIdentityWork(): boolean { return hasUnsavedWork({drafts: this.drafts, createdWorkspace: this.createdWorkspace}); }
   /** Unsaved local work as plain text: the pending or edited body, then each form draft by name. */
   recoveryText(): string { return draftsRecoveryText(this.pending, this.draft, this.drafts); }
 
@@ -98,20 +101,7 @@ class App {
   }
 
   reset(): void {
-    this.session = null;
-    this.workspace = null;
-    this.inspection = null;
-    this.workspaces = [];
-    this.workspacesNext = null;
-    this.workspacesAfter = null;
-    this.dirty = false;
-    this.pending = null;
-    this.draft = '';
-    this.drafts = {};
-    this.locked = false;
-    this.lockMessage = '';
-    this.createdWorkspace = null;
-    this.view = 'overview';
+    Object.assign(this, clearedSessionState());
     this.generation += 1;
     clearToasts();
   }
@@ -265,19 +255,26 @@ class App {
    * and lose it, and there is no safe default to ask for instead.
    */
   async createWorkspace(name: string, owner: string, draftKey: string, submitted: Record<string, string>): Promise<CreatedWorkspace | null> {
-    notice('Creating workspace. If the response is lost, refresh the list before repeating.');
     const outcome = await createWorkspaceFlow({
       hasUndismissedOwnerKey: () => this.createdWorkspace !== null,
       drafts: this.drafts, key: draftKey, submitted,
-      request: confirmed => this.request<CreatedWorkspace>('/api/v1/admin/workspaces/create', {
-        name, owner: {kind: 'new_principal', name: owner}, key_expires_at: null,
-      }, confirmed),
-      confirmedText: data => creationRecovery('/api/v1/admin/workspaces/create', data as {workspace_id?: string}),
+      // Only reached once the owner-key block is known not to apply, so this
+      // never fires a "Creating workspace…" toast for a request never sent.
+      request: confirmed => {
+        notice('Creating workspace. If the response is lost, refresh the list before repeating.');
+        return this.request<CreatedWorkspace>('/api/v1/admin/workspaces/create', {
+          name, owner: {kind: 'new_principal', name: owner}, key_expires_at: null,
+        }, confirmed);
+      },
+      // Runs whether the create finishes normally or the session check right
+      // after it fails: an acknowledged create's owner key must surface
+      // either way, never only on the happy path.
+      confirmedText: data => {
+        this.createdWorkspace = data as CreatedWorkspace;
+        return creationRecovery('/api/v1/admin/workspaces/create', data as {workspace_id?: string});
+      },
     });
-    if (outcome.blocked) {
-      notice('Dismiss the previous owner key before creating another workspace.', 'warning');
-      return null;
-    }
+    if (outcome.blocked) return null;
     if (!outcome.ok) throw outcome.error;
     const result = outcome.result as CreatedWorkspace;
     this.createdWorkspace = result;
@@ -300,7 +297,7 @@ class App {
   async boot(): Promise<void> {
     this.#fragmentKey = takeFragment(location, history);
     window.addEventListener('beforeunload', event => {
-      if (this.dirty || this.pending || this.deletion || this.hasFormDrafts || this.createdWorkspace) { event.preventDefault(); event.returnValue = ''; }
+      if (this.dirty || this.pending || this.deletion || this.hasUnsavedIdentityWork) { event.preventDefault(); event.returnValue = ''; }
     });
     window.addEventListener('focus', () => {
       if (this.session && !this.locked && !this.busy) void this.run(() => this.verify(), 'verify');
@@ -324,33 +321,39 @@ class App {
     if (!new URLSearchParams(location.hash.slice(1)).has('key')) return;
     const key = takeFragment(location, history);
     if (!key) { notice('Invalid login fragment. Enter your key manually.', 'warning'); return; }
-    if (this.busy || this.locked || !this.mayLeave()) {
+    if (hashSwitchBlocked(this.busy, this.locked, this.mayLeave())) {
       notice('The login link was removed from this URL. Finish or discard local work, then open your saved link again.', 'warning');
       return;
     }
-    // Runs the request, the identity comparison and the confirm all under
-    // busyKey 'login', so forms stay frozen for the whole decision and a
-    // window-focus verify cannot start while the confirm dialog is open.
+    // Runs the ask (if there is unsaved work), the request and the identity
+    // comparison all under busyKey 'login', so forms stay frozen for the
+    // whole decision and a window-focus verify cannot start while the
+    // confirm dialog is open or claim the single busy slot out from under it.
     void this.run(() => this.hashKeySwitch(key), 'login');
   }
 
   /**
-   * A hash-key sign-in while already signed in. Same key as the current
-   * session: a silent no-op. A different identity: ask before discarding
-   * unsaved work (drafts, an undismissed owner key); declining leaves the
-   * current session, its drafts and its owner key exactly as they were --
-   * runIdentitySwitch never clears or activates before that confirmation.
+   * A hash-key sign-in while already signed in. The key is opaque, so which
+   * identity it holds cannot be known before the request; if there is
+   * unsaved work, this asks BEFORE sending anything, since the server
+   * replaces the session cookie on every successful login (same identity or
+   * not) and a decline must truly send nothing. Once sent, a successful
+   * result is compared by stable identity only (never the CSRF/session
+   * token, which always differs): the same identity adopts the new
+   * session/CSRF and keeps every draft and the owner key; a different one
+   * clears them, then activates. See lib/identitySwitch.js.
    */
   async hashKeySwitch(key: string): Promise<void> {
     const outcome = await runIdentitySwitch({
-      request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
-      sameIdentity: session => Boolean(this.session) && signature(session as Session) === signature(this.session as Session),
       hasUnsavedWork: () => this.hasUnsavedIdentityWork,
       confirm: () => confirmAction({
-        title: 'Discard local work?',
-        body: `Signing in with a different key discards ${unsavedWorkSummary(draftLabels(this.drafts), this.createdWorkspace !== null)}. Copy anything you need first.`,
-        confirm: 'Discard and sign in', destructive: true,
+        title: 'Replace the current session?',
+        body: `Signing in with this link replaces your current session and discards ${unsavedWorkSummary(draftLabels(this.drafts), this.createdWorkspace !== null)}. Copy anything you need first.`,
+        confirm: 'Sign in and discard', destructive: true,
       }),
+      request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
+      sameIdentity: session => Boolean(this.session) && identityKey(session as Session) === identityKey(this.session as Session),
+      adoptSession: session => { this.session = session as Session; },
       clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; },
       activate: session => this.activate(session as Session),
     });
@@ -359,11 +362,17 @@ class App {
   }
 
   async discardAndSignIn(): Promise<void> {
-    if (!this.recoveryText() && !this.deletion) { this.reset(); return; }
-    const deletionOnly = Boolean(this.deletion && (!this.pending || this.pending === this.deletion.reference));
+    const recovery = this.recoveryText();
+    const ownerKey = this.createdWorkspace !== null;
+    if (!recovery && !ownerKey && !this.deletion) { this.reset(); return; }
+    const deletionOnly = Boolean(this.deletion && (!this.pending || this.pending === this.deletion.reference)) && !recovery && !ownerKey;
     const ok = await confirmAction(deletionOnly
       ? {title: 'Return to sign in?', body: 'Deletion tracking stays on this page. Any server request remains uncancelled.', confirm: 'Return to sign in'}
-      : {title: 'Discard local work?', body: 'Any uncertain server write remains uncertain. Copy your work first if you need it.', confirm: 'Discard and sign in', destructive: true});
+      : {
+        title: 'Discard local work?',
+        body: `Any uncertain server write remains uncertain.${ownerKey ? ' This also discards the workspace owner key shown below.' : ''} Copy your work first if you need it.`,
+        confirm: 'Discard and sign in', destructive: true,
+      });
     if (ok) this.reset();
   }
 }

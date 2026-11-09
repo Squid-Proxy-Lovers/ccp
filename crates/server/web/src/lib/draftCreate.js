@@ -35,3 +35,29 @@ export async function submitDraftCreate({drafts, key, submitted, request, confir
   dropDraftIfCurrent(drafts, key, submitted);
   return {ok: true, result};
 }
+
+/**
+ * The message (if any) for a failed shelf/book create. Locked means the
+ * create was confirmed and the page has already moved to the lock screen --
+ * nothing more to say here, the lock message already covers it. Otherwise
+ * the "draft is kept" claim only holds if `keptCurrent` says so; a draft
+ * already discarded or replaced while this request was in flight gets a
+ * different, honest message instead.
+ * @param {object} deps
+ * @param {boolean} deps.locked
+ * @param {{error: unknown, keptCurrent: boolean}} deps.outcome
+ * @param {string} deps.kind
+ * @param {(error: unknown) => string} deps.message
+ * @param {(error: unknown) => boolean} deps.outcomeUnknown
+ * @param {(text: string, tone: 'destructive') => void} deps.notify
+ */
+export function reportCreateFailure({locked, outcome, kind, message, outcomeUnknown, notify}) {
+  if (locked) return;
+  const text = message(outcome.error);
+  notify(outcome.keptCurrent
+    ? (outcomeUnknown(outcome.error)
+      ? `${text} Your ${kind} draft is kept. Refresh the list to check whether the ${kind} exists before you try again.`
+      : `${text} Your ${kind} draft is kept.`)
+    : `${text} Your original ${kind} draft was discarded or replaced before this finished. Check whether it exists before creating another.`,
+    'destructive');
+}

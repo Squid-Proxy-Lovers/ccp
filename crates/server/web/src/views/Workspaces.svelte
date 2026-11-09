@@ -35,6 +35,10 @@
   }
   let draft = $state.raw(acquire());
   const frozen = $derived(formFrozen(app.busy, app.busyKey, FORM));
+  // Creating a second workspace before dismissing the first's one-time owner
+  // key would silently overwrite and lose it; disable instead of asking,
+  // since there is no safe default to offer.
+  const ownerKeyPending = $derived(app.createdWorkspace !== null);
 
   function page(cursor: string | null, key: string) {
     void app.run(async () => { if (app.mayLeave()) await app.loadWorkspaces(cursor); }, key);
@@ -58,13 +62,13 @@
 
   async function discard() {
     const current = draft;
-    const dropped = await discardDraft({
+    const fresh = await discardDraft({
       drafts: app.drafts, key: FORM, current,
       isBlocked: () => formFrozen(app.busy, app.busyKey, FORM),
       confirm: () => confirmAction({title: 'Discard draft?', body: 'Discard this local workspace draft?', confirm: 'Discard draft', destructive: true}),
     });
-    if (!dropped) return;
-    draft = acquire();
+    if (!fresh) return;
+    draft = fresh;
     notice('Local workspace draft discarded.');
     await tick();
     document.getElementById('create-workspace-name')?.focus();
@@ -147,11 +151,15 @@
           <Input id="create-workspace-owner" bind:value={draft.owner} required autocomplete="off" disabled={frozen} />
         </Field>
         <div class="flex flex-wrap gap-2">
-          <Button type="submit" busy={app.working(FORM)} disabled={frozen}><Plus /> Create workspace</Button>
+          <Button type="submit" busy={app.working(FORM)} disabled={frozen || ownerKeyPending}><Plus /> Create workspace</Button>
           {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard} disabled={frozen}>Discard draft</Button>{/if}
         </div>
       </form>
-      <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
+      {#if ownerKeyPending}
+        <p class="mt-3 text-[13px] text-destructive">Dismiss the owner key above before creating another workspace.</p>
+      {:else}
+        <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
+      {/if}
     </CardContent>
   </Card>
 

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
 const source = await readFile(new URL('../crates/server/web/src/lib/model.js', import.meta.url), 'utf8');
-const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire, isStrictUuid} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire, isStrictUuid, identityKey} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const creationConfirmSource = await readFile(new URL('../crates/server/web/src/views/context/creationConfirm.js', import.meta.url), 'utf8');
 const {creationConfirmedText} = await import('data:text/javascript;base64,' + Buffer.from(creationConfirmSource).toString('base64'));
@@ -19,12 +19,14 @@ const {creationConfirmedText} = await import('data:text/javascript;base64,' + Bu
 import {acquireDraft, dropDraft, dropDraftIfCurrent, isCurrentDraft, peekDraft, hasDraftContent, hasAnyDraftContent,
   draftLabels, draftsRecoveryParts, recoveryText, draftLabel, shelfBadgeLabel} from '../crates/server/web/src/lib/drafts.js';
 import {WORKSPACE_DRAFT_KEY, shelfDraftKey, bookDraftKey} from '../crates/server/web/src/lib/draftKeys.js';
-import {submitDraftCreate} from '../crates/server/web/src/lib/draftCreate.js';
+import {submitDraftCreate, reportCreateFailure} from '../crates/server/web/src/lib/draftCreate.js';
 import {discardDraft} from '../crates/server/web/src/lib/draftDiscard.js';
-import {identitySwitchInFlight, formFrozen, unsavedWorkSummary, runSignOut, runLogin, runIdentitySwitch}
+import {identitySwitchInFlight, formFrozen, hashSwitchBlocked, unsavedWorkSummary, runSignOut, runLogin, runIdentitySwitch}
   from '../crates/server/web/src/lib/identitySwitch.js';
 import {createWorkspaceFlow} from '../crates/server/web/src/lib/workspaceCreate.js';
 import {focusHandoffKey} from '../crates/server/web/src/lib/focusHandoff.js';
+import {hasUnsavedWork} from '../crates/server/web/src/lib/unsavedWork.js';
+import {clearedSessionState} from '../crates/server/web/src/lib/sessionReset.js';
 
 /** A promise whose resolution is controlled from outside, for simulating an in-flight request. */
 function defer() {
@@ -781,6 +783,26 @@ test('the shared strict UUID check accepts only canonical lowercase, non-nil UUI
   assert.equal(isStrictUuid(null), false);
 });
 
+test('identityKey ignores the CSRF/session token the real server rotates on every login', () => {
+  const base = session();
+  const rotated = {...base, csrf_token: 'a-completely-different-token'};
+  assert.notEqual(signature(base), signature(rotated), 'signature() still cares about csrf_token (session-drift detection needs that)');
+  assert.equal(identityKey(base), identityKey(rotated), 'identityKey() must not, since the server issues a fresh one on every login, same key or not');
+});
+
+test('identityKey distinguishes instance, key, principal and scope, each independently', () => {
+  const base = session();
+  assert.notEqual(identityKey(base), identityKey({...base, instance_id: 'other-instance'}));
+  for (const mutate of [s => { s.identity = {...s.identity, key_id: 'other'}; },
+    s => { s.identity = {...s.identity, principal_id: 'other'}; },
+    s => { s.identity = {...s.identity, scope: {...s.identity.scope, role: 'admin'}}; }]) {
+    const changed = session(); mutate(changed);
+    assert.notEqual(identityKey(changed), identityKey(base));
+  }
+  const same = session();
+  assert.equal(identityKey(same), identityKey(base));
+});
+
 test('a dropped form draft is actually gone; re-acquiring it returns a live, independent object', () => {
   const drafts = {};
   const first = acquireDraft(drafts, 'create-workspace');
@@ -998,20 +1020,46 @@ test('submitDraftCreate\'s confirmed callback is also identity-safe: a draft rep
   assert.equal(drafts['k'], b, 'B must survive a confirmed callback for the stale submission A');
 });
 
+// ---- the locked-or-failed create message: one place that decides it, not a Svelte branch ----
+
+test('reportCreateFailure says nothing once the page is already locked', () => {
+  let notified = false;
+  reportCreateFailure({
+    locked: true, outcome: {error: new Error('x'), keptCurrent: true}, kind: 'shelf',
+    message: () => 'x', outcomeUnknown: () => true, notify: () => { notified = true; },
+  });
+  assert.equal(notified, false, 'the lock message already covers it');
+});
+
+test('reportCreateFailure names the draft kept only when it actually still is, with the uncertain-outcome hint when relevant', () => {
+  const seen = [];
+  const notify = (text, tone) => seen.push([text, tone]);
+  reportCreateFailure({locked: false, outcome: {error: 'e', keptCurrent: true}, kind: 'shelf', message: () => 'Server unavailable.', outcomeUnknown: () => true, notify});
+  assert.match(seen[0][0], /^Server unavailable\. Your shelf draft is kept\. Refresh the list/);
+  assert.equal(seen[0][1], 'destructive');
+  seen.length = 0;
+  reportCreateFailure({locked: false, outcome: {error: 'e', keptCurrent: true}, kind: 'book', message: () => 'Rejected.', outcomeUnknown: () => false, notify});
+  assert.equal(seen[0][0], 'Rejected. Your book draft is kept.');
+  seen.length = 0;
+  reportCreateFailure({locked: false, outcome: {error: 'e', keptCurrent: false}, kind: 'shelf', message: () => 'Rejected.', outcomeUnknown: () => false, notify});
+  assert.match(seen[0][0], /^Rejected\. Your original shelf draft was discarded or replaced/);
+});
+
 // ---- the discard decision (bug: discard must not race a create, or lose B to a stale A) ----
-// discardDraft also performs its drop directly against `drafts`, not via an
-// injectable "drop" callback: there is no parameter left for a mutation like
-// "discard wipes every draft" to redirect.
+// discardDraft performs the drop AND the re-acquire directly against
+// `drafts`, not via injectable callbacks a mutation could redirect or drop:
+// there is nothing left at the call site responsible for "fetch a fresh
+// draft after a successful discard" -- the returned value already is one.
 
 test('discardDraft refuses while the matching create is already in flight', async () => {
   const drafts = {}; const a = acquireDraft(drafts, 'k'); a.name = 'A';
   let confirmCalled = false;
-  const dropped = await discardDraft({
+  const fresh = await discardDraft({
     drafts, key: 'k', current: a,
     isBlocked: () => true,
     confirm: () => { confirmCalled = true; return Promise.resolve(true); },
   });
-  assert.equal(dropped, false);
+  assert.equal(fresh, null);
   assert.equal(confirmCalled, false, 'blocked discard never even asks');
   assert.equal(drafts['k'], a);
 });
@@ -1028,23 +1076,24 @@ test('discardDraft re-checks after the confirmation dialog closes, in case a cre
   // The user is still looking at the confirm dialog when a create for this form starts.
   blocked = true;
   confirmation.resolve(true);
-  const dropped = await promise;
-  assert.equal(dropped, false);
+  const fresh = await promise;
+  assert.equal(fresh, null);
   assert.equal(drafts['k'], a, 'a create that started while the dialog was open must still win');
 });
 
-test('discardDraft drops exactly the draft it was given, only when confirmed and unblocked, and never another key', async () => {
+test('discardDraft drops and returns a fresh, empty replacement for exactly the draft it was given, never another key', async () => {
   const drafts = {};
   const a = acquireDraft(drafts, 'k'); a.name = 'A';
   const other = acquireDraft(drafts, 'other'); other.name = 'untouched';
-  const dropped = await discardDraft({drafts, key: 'k', current: a, isBlocked: () => false, confirm: () => Promise.resolve(true)});
-  assert.equal(dropped, true);
-  assert.equal('k' in drafts, false);
+  const fresh = await discardDraft({drafts, key: 'k', current: a, isBlocked: () => false, confirm: () => Promise.resolve(true)});
+  assert.notEqual(fresh, a);
+  assert.deepEqual(fresh, {});
+  assert.equal(drafts['k'], fresh, 'the returned draft must already be the live one, not a detached copy');
   assert.equal(drafts['other'], other, 'discarding one form must never touch another');
 
   const b = acquireDraft(drafts, 'k'); b.name = 'B';
   const declined = await discardDraft({drafts, key: 'k', current: b, isBlocked: () => false, confirm: () => Promise.resolve(false)});
-  assert.equal(declined, false);
+  assert.equal(declined, null);
   assert.equal(drafts['k'], b);
 });
 
@@ -1055,8 +1104,8 @@ test('discardDraft is identity-safe: discarding a stale reference never drops th
   const b = acquireDraft(drafts, 'k'); b.name = 'B';
   // `current` is `a`, a stale reference -- as if discard() had been asked
   // about a draft that something else already replaced.
-  const dropped = await discardDraft({drafts, key: 'k', current: a, isBlocked: () => false, confirm: () => Promise.resolve(true)});
-  assert.equal(dropped, false);
+  const fresh = await discardDraft({drafts, key: 'k', current: a, isBlocked: () => false, confirm: () => Promise.resolve(true)});
+  assert.equal(fresh, null);
   assert.equal(drafts['k'], b);
 });
 
@@ -1076,6 +1125,10 @@ test('formFrozen freezes for an identity switch or this form\'s own create, and 
   assert.equal(formFrozen(true, 'create-workspace', 'create-workspace'), true, 'this exact form\'s own create freezes it');
   assert.equal(formFrozen(true, 'create-shelf', 'create-book'), false, 'a different form\'s own create does not');
   assert.equal(formFrozen(false, '', 'create-workspace'), false);
+  // Not busy, but busyKey happens to still equal formKey (a stale value):
+  // must not freeze. Only an actually in-flight busy action (busy === true)
+  // freezes anything.
+  assert.equal(formFrozen(false, 'create-workspace', 'create-workspace'), false);
 });
 
 test('unsavedWorkSummary names kept drafts and an undismissed owner key, together or alone', () => {
@@ -1083,6 +1136,13 @@ test('unsavedWorkSummary names kept drafts and an undismissed owner key, togethe
   assert.equal(unsavedWorkSummary([], true), 'the workspace owner key shown on screen');
   assert.equal(unsavedWorkSummary(['A', 'B'], false), 'A, B');
   assert.equal(unsavedWorkSummary([], false), '');
+});
+
+test('hashSwitchBlocked refuses while busy, locked, or an unresolved pending/dirty edit blocks leaving', () => {
+  assert.equal(hashSwitchBlocked(true, false, true), true, 'busy');
+  assert.equal(hashSwitchBlocked(false, true, true), true, 'locked');
+  assert.equal(hashSwitchBlocked(false, false, false), true, '!mayLeave()');
+  assert.equal(hashSwitchBlocked(false, false, true), false, 'nothing blocking');
 });
 
 // ---- sign-out: confirm (only if there is something to lose), then verify, log out, reset, in that order ----
@@ -1157,46 +1217,91 @@ test('runLogin leaves drafts and the owner key untouched when the request is rej
   assert.equal(activated, false);
 });
 
-// ---- a hash-key sign-in over a live session: same identity is a no-op, a different one asks ----
+// ---- a hash-key sign-in over a live session -------------------------------
+// The key is opaque, so whose identity it holds cannot be known before the
+// request. Whenever there is unsaved work, runIdentitySwitch must ask BEFORE
+// sending anything -- the server replaces the session cookie (and
+// invalidates the old one) on every successful login, same identity or not,
+// so a decline must truly send no request at all. identity is only compared
+// AFTER a successful request, and never via the CSRF/session token (which
+// always differs, even for the same key -- see model.js's identityKey()).
 
-test('runIdentitySwitch is a silent no-op for the identity already signed in', async () => {
-  let confirmCalled = false, cleared = false, activated = false;
+test('runIdentitySwitch asks before sending anything when there is unsaved work, and a decline sends no request', async () => {
+  let requestCalled = false, adopted = false, cleared = false, activated = false;
   const outcome = await runIdentitySwitch({
-    request: async () => 'SESSION',
-    sameIdentity: session => session === 'SESSION',
-    hasUnsavedWork: () => true,
-    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
-    clearForNewIdentity: () => { cleared = true; },
-    activate: async () => { activated = true; },
-  });
-  assert.equal(outcome, 'same');
-  assert.equal(confirmCalled, false);
-  assert.equal(cleared, false);
-  assert.equal(activated, false);
-});
-
-test('runIdentitySwitch asks before a real switch, and a decline leaves the current identity untouched', async () => {
-  let cleared = false, activated = false;
-  const outcome = await runIdentitySwitch({
-    request: async () => 'OTHER_SESSION',
-    sameIdentity: () => false,
     hasUnsavedWork: () => true,
     confirm: () => Promise.resolve(false),
+    request: () => { requestCalled = true; return Promise.resolve('SESSION'); },
+    sameIdentity: () => true,
+    adoptSession: () => { adopted = true; },
     clearForNewIdentity: () => { cleared = true; },
     activate: async () => { activated = true; },
   });
   assert.equal(outcome, 'declined');
+  assert.equal(requestCalled, false, 'a decline must never send the login request at all');
+  assert.equal(adopted, false);
   assert.equal(cleared, false);
   assert.equal(activated, false);
 });
 
-test('runIdentitySwitch switches on confirmation: clears for the new identity, then activates', async () => {
+test('runIdentitySwitch resolves the confirm before ever calling request (order, not just outcome)', async () => {
   const order = [];
+  const confirmation = defer();
+  const promise = runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => { order.push('confirm-start'); return confirmation.promise; },
+    request: async () => { order.push('request'); return 'SESSION'; },
+    sameIdentity: () => true,
+    adoptSession: () => order.push('adopt'),
+    clearForNewIdentity: () => order.push('clear'),
+    activate: async () => order.push('activate'),
+  });
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(order, ['confirm-start'], 'request must not run before the confirm settles');
+  confirmation.resolve(true);
+  await promise;
+  assert.deepEqual(order, ['confirm-start', 'request', 'adopt']);
+});
+
+test('runIdentitySwitch sends the request directly, without asking, when there is nothing to lose', async () => {
+  let confirmCalled = false, requestCalled = false;
   const outcome = await runIdentitySwitch({
-    request: async () => 'OTHER_SESSION',
+    hasUnsavedWork: () => false,
+    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
+    request: async () => { requestCalled = true; return 'SESSION'; },
     sameIdentity: () => false,
+    adoptSession: () => {}, clearForNewIdentity: () => {}, activate: async () => {},
+  });
+  assert.equal(outcome, 'switched');
+  assert.equal(confirmCalled, false);
+  assert.equal(requestCalled, true);
+});
+
+test('runIdentitySwitch adopts the new session/CSRF for the same identity, keeping every draft and the owner key', async () => {
+  let cleared = false, activated = false, adoptedWith = null;
+  const outcome = await runIdentitySwitch({
     hasUnsavedWork: () => true,
     confirm: () => Promise.resolve(true),
+    request: async () => 'NEW_SESSION_SAME_IDENTITY',
+    sameIdentity: session => session === 'NEW_SESSION_SAME_IDENTITY',
+    adoptSession: session => { adoptedWith = session; },
+    clearForNewIdentity: () => { cleared = true; },
+    activate: async () => { activated = true; },
+  });
+  assert.equal(outcome, 'same');
+  assert.equal(adoptedWith, 'NEW_SESSION_SAME_IDENTITY');
+  assert.equal(cleared, false, 'the same identity must never clear drafts or the owner key');
+  assert.equal(activated, false, 'adopting in place must not run the full activate (no workspace/view reset)');
+});
+
+test('runIdentitySwitch clears then activates for a different identity, in that order', async () => {
+  const order = [];
+  const outcome = await runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => Promise.resolve(true),
+    request: async () => 'OTHER_SESSION',
+    sameIdentity: () => false,
+    adoptSession: () => order.push('adopt'),
     clearForNewIdentity: () => order.push('clear'),
     activate: async session => order.push('activate:' + session),
   });
@@ -1204,25 +1309,16 @@ test('runIdentitySwitch switches on confirmation: clears for the new identity, t
   assert.deepEqual(order, ['clear', 'activate:OTHER_SESSION']);
 });
 
-test('runIdentitySwitch switches without asking when there is nothing to lose', async () => {
-  let confirmCalled = false;
-  const outcome = await runIdentitySwitch({
-    request: async () => 'OTHER_SESSION', sameIdentity: () => false, hasUnsavedWork: () => false,
-    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
-    clearForNewIdentity: () => {}, activate: async () => {},
-  });
-  assert.equal(outcome, 'switched');
-  assert.equal(confirmCalled, false);
-});
-
-test('runIdentitySwitch never clears or activates before the request settles (a rejected key changes nothing)', async () => {
-  let cleared = false, activated = false;
+test('runIdentitySwitch leaves drafts, the owner key and the current session untouched when a confirmed request is rejected', async () => {
+  let adopted = false, cleared = false, activated = false;
   await assert.rejects(runIdentitySwitch({
-    request: () => Promise.reject(new Error('bad key')),
-    sameIdentity: () => false, hasUnsavedWork: () => false,
+    hasUnsavedWork: () => true,
     confirm: () => Promise.resolve(true),
-    clearForNewIdentity: () => { cleared = true; }, activate: async () => { activated = true; },
+    request: () => Promise.reject(new Error('bad key')),
+    sameIdentity: () => false,
+    adoptSession: () => { adopted = true; }, clearForNewIdentity: () => { cleared = true; }, activate: async () => { activated = true; },
   }), /bad key/);
+  assert.equal(adopted, false);
   assert.equal(cleared, false);
   assert.equal(activated, false);
 });
@@ -1263,6 +1359,35 @@ test('createWorkspaceFlow behaves exactly like submitDraftCreate once unblocked'
   assert.equal(failed.ok, false);
   assert.equal(failed.blocked, false);
   assert.equal(failed.keptCurrent, true);
+});
+
+// ---- one hasUnsavedWork(state), shared by sign-out, the hash switch, beforeunload and LockedView ----
+
+test('hasUnsavedWork is true for a kept draft, an undismissed owner key, either, neither or both', () => {
+  assert.equal(hasUnsavedWork({drafts: {}, createdWorkspace: null}), false);
+  assert.equal(hasUnsavedWork({drafts: {k: {name: ''}}, createdWorkspace: null}), false, 'a blank draft is not unsaved work');
+  assert.equal(hasUnsavedWork({drafts: {k: {name: 'Research'}}, createdWorkspace: null}), true);
+  assert.equal(hasUnsavedWork({drafts: {}, createdWorkspace: {workspace_id: 'w', owner_key: 'k'}}), true);
+  assert.equal(hasUnsavedWork({drafts: {k: {name: 'Research'}}, createdWorkspace: {workspace_id: 'w', owner_key: 'k'}}), true);
+});
+
+// ---- what signing out, or activating a new identity, actually clears ----
+
+test('clearedSessionState clears the session, every draft, the owner key, and returns to overview', () => {
+  const cleared = clearedSessionState();
+  assert.deepEqual(cleared, {
+    session: null, workspace: null, inspection: null, workspaces: [], workspacesNext: null, workspacesAfter: null,
+    dirty: false, pending: null, draft: '', drafts: {}, locked: false, lockMessage: '', createdWorkspace: null, view: 'overview',
+  });
+});
+
+test('clearedSessionState returns fresh objects each time (no shared mutable state across resets)', () => {
+  const first = clearedSessionState();
+  first.drafts.leaked = {name: 'should not appear in the next reset'};
+  first.workspaces.push('should not appear either');
+  const second = clearedSessionState();
+  assert.deepEqual(second.drafts, {});
+  assert.deepEqual(second.workspaces, []);
 });
 
 // ---- the focus-handoff effect's dependency key must change when `activating` does ----

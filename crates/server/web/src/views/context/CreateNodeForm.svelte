@@ -45,13 +45,13 @@
 
   async function discard() {
     const current = draft;
-    const dropped = await discardDraft({
+    const fresh = await discardDraft({
       drafts: app.drafts, key: draftKey, current,
       isBlocked: () => formFrozen(app.busy, app.busyKey, key),
       confirm: () => confirmAction({title: 'Discard draft?', body: `Discard this local ${kind} draft?`, confirm: 'Discard draft', destructive: true}),
     });
-    if (!dropped) return;
-    draft = acquire();
+    if (!fresh) return;
+    draft = fresh;
     notice(`Local ${kind} draft discarded.`);
     await tick();
     document.getElementById(`create-${kind}-name`)?.focus();

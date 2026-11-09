@@ -23,6 +23,13 @@ export function formFrozen(busy, busyKey, formKey) {
   return identitySwitchInFlight(busy, busyKey) || (busy && busyKey === formKey);
 }
 
+/** The hash-key sign-in guard: refuse while another action is busy, the page
+ * is locked, or there is an unresolved pending/dirty edit mayLeave() already
+ * guards navigation on. */
+export function hashSwitchBlocked(busy, locked, mayLeave) {
+  return busy || locked || !mayLeave;
+}
+
 /** Plain-text summary of what a decline would keep and a confirm would lose. */
 export function unsavedWorkSummary(draftLabelList, hasOwnerKey) {
   const parts = [...draftLabelList];
@@ -68,25 +75,34 @@ export async function runLogin({request, clearForNewIdentity, activate}) {
 }
 
 /**
- * A hash-key sign-in while already signed in: request the prospective
- * session first. If it is the same identity already signed in, this is a
- * no-op -- nothing is asked, nothing is cleared. Otherwise ask before
- * discarding unsaved work, and only on confirmation clear it and activate
- * the new session; declining leaves the current session, its drafts and its
- * owner key exactly as they were.
+ * A hash-key sign-in while already signed in. The app cannot know which
+ * identity a link holds before the request -- keys are opaque -- so if
+ * there is unsaved work, it asks BEFORE sending anything, and a decline
+ * sends no request at all: the server replaces the session cookie (and
+ * invalidates the old one) on every successful login, same identity or not,
+ * so the only way to honestly leave the current session untouched on
+ * decline is to never ask it to log in.
+ *
+ * Once accepted (or there was nothing to lose), the request is sent and the
+ * result compared by stable identity only (never the CSRF/session token,
+ * which always differs). The same identity adopts the new session/CSRF in
+ * place, keeping every draft and the owner key exactly as they were, since
+ * nothing about who is signed in actually changed. A different identity
+ * clears them, then activates.
  * @param {object} deps
- * @param {() => Promise<unknown>} deps.request
- * @param {(session: unknown) => boolean} deps.sameIdentity
  * @param {() => boolean} deps.hasUnsavedWork
  * @param {() => Promise<boolean>} deps.confirm
+ * @param {() => Promise<unknown>} deps.request
+ * @param {(session: unknown) => boolean} deps.sameIdentity
+ * @param {(session: unknown) => void} deps.adoptSession
  * @param {() => void} deps.clearForNewIdentity
  * @param {(session: unknown) => Promise<void>} deps.activate
  * @returns {Promise<'same' | 'declined' | 'switched'>}
  */
-export async function runIdentitySwitch({request, sameIdentity, hasUnsavedWork, confirm, clearForNewIdentity, activate}) {
-  const session = await request();
-  if (sameIdentity(session)) return 'same';
+export async function runIdentitySwitch({hasUnsavedWork, confirm, request, sameIdentity, adoptSession, clearForNewIdentity, activate}) {
   if (hasUnsavedWork() && !await confirm()) return 'declined';
+  const session = await request();
+  if (sameIdentity(session)) { adoptSession(session); return 'same'; }
   clearForNewIdentity();
   await activate(session);
   return 'switched';
