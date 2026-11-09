@@ -39,6 +39,10 @@ async fn recovered_read_only_client_resolves_its_expired_original_operations_wit
         identity: reply["data"].clone(),
     };
     assert_eq!(recovered.identity["client_id"], user.identity["client_id"]);
+    code(
+        &call(&f, &user, "entries/resolve-operation", &pending_target, 403).await,
+        "forbidden",
+    );
     f.db()
         .execute(
             "UPDATE ccp_credentials SET expires_at=?1 WHERE id=?2",
