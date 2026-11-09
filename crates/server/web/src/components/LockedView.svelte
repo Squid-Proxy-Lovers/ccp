@@ -22,7 +22,7 @@
       <div class="login-halo pointer-events-none absolute -inset-10 -z-10" aria-hidden="true"></div>
       <Logo class="size-16 drop-shadow-[0_8px_18px_rgb(0_0_0/0.18)]" closed />
     </div>
-    <h1 id="page-title" tabindex="-1" class="text-2xl font-semibold tracking-tight outline-none">Session ended</h1>
+    <h1 id="page-title" tabindex="-1" class="rounded-sm text-2xl font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring">Session ended</h1>
     <p role="alert" class="mt-2 text-sm text-pretty text-muted-foreground">{app.lockMessage}</p>
     {#if identity}
       <p class="mt-4 text-xs text-muted-foreground">

@@ -16,6 +16,8 @@ const read = path => readFile(new URL(`../crates/server/web/src/${path}`, import
 
 const app = await read('lib/app.svelte.ts');
 const appSvelte = await read('App.svelte');
+const pageHeader = await read('components/PageHeader.svelte');
+const lockedView = await read('components/LockedView.svelte');
 const context = await read('views/Context.svelte');
 const workspaces = await read('views/Workspaces.svelte');
 const createNodeForm = await read('views/context/CreateNodeForm.svelte');
@@ -61,6 +63,11 @@ test('[source] App.svelte\'s focus-handoff effect closes a leftover mobile drawe
   const effect = appSvelte.slice(start, appSvelte.indexOf('$effect(', start + 1));
   assert.match(effect, /drawer\s*=\s*false/);
   assert.match(effect, /getElementById\('page-title'\)\?\.focus\(/);
+});
+
+test('[source] LockedView gives its programmatically-focused title a visible, mouse-free ring, like PageHeader', () => {
+  assert.match(pageHeader, /id="page-title"[^>]*focus-visible:ring-2 focus-visible:ring-ring/);
+  assert.match(lockedView, /id="page-title"[^>]*focus-visible:ring-2 focus-visible:ring-ring/);
 });
 
 test('[source] Context.svelte uses creationConfirmedText for the confirmed shelf/book create callback', () => {
