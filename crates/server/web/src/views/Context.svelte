@@ -14,6 +14,7 @@
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
   import {hasDraftContent} from '../lib/drafts.js';
+  import {submitDraftCreate} from '../lib/draftCreate.js';
   import {creationConfirmedText} from './context/creationConfirm.js';
   import ListPane from './context/ListPane.svelte';
   import CreateNodeForm from './context/CreateNodeForm.svelte';
@@ -153,24 +154,33 @@
   // a failed refresh never turns a confirmed create into an unknown outcome.
   // If the session check after the write fails, the create is still known to have
   // happened: the lock message says so (like entryWrite.ts) and the draft that
-  // would otherwise be offered back as unsaved work is dropped.
+  // would otherwise be offered back as unsaved work is dropped. submitDraftCreate
+  // (lib/draftCreate.js) makes both the drop and the "draft is kept" claim below
+  // identity-safe: a draft discarded or replaced while this request was in
+  // flight is never the one dropped, and never the one claimed "kept".
   async function create<T extends Shelf>(kind: 'shelf' | 'book', path: string, body: Record<string, unknown>,
-    draftKey: string, reveal: (item: T) => Promise<string>): Promise<boolean> {
+    draftKey: string, submitted: Record<string, string>, reveal: (item: T) => Promise<string>): Promise<boolean> {
     if (!app.mayLeave()) return false;
-    let item: T;
-    try {
-      item = await app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}, (data: T) => {
-        app.dropFormDraft(draftKey);
+    const outcome = await submitDraftCreate({
+      write: () => app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}, (data: T) => {
+        app.dropFormDraftIfCurrent(draftKey, submitted);
         return creationConfirmedText(kind, data);
-      });
-    }
-    catch (error) {
+      }),
+      dropIfCurrent: () => app.dropFormDraftIfCurrent(draftKey, submitted),
+      isCurrent: () => app.isCurrentFormDraft(draftKey, submitted),
+    });
+    if (!outcome.ok) {
       if (app.locked) return false;
-      notice(outcomeUnknown(error)
-        ? `${message(error)} Your ${kind} draft is kept. Refresh the list to check whether the ${kind} exists before you try again.`
-        : `${message(error)} Your ${kind} draft is kept.`, 'destructive');
+      const error = outcome.error;
+      notice(outcome.keptCurrent
+        ? (outcomeUnknown(error)
+          ? `${message(error)} Your ${kind} draft is kept. Refresh the list to check whether the ${kind} exists before you try again.`
+          : `${message(error)} Your ${kind} draft is kept.`)
+        : `${message(error)} Your original ${kind} draft was discarded or replaced before this finished. Check whether it exists before creating another.`,
+        'destructive');
       return false;
     }
+    const item = outcome.result as T;
     created = new Set([...created, item.id]);
     const failure = await reveal(item);
     if (failure) notice(`${kind === 'shelf' ? 'Shelf' : 'Book'} “${item.name}” created and selected. The list refresh failed: ${failure} Use refresh to try again.`, 'warning');
@@ -188,19 +198,19 @@
     return failure;
   };
 
-  const createShelf = (name: string, description: string) => create<Shelf>('shelf', 'shelves/create', {name, description},
-    `context.shelf.${workspaceId}`, item => {
+  const createShelf = (submitted: Record<string, string>) => create<Shelf>('shelf', 'shelves/create',
+    {name: submitted.name ?? '', description: submitted.description ?? ''}, `context.shelf.${workspaceId}`, submitted, item => {
     shelf = item; book = null; entry = null; archivedEntries = false;
     books.clear(); entries.clear(); closeDetail();
     stage = 'shelves';
     return refreshed(() => shelves.reload(), () => books.first());
   });
 
-  const createBook = (name: string, description: string) => {
+  const createBook = (submitted: Record<string, string>) => {
     const parent = shelf;
     if (!parent) return Promise.resolve(false);
-    return create<Book>('book', 'books/create', {shelf_id: parent.id, name, description},
-      `context.book.${workspaceId}.${parent.id}`, item => {
+    return create<Book>('book', 'books/create', {shelf_id: parent.id, name: submitted.name ?? '', description: submitted.description ?? ''},
+      `context.book.${workspaceId}.${parent.id}`, submitted, item => {
       book = item; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'books';

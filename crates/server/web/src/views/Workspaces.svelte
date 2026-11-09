@@ -2,6 +2,7 @@
   import WorkspaceAvatar from '../components/WorkspaceAvatar.svelte';
   // Instance-admin workspace list, paged 32 at a time, with workspace creation.
   // The new owner key is shown once and kept only in memory until dismissed.
+  import {tick} from 'svelte';
   import {Building2, ChevronLeft, ChevronRight, Plus} from '@lucide/svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
@@ -19,6 +20,8 @@
   import {notice} from '../lib/notify.svelte';
   import {confirmAction} from '../lib/ui/confirm.svelte';
   import {hasDraftContent} from '../lib/drafts.js';
+  import {discardDraft} from '../lib/draftDiscard.js';
+  import {identitySwitchInFlight} from '../lib/identitySwitch.js';
   import type {Workspace} from '../lib/types';
 
   const FORM = 'create-workspace';
@@ -30,6 +33,7 @@
     return draft;
   }
   let draft = $state.raw(acquire());
+  const frozen = $derived(identitySwitchInFlight(app.busy, app.busyKey));
 
   function page(cursor: string | null, key: string) {
     void app.run(async () => { if (app.mayLeave()) await app.loadWorkspaces(cursor); }, key);
@@ -41,20 +45,27 @@
 
   function create(event: SubmitEvent) {
     event.preventDefault();
+    const submitted = draft;
     void app.run(async () => {
       if (!app.mayLeave()) return;
-      await app.createWorkspace(draft.name ?? '', draft.owner ?? '');
-      app.dropFormDraft(FORM);
+      await app.createWorkspace(submitted.name ?? '', submitted.owner ?? '', FORM, submitted);
       draft = acquire();
       if (!app.locked) notice('Workspace created. Copy its owner key privately before navigating away.', 'success');
     }, FORM);
   }
 
   async function discard() {
-    if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local workspace draft?', confirm: 'Discard draft', destructive: true})) return;
-    app.dropFormDraft(FORM);
+    const current = draft;
+    const dropped = await discardDraft({
+      isBlocked: () => app.working(FORM),
+      confirm: () => confirmAction({title: 'Discard draft?', body: 'Discard this local workspace draft?', confirm: 'Discard draft', destructive: true}),
+      drop: () => app.dropFormDraftIfCurrent(FORM, current),
+    });
+    if (!dropped) return;
     draft = acquire();
     notice('Local workspace draft discarded.');
+    await tick();
+    document.getElementById('create-workspace-name')?.focus();
   }
 </script>
 
@@ -128,14 +139,14 @@
     <CardContent>
       <form class="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end" onsubmit={create}>
         <Field id="create-workspace-name" label="Workspace name">
-          <Input id="create-workspace-name" bind:value={draft.name} required autocomplete="off" />
+          <Input id="create-workspace-name" bind:value={draft.name} required autocomplete="off" disabled={frozen} />
         </Field>
         <Field id="create-workspace-owner" label="New owner principal name">
-          <Input id="create-workspace-owner" bind:value={draft.owner} required autocomplete="off" />
+          <Input id="create-workspace-owner" bind:value={draft.owner} required autocomplete="off" disabled={frozen} />
         </Field>
         <div class="flex flex-wrap gap-2">
-          <Button type="submit" busy={app.working(FORM)}><Plus /> Create workspace</Button>
-          {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard}>Discard draft</Button>{/if}
+          <Button type="submit" busy={app.working(FORM)} disabled={frozen}><Plus /> Create workspace</Button>
+          {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard} disabled={frozen || app.working(FORM)}>Discard draft</Button>{/if}
         </div>
       </form>
       <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>

@@ -6,11 +6,28 @@ const source = await readFile(new URL('../crates/server/web/src/lib/model.js', i
 const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire, isStrictUuid} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 const draftsSource = await readFile(new URL('../crates/server/web/src/lib/drafts.js', import.meta.url), 'utf8');
-const {acquireDraft, dropDraft, peekDraft, hasDraftContent, hasAnyDraftContent, draftsRecoveryParts, recoveryText, draftLabel} =
+const {acquireDraft, dropDraft, dropDraftIfCurrent, isCurrentDraft, peekDraft, hasDraftContent, hasAnyDraftContent,
+  draftLabels, draftsRecoveryParts, recoveryText, draftLabel} =
   await import('data:text/javascript;base64,' + Buffer.from(draftsSource).toString('base64'));
 
 const creationConfirmSource = await readFile(new URL('../crates/server/web/src/views/context/creationConfirm.js', import.meta.url), 'utf8');
 const {creationConfirmedText} = await import('data:text/javascript;base64,' + Buffer.from(creationConfirmSource).toString('base64'));
+
+const draftCreateSource = await readFile(new URL('../crates/server/web/src/lib/draftCreate.js', import.meta.url), 'utf8');
+const {submitDraftCreate} = await import('data:text/javascript;base64,' + Buffer.from(draftCreateSource).toString('base64'));
+
+const draftDiscardSource = await readFile(new URL('../crates/server/web/src/lib/draftDiscard.js', import.meta.url), 'utf8');
+const {discardDraft} = await import('data:text/javascript;base64,' + Buffer.from(draftDiscardSource).toString('base64'));
+
+const identitySwitchSource = await readFile(new URL('../crates/server/web/src/lib/identitySwitch.js', import.meta.url), 'utf8');
+const {confirmIdentitySwitch, identitySwitchInFlight} = await import('data:text/javascript;base64,' + Buffer.from(identitySwitchSource).toString('base64'));
+
+/** A promise whose resolution is controlled from outside, for simulating an in-flight request. */
+function defer() {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return {promise, resolve, reject};
+}
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -833,3 +850,173 @@ test('a confirmed shelf or book create reads like entryWrite.ts: confirmed, name
   const book = creationConfirmedText('book', {id: 'book-1', name: 'Notes'});
   assert.match(book, /^Book “Notes” creation confirmed \(id book-1\)/);
 });
+
+test('dropping one form draft never touches another form\'s draft', () => {
+  const drafts = {};
+  acquireDraft(drafts, 'create-workspace').name = 'Workspace draft';
+  const book = acquireDraft(drafts, 'context.book.ws.shelf');
+  book.name = 'Book draft';
+  dropDraft(drafts, 'create-workspace');
+  assert.equal('create-workspace' in drafts, false);
+  assert.equal(drafts['context.book.ws.shelf'], book);
+  assert.equal(drafts['context.book.ws.shelf'].name, 'Book draft');
+});
+
+test('dropDraftIfCurrent and isCurrentDraft only act on the exact object they were given', () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  assert.equal(isCurrentDraft(drafts, 'k', a), true);
+  const stranger = {name: 'not the live one'};
+  assert.equal(isCurrentDraft(drafts, 'k', stranger), false);
+  assert.equal(dropDraftIfCurrent(drafts, 'k', stranger), false);
+  assert.equal(drafts['k'], a, 'a mismatched identity must not drop the real draft');
+  assert.equal(dropDraftIfCurrent(drafts, 'k', a), true);
+  assert.equal('k' in drafts, false);
+  assert.equal(dropDraftIfCurrent(drafts, 'k', a), false, 'dropping an already-gone draft reports nothing to drop');
+});
+
+test('draftLabels names only the drafts that currently have content', () => {
+  const drafts = {'create-workspace': {name: 'Probe', owner: ''}, 'context.shelf.ws': {name: '', description: '  '}};
+  assert.deepEqual(draftLabels(drafts), ['Create workspace draft']);
+  assert.deepEqual(draftLabels({}), []);
+});
+
+// ---- the create-then-drop flow (bug: a replacement draft erased by a stale create) ----
+
+test('submitDraftCreate drops the submitted draft on success, not whatever replaced it', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const write = defer();
+  const outcomePromise = submitDraftCreate({
+    write: () => write.promise,
+    dropIfCurrent: () => dropDraftIfCurrent(drafts, 'k', a),
+    isCurrent: () => isCurrentDraft(drafts, 'k', a),
+  });
+  // While the create for A is still in flight, discard it and type a fresh draft B.
+  dropDraft(drafts, 'k');
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  write.resolve({id: 'created-a'});
+  const outcome = await outcomePromise;
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(outcome.result, {id: 'created-a'});
+  // B must survive: the stale completion for A must not erase it.
+  assert.equal(drafts['k'], b);
+  assert.equal(drafts['k'].name, 'B');
+});
+
+test('submitDraftCreate drops the submitted draft on success when nothing raced it', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const outcome = await submitDraftCreate({
+    write: async () => ({id: 'created-a'}),
+    dropIfCurrent: () => dropDraftIfCurrent(drafts, 'k', a),
+    isCurrent: () => isCurrentDraft(drafts, 'k', a),
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal('k' in drafts, false);
+});
+
+test('submitDraftCreate reports whether a failed create\'s draft is still the one it submitted', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const untouched = await submitDraftCreate({
+    write: async () => { throw new Error('503'); },
+    dropIfCurrent: () => dropDraftIfCurrent(drafts, 'k', a),
+    isCurrent: () => isCurrentDraft(drafts, 'k', a),
+  });
+  assert.equal(untouched.ok, false);
+  assert.equal(untouched.keptCurrent, true, 'nothing raced it, so claiming the draft is kept is true');
+  assert.equal(drafts['k'], a, 'a failed write never drops the draft');
+
+  // Now repeat with a discard racing the same failing write.
+  const write = defer();
+  const racedPromise = submitDraftCreate({
+    write: () => write.promise,
+    dropIfCurrent: () => dropDraftIfCurrent(drafts, 'k', a),
+    isCurrent: () => isCurrentDraft(drafts, 'k', a),
+  });
+  dropDraft(drafts, 'k');
+  write.reject(new Error('503'));
+  const raced = await racedPromise;
+  assert.equal(raced.ok, false);
+  assert.equal(raced.keptCurrent, false, 'the draft was already discarded, so it is false to call it kept');
+});
+
+// ---- the discard decision (bug: discard must not race a create, or lose B to a stale A) ----
+
+test('discardDraft refuses while the matching create is already in flight', async () => {
+  let confirmCalled = false;
+  const dropped = await discardDraft({
+    isBlocked: () => true,
+    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
+    drop: () => { throw new Error('must not drop while blocked'); },
+  });
+  assert.equal(dropped, false);
+  assert.equal(confirmCalled, false, 'blocked discard never even asks');
+});
+
+test('discardDraft re-checks after the confirmation dialog closes, in case a create started meanwhile', async () => {
+  let blocked = false;
+  const confirmation = defer();
+  let dropCalled = false;
+  const promise = discardDraft({
+    isBlocked: () => blocked,
+    confirm: () => confirmation.promise,
+    drop: () => { dropCalled = true; return true; },
+  });
+  // The user is still looking at the confirm dialog when a create for this form starts.
+  blocked = true;
+  confirmation.resolve(true);
+  const dropped = await promise;
+  assert.equal(dropped, false);
+  assert.equal(dropCalled, false, 'a create that started while the dialog was open must still win');
+});
+
+test('discardDraft drops exactly the draft it was given, and only when confirmed and unblocked', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const dropped = await discardDraft({
+    isBlocked: () => false,
+    confirm: () => Promise.resolve(true),
+    drop: () => dropDraftIfCurrent(drafts, 'k', a),
+  });
+  assert.equal(dropped, true);
+  assert.equal('k' in drafts, false);
+
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  const declined = await discardDraft({isBlocked: () => false, confirm: () => Promise.resolve(false), drop: () => { throw new Error('must not drop'); }});
+  assert.equal(declined, false);
+  assert.equal(drafts['k'], b);
+});
+
+// ---- identity switches (sign-out, sign-in as a different key) must never leak drafts ----
+
+test('identitySwitchInFlight freezes forms only for sign-out and login busy keys', () => {
+  assert.equal(identitySwitchInFlight(true, 'signout'), true);
+  assert.equal(identitySwitchInFlight(true, 'login'), true);
+  assert.equal(identitySwitchInFlight(true, 'create-shelf'), false);
+  assert.equal(identitySwitchInFlight(true, ''), false);
+  assert.equal(identitySwitchInFlight(false, 'signout'), false);
+});
+
+test('confirmIdentitySwitch never asks when there is nothing to lose', async () => {
+  const ok = await confirmIdentitySwitch({
+    hasDrafts: () => false,
+    labels: () => { throw new Error('must not compute labels when there is nothing to lose'); },
+    confirm: () => { throw new Error('must not ask when there is nothing to lose'); },
+  });
+  assert.equal(ok, true);
+});
+
+test('confirmIdentitySwitch names the kept drafts and honors the decision either way', async () => {
+  const labels = ['Create workspace draft', 'Context shelf draft'];
+  let seen = null;
+  const proceeded = await confirmIdentitySwitch({hasDrafts: () => true, labels: () => labels, confirm: kept => { seen = kept; return Promise.resolve(true); }});
+  assert.equal(proceeded, true);
+  assert.equal(seen, labels);
+
+  const stayed = await confirmIdentitySwitch({hasDrafts: () => true, labels: () => labels, confirm: () => Promise.resolve(false)});
+  assert.equal(stayed, false);
+});
+
+import './workspace_panel_wiring.mjs';

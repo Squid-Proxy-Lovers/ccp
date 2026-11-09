@@ -29,12 +29,35 @@ export function dropDraft(drafts, key) {
   delete drafts[key];
 }
 
+/**
+ * Removes `key` only if its current value is still `expected` (by identity).
+ * Use after an async write: a draft typed into a fresh form while the write
+ * was in flight must never be erased by that write's own completion.
+ * Returns whether it actually dropped anything.
+ */
+export function dropDraftIfCurrent(drafts, key, expected) {
+  if (drafts[key] !== expected) return false;
+  delete drafts[key];
+  return true;
+}
+
+/** True if `expected` is still the live draft object for `key`. */
+export function isCurrentDraft(drafts, key, expected) {
+  return drafts[key] === expected;
+}
+
 export function hasDraftContent(fields) {
   return Object.values(fields).some(value => value.trim() !== '');
 }
 
 export function hasAnyDraftContent(drafts) {
   return Object.values(drafts).some(hasDraftContent);
+}
+
+/** Readable labels for every draft that currently has content, e.g. for
+ * naming what a discard decision would discard without dumping full text. */
+export function draftLabels(drafts) {
+  return Object.entries(drafts).filter(([, fields]) => hasDraftContent(fields)).map(([key]) => draftLabel(key));
 }
 
 /** One recovery block per non-empty draft: its label, then `field: value` lines. */

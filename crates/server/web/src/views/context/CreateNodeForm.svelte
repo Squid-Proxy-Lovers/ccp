@@ -2,7 +2,7 @@
   // Shelf or book creation. The draft lives in app.formDraft so it survives
   // navigation and appears in session-lock recovery; it is dropped only once
   // the server acknowledges the create.
-  import {untrack} from 'svelte';
+  import {tick, untrack} from 'svelte';
   import {Plus} from '@lucide/svelte';
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
@@ -11,11 +11,13 @@
   import {notice} from '../../lib/notify.svelte';
   import {confirmAction} from '../../lib/ui/confirm.svelte';
   import {hasDraftContent} from '../../lib/drafts.js';
+  import {discardDraft} from '../../lib/draftDiscard.js';
+  import {identitySwitchInFlight} from '../../lib/identitySwitch.js';
 
   let {kind, draftKey, oncreate}: {
     kind: 'shelf' | 'book'; draftKey: string;
     /** Resolves true once the server acknowledged the create. */
-    oncreate: (name: string, description: string) => Promise<boolean>;
+    oncreate: (draft: Record<string, string>) => Promise<boolean>;
   } = $props();
 
   function acquire(): Record<string, string> {
@@ -29,22 +31,30 @@
   // Reopen the form when returning to a kept draft.
   let open = $state(Boolean(initial.name || initial.description));
   const key = $derived(`create-${kind}`);
+  const frozen = $derived(identitySwitchInFlight(app.busy, app.busyKey));
 
   function submit(event: SubmitEvent) {
     event.preventDefault();
+    const submitted = draft;
     void app.run(async () => {
-      if (!(await oncreate(draft.name ?? '', draft.description ?? ''))) return;
-      app.dropFormDraft(draftKey);
+      if (!(await oncreate(submitted))) return;
       draft = acquire();
       open = false;
     }, key);
   }
 
   async function discard() {
-    if (!await confirmAction({title: 'Discard draft?', body: `Discard this local ${kind} draft?`, confirm: 'Discard draft', destructive: true})) return;
-    app.dropFormDraft(draftKey);
+    const current = draft;
+    const dropped = await discardDraft({
+      isBlocked: () => app.working(key),
+      confirm: () => confirmAction({title: 'Discard draft?', body: `Discard this local ${kind} draft?`, confirm: 'Discard draft', destructive: true}),
+      drop: () => app.dropFormDraftIfCurrent(draftKey, current),
+    });
+    if (!dropped) return;
     draft = acquire();
     notice(`Local ${kind} draft discarded.`);
+    await tick();
+    document.getElementById(`create-${kind}-name`)?.focus();
   }
 </script>
 
@@ -56,14 +66,14 @@
   </summary>
   <form class="mt-3 grid gap-3" onsubmit={submit}>
     <Field id={`create-${kind}-name`} label="Name">
-      <Input id={`create-${kind}-name`} bind:value={draft.name} required autocomplete="off" />
+      <Input id={`create-${kind}-name`} bind:value={draft.name} required autocomplete="off" disabled={frozen} />
     </Field>
     <Field id={`create-${kind}-description`} label="Description">
-      <Input id={`create-${kind}-description`} bind:value={draft.description} autocomplete="off" />
+      <Input id={`create-${kind}-description`} bind:value={draft.description} autocomplete="off" disabled={frozen} />
     </Field>
     <div class="flex justify-end gap-2">
-      {#if hasDraftContent(draft)}<Button type="button" variant="ghost" size="sm" onclick={discard}>Discard draft</Button>{/if}
-      <Button type="submit" size="sm" busy={app.working(key)}>Create {kind}</Button>
+      <Button type="submit" size="sm" busy={app.working(key)} disabled={frozen}>Create {kind}</Button>
+      {#if hasDraftContent(draft)}<Button type="button" variant="ghost" size="sm" onclick={discard} disabled={frozen || app.working(key)}>Discard draft</Button>{/if}
     </div>
   </form>
 </details>

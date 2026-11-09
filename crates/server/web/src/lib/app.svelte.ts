@@ -8,7 +8,10 @@
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
 import {signature, takeFragment, wire, canWrite} from './model.js';
-import {acquireDraft, dropDraft, peekDraft, hasAnyDraftContent, recoveryText as draftsRecoveryText} from './drafts.js';
+import {acquireDraft, dropDraft, dropDraftIfCurrent, isCurrentDraft, peekDraft, hasAnyDraftContent, draftLabels,
+  recoveryText as draftsRecoveryText} from './drafts.js';
+import {submitDraftCreate} from './draftCreate.js';
+import {confirmIdentitySwitch} from './identitySwitch.js';
 import {notice, clearToasts} from './notify.svelte';
 import {confirmAction} from './ui/confirm.svelte';
 import type {Session, Workspace, PendingWork, View} from './types';
@@ -60,6 +63,9 @@ class App {
   /** Reads a form draft without creating it, for a check that must not mutate during render. */
   peekFormDraft(key: string): Record<string, string> { return peekDraft(this.drafts, key); }
   dropFormDraft(key: string): void { dropDraft(this.drafts, key); }
+  /** Drops `key` only if `expected` is still its live value; see lib/draftCreate.js. */
+  dropFormDraftIfCurrent(key: string, expected: Record<string, string>): boolean { return dropDraftIfCurrent(this.drafts, key, expected); }
+  isCurrentFormDraft(key: string, expected: Record<string, string>): boolean { return isCurrentDraft(this.drafts, key, expected); }
   get hasFormDrafts(): boolean { return hasAnyDraftContent(this.drafts); }
   /** Unsaved local work as plain text: the pending or edited body, then each form draft by name. */
   recoveryText(): string { return draftsRecoveryText(this.pending, this.draft, this.drafts); }
@@ -183,16 +189,24 @@ class App {
     notice('Signed in. Each action checks your current key permissions.', 'success');
   }
 
+  /** A new identity must never see a previous one's creation drafts. Inputs
+   * freeze for the whole call (busyKey 'login' or 'boot'), so nothing can be
+   * typed into a fresh draft while this is in flight. */
   async login(key: string): Promise<void> {
+    this.drafts = {};
     await this.activate(await wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'));
   }
 
   async signOut(): Promise<void> {
     if (!this.mayLeave()) return;
-    if (this.hasFormDrafts && !await confirmAction({
-      title: 'Discard local drafts?',
-      body: 'Signing out clears your kept creation drafts. Copy their text first if you need it.',
-      confirm: 'Discard and sign out', destructive: true,
+    if (!await confirmIdentitySwitch({
+      hasDrafts: () => this.hasFormDrafts,
+      labels: () => draftLabels(this.drafts),
+      confirm: kept => confirmAction({
+        title: 'Discard local drafts?',
+        body: `Signing out discards these kept drafts: ${kept.join(', ')}. Copy their text first if you need it.`,
+        confirm: 'Discard and sign out', destructive: true,
+      }),
     })) return;
     const session = await this.verify();
     await wire('/api/v1/admin/session/logout', '{}', session.csrf_token);
@@ -235,11 +249,27 @@ class App {
     if (this.workspace) await this.inspectWorkspace();
   }
 
-  async createWorkspace(name: string, owner: string): Promise<CreatedWorkspace> {
+  /**
+   * `submitted` is the exact draft object the caller read `name`/`owner`
+   * from; it is only dropped if it is still the live draft for `draftKey`
+   * once this resolves (or, if the session check right after a confirmed
+   * create fails, from inside that confirmed callback) -- never a
+   * replacement draft typed while this was in flight.
+   */
+  async createWorkspace(name: string, owner: string, draftKey: string, submitted: Record<string, string>): Promise<CreatedWorkspace> {
     notice('Creating workspace. If the response is lost, refresh the list before repeating.');
-    const result = await this.request<CreatedWorkspace>('/api/v1/admin/workspaces/create', {
-      name, owner: {kind: 'new_principal', name: owner}, key_expires_at: null,
+    const outcome = await submitDraftCreate({
+      write: () => this.request<CreatedWorkspace>('/api/v1/admin/workspaces/create', {
+        name, owner: {kind: 'new_principal', name: owner}, key_expires_at: null,
+      }, data => {
+        this.dropFormDraftIfCurrent(draftKey, submitted);
+        return creationRecovery('/api/v1/admin/workspaces/create', data);
+      }),
+      dropIfCurrent: () => this.dropFormDraftIfCurrent(draftKey, submitted),
+      isCurrent: () => this.isCurrentFormDraft(draftKey, submitted),
     });
+    if (!outcome.ok) throw outcome.error;
+    const result = outcome.result as CreatedWorkspace;
     this.createdWorkspace = result;
     try { await this.loadWorkspaces(); }
     catch (error) {
@@ -265,7 +295,7 @@ class App {
     window.addEventListener('focus', () => {
       if (this.session && !this.locked && !this.busy) void this.run(() => this.verify(), 'verify');
     });
-    window.addEventListener('hashchange', () => this.#hashLogin());
+    window.addEventListener('hashchange', () => void this.#hashLogin());
     await this.run(async () => {
       try {
         if (this.#fragmentKey) {
@@ -280,11 +310,25 @@ class App {
     }, 'boot');
   }
 
-  #hashLogin(): void {
+  async #hashLogin(): Promise<void> {
     if (!new URLSearchParams(location.hash.slice(1)).has('key')) return;
     const key = takeFragment(location, history);
     if (!key) { notice('Invalid login fragment. Enter your key manually.', 'warning'); return; }
     if (this.busy || this.locked || !this.mayLeave()) {
+      notice('The login link was removed from this URL. Finish or discard local work, then open your saved link again.', 'warning');
+      return;
+    }
+    // Signing in as a different key must never carry this identity's kept
+    // drafts to the next one; decline and the current session is unchanged.
+    if (!await confirmIdentitySwitch({
+      hasDrafts: () => this.hasFormDrafts,
+      labels: () => draftLabels(this.drafts),
+      confirm: kept => confirmAction({
+        title: 'Discard local drafts?',
+        body: `Signing in with a different key discards these kept drafts: ${kept.join(', ')}. Copy their text first if you need it.`,
+        confirm: 'Discard and sign in', destructive: true,
+      }),
+    })) {
       notice('The login link was removed from this URL. Finish or discard local work, then open your saved link again.', 'warning');
       return;
     }
