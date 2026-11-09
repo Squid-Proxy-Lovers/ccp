@@ -13,6 +13,7 @@
   import Empty from '../lib/ui/Empty.svelte';
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
+  import {hasDraftContent} from '../lib/drafts.js';
   import ListPane from './context/ListPane.svelte';
   import CreateNodeForm from './context/CreateNodeForm.svelte';
   import EntryEditor from './context/EntryEditor.svelte';
@@ -57,6 +58,12 @@
 
   const pinnedEntry = $derived(entry && entry.book_id === book?.id && entry.archived === archivedEntries ? entry : null);
   const isNew = (item: {id: string}) => (created.has(item.id) ? 'New' : undefined);
+  // A shelf's own create-form shows its kept draft once selected; this badge
+  // makes a kept book draft under a shelf discoverable before that shelf is
+  // reselected, since Context.svelte remounts with `shelf` reset to null.
+  const shelfBadge = (item: Shelf) => isNew(item) ?? (
+    hasDraftContent(app.peekFormDraft(`context.book.${workspaceId}.${item.id}`)) ? 'Book draft kept' : undefined
+  );
   const paneClass = (pane: Stage) => (stage === pane ? 'flex' : 'hidden md:flex');
 
   // ---- detail -------------------------------------------------------------
@@ -283,7 +290,7 @@
 
   <div class="grid gap-4 md:grid-cols-3">
     <ListPane id="shelves" kind="shelf" title="Shelves" pager={shelves} selectedId={shelf?.id ?? null} pinned={shelf}
-      label={item => item.name} detail={item => item.description} badge={isNew} onselect={selectShelf}
+      label={item => item.name} detail={item => item.description} badge={shelfBadge} onselect={selectShelf}
       emptyText="No active shelves on this page." class={paneClass('shelves')}
       onretry={() => app.run(() => shelves.first(), 'shelves-retry')}>
       {#snippet actions()}
