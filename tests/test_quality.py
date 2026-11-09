@@ -19,6 +19,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import dependency_compat
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -132,6 +134,33 @@ expect_success failure bash -c 'exit 7'
         )
         # The shell executes checked-in helper code and fixed regression commands.
         subprocess.run([shutil.which("bash"), "-c", program], check=True, capture_output=True)  # noqa: S603
+
+
+class CompatSummaryTests(unittest.TestCase):
+    """tests/dependency_compat.py's printed claim, without real binaries."""
+
+    def test_describes_only_server_restarts_without_old_binaries(self):
+        message = dependency_compat.summary(old_client=None, old_server=None)
+        self.assertNotIn("old/new", message)
+        self.assertNotIn("upgrade/downgrade", message)
+        self.assertIn("server restarts, existing enrollments, and persisted content", message)
+
+    def test_describes_old_new_clients_only_when_supplied(self):
+        message = dependency_compat.summary(old_client=Path("old-client"), old_server=None)
+        self.assertIn("old/new TLS clients", message)
+        self.assertNotIn("upgrade/downgrade", message)
+
+    def test_describes_server_upgrade_downgrade_only_when_supplied(self):
+        message = dependency_compat.summary(old_client=None, old_server=Path("old-server"))
+        self.assertNotIn("old/new", message)
+        self.assertIn("server upgrade/downgrade", message)
+
+    def test_describes_both_when_both_old_binaries_are_supplied(self):
+        message = dependency_compat.summary(
+            old_client=Path("old-client"), old_server=Path("old-server")
+        )
+        self.assertIn("old/new TLS clients", message)
+        self.assertIn("server upgrade/downgrade", message)
 
 
 class TestIntegrityGateTests(unittest.TestCase):
