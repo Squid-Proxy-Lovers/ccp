@@ -8,6 +8,9 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import {app} from '../../lib/app.svelte';
+  import {notice} from '../../lib/notify.svelte';
+  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {hasDraftContent} from '../../lib/drafts.js';
 
   let {kind, draftKey, oncreate}: {
     kind: 'shelf' | 'book'; draftKey: string;
@@ -36,6 +39,13 @@
       open = false;
     }, key);
   }
+
+  async function discard() {
+    if (!await confirmAction({title: 'Discard draft?', body: `Discard this local ${kind} draft?`, confirm: 'Discard draft', destructive: true})) return;
+    app.dropFormDraft(draftKey);
+    draft = acquire();
+    notice(`Local ${kind} draft discarded.`);
+  }
 </script>
 
 <details bind:open class="group">
@@ -51,7 +61,8 @@
     <Field id={`create-${kind}-description`} label="Description">
       <Input id={`create-${kind}-description`} bind:value={draft.description} autocomplete="off" />
     </Field>
-    <div class="flex justify-end">
+    <div class="flex justify-end gap-2">
+      {#if hasDraftContent(draft)}<Button type="button" variant="ghost" size="sm" onclick={discard}>Discard draft</Button>{/if}
       <Button type="submit" size="sm" busy={app.working(key)}>Create {kind}</Button>
     </div>
   </form>
