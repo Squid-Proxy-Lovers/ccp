@@ -14,6 +14,7 @@
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
   import {hasDraftContent} from '../lib/drafts.js';
+  import {creationConfirmedText} from './context/creationConfirm.js';
   import ListPane from './context/ListPane.svelte';
   import CreateNodeForm from './context/CreateNodeForm.svelte';
   import EntryEditor from './context/EntryEditor.svelte';
@@ -150,11 +151,19 @@
   // ---- creation (shelf and book) ---------------------------------------------
   // The acknowledged create and the following list read are reported apart:
   // a failed refresh never turns a confirmed create into an unknown outcome.
+  // If the session check after the write fails, the create is still known to have
+  // happened: the lock message says so (like entryWrite.ts) and the draft that
+  // would otherwise be offered back as unsaved work is dropped.
   async function create<T extends Shelf>(kind: 'shelf' | 'book', path: string, body: Record<string, unknown>,
-    reveal: (item: T) => Promise<string>): Promise<boolean> {
+    draftKey: string, reveal: (item: T) => Promise<string>): Promise<boolean> {
     if (!app.mayLeave()) return false;
     let item: T;
-    try { item = await app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}); }
+    try {
+      item = await app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}, (data: T) => {
+        app.dropFormDraft(draftKey);
+        return creationConfirmedText(kind, data);
+      });
+    }
     catch (error) {
       if (app.locked) return false;
       notice(outcomeUnknown(error)
@@ -179,7 +188,8 @@
     return failure;
   };
 
-  const createShelf = (name: string, description: string) => create<Shelf>('shelf', 'shelves/create', {name, description}, item => {
+  const createShelf = (name: string, description: string) => create<Shelf>('shelf', 'shelves/create', {name, description},
+    `context.shelf.${workspaceId}`, item => {
     shelf = item; book = null; entry = null; archivedEntries = false;
     books.clear(); entries.clear(); closeDetail();
     stage = 'shelves';
@@ -189,7 +199,8 @@
   const createBook = (name: string, description: string) => {
     const parent = shelf;
     if (!parent) return Promise.resolve(false);
-    return create<Book>('book', 'books/create', {shelf_id: parent.id, name, description}, item => {
+    return create<Book>('book', 'books/create', {shelf_id: parent.id, name, description},
+      `context.book.${workspaceId}.${parent.id}`, item => {
       book = item; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'books';

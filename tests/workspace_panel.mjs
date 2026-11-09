@@ -9,6 +9,9 @@ const draftsSource = await readFile(new URL('../crates/server/web/src/lib/drafts
 const {acquireDraft, dropDraft, peekDraft, hasDraftContent, hasAnyDraftContent, draftsRecoveryParts, recoveryText, draftLabel} =
   await import('data:text/javascript;base64,' + Buffer.from(draftsSource).toString('base64'));
 
+const creationConfirmSource = await readFile(new URL('../crates/server/web/src/views/context/creationConfirm.js', import.meta.url), 'utf8');
+const {creationConfirmedText} = await import('data:text/javascript;base64,' + Buffer.from(creationConfirmSource).toString('base64'));
+
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
 }});
@@ -811,4 +814,12 @@ test('an uncertain pending write takes recovery precedence over a plain text dra
   assert.equal(recoveryText({body: 'PENDING_INTENT'}, 'ignored draft text', {}), 'PENDING_INTENT');
   assert.equal(recoveryText(null, 'kept draft text', {}), 'kept draft text');
   assert.equal(draftLabel('context.book.11111111-1111-4111-8111-111111111111'), 'Context book draft');
+});
+
+test('a confirmed shelf or book create reads like entryWrite.ts: confirmed, named and not a retry invitation', () => {
+  const shelf = creationConfirmedText('shelf', {id: 'shelf-1', name: 'Research'});
+  assert.match(shelf, /^Shelf “Research” creation confirmed \(id shelf-1\)/);
+  assert.match(shelf, /do not repeat the create/);
+  const book = creationConfirmedText('book', {id: 'book-1', name: 'Notes'});
+  assert.match(book, /^Book “Notes” creation confirmed \(id book-1\)/);
 });
