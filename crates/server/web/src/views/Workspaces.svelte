@@ -17,12 +17,19 @@
   import DeletionLookup from './settings/DeletionLookup.svelte';
   import {app} from '../lib/app.svelte';
   import {notice} from '../lib/notify.svelte';
+  import {confirmAction} from '../lib/ui/confirm.svelte';
+  import {hasDraftContent} from '../lib/drafts.js';
   import type {Workspace} from '../lib/types';
 
   const FORM = 'create-workspace';
-  const draft = app.formDraft(FORM);
-  draft.name ??= '';
-  draft.owner ??= '';
+
+  function acquire(): Record<string, string> {
+    const draft = app.formDraft(FORM);
+    draft.name ??= '';
+    draft.owner ??= '';
+    return draft;
+  }
+  let draft = $state.raw(acquire());
 
   function page(cursor: string | null, key: string) {
     void app.run(async () => { if (app.mayLeave()) await app.loadWorkspaces(cursor); }, key);
@@ -38,8 +45,16 @@
       if (!app.mayLeave()) return;
       await app.createWorkspace(draft.name ?? '', draft.owner ?? '');
       app.dropFormDraft(FORM);
+      draft = acquire();
       if (!app.locked) notice('Workspace created. Copy its owner key privately before navigating away.', 'success');
     }, FORM);
+  }
+
+  async function discard() {
+    if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local workspace draft?', confirm: 'Discard draft', destructive: true})) return;
+    app.dropFormDraft(FORM);
+    draft = acquire();
+    notice('Local workspace draft discarded.');
   }
 </script>
 
@@ -118,7 +133,10 @@
         <Field id="create-workspace-owner" label="New owner principal name">
           <Input id="create-workspace-owner" bind:value={draft.owner} required autocomplete="off" />
         </Field>
-        <Button type="submit" busy={app.working(FORM)}><Plus /> Create workspace</Button>
+        <div class="flex flex-wrap gap-2">
+          <Button type="submit" busy={app.working(FORM)}><Plus /> Create workspace</Button>
+          {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard}>Discard draft</Button>{/if}
+        </div>
       </form>
       <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
     </CardContent>
