@@ -179,9 +179,13 @@ def check(args):
         with Server(old_server, env, auth):
             assert "old client append" in content(old_client, old_env)
             assert "old client append" in content(args.client, new_env)
-    print(
-        "PASS: old/new TLS clients, server upgrade/downgrade, existing enrollments and persisted content"
-    )
+
+    checked = ["server restarts, existing enrollments, and persisted content"]
+    if args.old_client:
+        checked.append("old/new TLS clients")
+    if args.old_server:
+        checked.append("server upgrade/downgrade")
+    print(f"PASS: {', '.join(checked)}")
 
 
 if __name__ == "__main__":
