@@ -25,7 +25,11 @@ PATTERNS = {
     "tests": {
         ".rs": re.compile(r"#\[(?:tokio::)?test\b"),
         ".py": re.compile(r"^\s*(?:async\s+)?def test_\w+", re.MULTILINE),
-        ".mjs": re.compile(r"(?<![\w.])test(?:\.\w+)?\s*\("),
+        # Bare test(...)/test.skip(...)/test.todo(...), and a subtest
+        # invoked through its test-context parameter, e.g. t.test(...).
+        # This repo's .mjs suites use node:test's test() exclusively, not
+        # it()/describe(), so those are intentionally not counted here.
+        ".mjs": re.compile(r"(?<![\w.])test(?:\.\w+)*\s*\(|\b\w+\.test(?:\.\w+)*\s*\("),
     },
     "skips": {
         ".rs": re.compile(r"#\[ignore\b"),
@@ -33,15 +37,107 @@ PATTERNS = {
             r"@unittest\.skip|\.skipTest\(|unittest\.expectedFailure|pytest\.mark\.(?:skip|xfail)"
         ),
         ".sh": re.compile(r"^\s*skip\s", re.MULTILINE),
-        ".mjs": re.compile(r"\.skip\s*\(|\{\s*skip\s*:|\.todo\s*\("),
+        # .skip/.todo access (call, property read, or alias assignment
+        # such as `const s = test.skip;`), plus a skip/todo key anywhere
+        # in an options object, first position or not, quoted or bare,
+        # keyed (`skip: true`) or shorthand (`{skip}`).
+        ".mjs": re.compile(r"\.(?:skip|todo)\b|[{,]\s*['\"]?(?:skip|todo)['\"]?\s*[:,}]"),
     },
     "assertions": {
         ".rs": re.compile(r"\b(?:debug_)?assert(?:_eq|_ne)?!"),
         ".py": re.compile(r"\bself\.assert\w+\(|^\s*assert\s", re.MULTILINE),
         ".sh": re.compile(r"^\s*expect_(?:success|contains|not_contains)\b", re.MULTILINE),
-        ".mjs": re.compile(r"\bassert\.\w+\s*\("),
+        # Bare assert(x), assert.ok(x), and any chain depth such as
+        # assert.strict.equal(...). Destructured or aliased imports
+        # (`const {equal} = assert`) are not tracked; this repo's .mjs
+        # suites always call through the `assert` member chain directly.
+        ".mjs": re.compile(r"\bassert(?:\.\w+)*\s*\("),
     },
 }
+
+
+def _copy_string_literal(text: str, i: int, out: list[str], quote: str) -> int:
+    """Copy a string literal starting at i (text[i:i+len(quote)] == quote)."""
+    n = len(text)
+    out.append(quote)
+    i += len(quote)
+    while i < n and text[i : i + len(quote)] != quote:
+        if text[i] == "\\" and len(quote) == 1:
+            out.append(text[i : i + 2])
+            i += 2
+            continue
+        out.append(text[i])
+        i += 1
+    if i < n:
+        out.append(quote)
+        i += len(quote)
+    return i
+
+
+def _strip_python_comments(text: str) -> str:
+    """Drop '#' comments, leaving string contents (e.g. URLs) untouched."""
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        char = text[i]
+        if char in "'\"":
+            quote = char * 3 if text[i : i + 3] == char * 3 else char
+            i = _copy_string_literal(text, i, out, quote)
+        elif char == "#":
+            while i < n and text[i] != "\n":
+                i += 1
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+def _skip_block_comment(text: str, i: int, out: list[str]) -> int:
+    """Skip a '/* ... */' comment starting at i, keeping its newlines."""
+    n = len(text)
+    i += 2
+    while i < n and text[i : i + 2] != "*/":
+        if text[i] == "\n":
+            out.append("\n")
+        i += 1
+    return i + 2
+
+
+def _strip_c_style_comments(text: str, *, template_strings: bool = False) -> str:
+    """Drop '//' and '/* */' comments, leaving string contents untouched.
+
+    Block comments keep their newlines so line-anchored patterns in the
+    surrounding code are unaffected. Nested block comments (legal in Rust)
+    and template-literal interpolation (`${...}` in JS) are not handled;
+    this is a small scan, not a full lexer.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    quotes = "'\"" + ("`" if template_strings else "")
+    while i < n:
+        two = text[i : i + 2]
+        char = text[i]
+        if two == "//":
+            while i < n and text[i] != "\n":
+                i += 1
+        elif two == "/*":
+            i = _skip_block_comment(text, i, out)
+        elif char in quotes:
+            i = _copy_string_literal(text, i, out, char)
+        else:
+            out.append(char)
+            i += 1
+    return "".join(out)
+
+
+def strip_comments(suffix: str, text: str) -> str:
+    if suffix == ".py":
+        return _strip_python_comments(text)
+    if suffix == ".rs":
+        return _strip_c_style_comments(text)
+    if suffix == ".mjs":
+        return _strip_c_style_comments(text, template_strings=True)
+    return text
 
 
 def git(*args: str) -> bytes:
@@ -61,11 +157,12 @@ def is_source(path: str) -> bool:
 
 def count(path: str, text: str) -> Counter[str]:
     suffix = Path(path).suffix
+    code = strip_comments(suffix, text)
     totals: Counter[str] = Counter()
     for category, patterns in PATTERNS.items():
         pattern = patterns.get(suffix)
         if pattern is not None:
-            totals[category] = len(pattern.findall(text))
+            totals[category] = len(pattern.findall(code))
     return totals
 
 

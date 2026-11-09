@@ -244,6 +244,77 @@ class TestIntegrityGateTests(unittest.TestCase):
             self.run_check(skipped, name="sample.mjs", base=self.MJS_BASE)
         self.run_check(skipped, allow=True, name="sample.mjs", base=self.MJS_BASE)
 
+    def test_mjs_skip_markers_are_caught_in_every_position_and_spelling(self):
+        checker = load_script("check-test-integrity.py")
+        samples = {
+            "skip not first key": "test('a', {timeout: 100, skip: true}, () => {});\n",
+            "skip shorthand": "test('a', () => {}); const skip = true; f({a, skip, b});\n",
+            "single-quoted key": "test('a', {'skip': true}, () => {});\n",
+            "double-quoted key": "test('a', {\"skip\": true}, () => {});\n",
+            "todo key": "test('a', {todo: true}, () => {});\n",
+            "bare todo call": "test.todo('a', () => {});\n",
+            "skip alias assignment": "const s = test.skip;\ns('a', () => {});\n",
+        }
+        for label, sample in samples.items():
+            with self.subTest(label=label):
+                self.assertGreaterEqual(
+                    checker.count("x.mjs", sample)["skips"], 1, f"missed: {label}"
+                )
+
+    def test_mjs_subtests_and_assert_chains_are_counted(self):
+        checker = load_script("check-test-integrity.py")
+        sample = (
+            "test('outer', async t => { await t.test('inner', () => {}); });\n"
+            "assert(true);\n"
+            "assert.ok(1);\n"
+            "assert.strict.equal(1, 1);\n"
+        )
+        counts = checker.count("x.mjs", sample)
+        self.assertEqual(counts["tests"], 2)
+        self.assertEqual(counts["assertions"], 3)
+
+    def test_mjs_scattered_skip_key_fails_unless_reviewed(self):
+        scattered = self.MJS_BASE.replace(
+            "test('checks'", "test('checks', {timeout: 100, skip: true}"
+        )
+        with self.assertRaises(SystemExit):
+            self.run_check(scattered, name="sample.mjs", base=self.MJS_BASE)
+        self.run_check(scattered, allow=True, name="sample.mjs", base=self.MJS_BASE)
+
+    def test_commented_out_tests_and_assertions_do_not_count(self):
+        checker = load_script("check-test-integrity.py")
+        samples = {
+            "x.rs": (
+                "// #[test]\n"
+                "// fn checks() { assert_eq!(1, 1); }\n"
+                "/* #[test]\n"
+                "fn blocked() { assert_eq!(2, 2); } */\n"
+                'let url = "https://example.com"; // not a comment marker bug\n'
+            ),
+            "x.py": (
+                "# def test_checks():\n"
+                "#     self.assertEqual(1, 1)\n"
+                "# self.assertEqual(2, 2)\n"
+                'url = "https://example.com#fragment"\n'
+            ),
+            "x.mjs": (
+                "// test('checks', () => { assert.equal(1, 1); });\n"
+                "/* test('blocked', () => { assert.equal(2, 2); }); */\n"
+                'const url = "https://example.com"; // not a comment marker bug\n'
+            ),
+        }
+        for path, sample in samples.items():
+            with self.subTest(path=path):
+                counts = checker.count(path, sample)
+                self.assertEqual(counts["tests"], 0, f"{path}: {counts}")
+                self.assertEqual(counts["assertions"], 0, f"{path}: {counts}")
+
+    def test_commented_out_rust_test_fails_the_real_gate_unless_reviewed(self):
+        commented = "// #[test]\n// fn checks() {\n//     assert_eq!(1, 1);\n// }\n"
+        with self.assertRaises(SystemExit):
+            self.run_check(commented)
+        self.run_check(commented, allow=True)
+
 
 class NativeResolverTests(unittest.TestCase):
     def test_cold_checkout_selects_each_binary_without_changing_configured_commands(self):
