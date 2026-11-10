@@ -13,4 +13,4 @@ export type View = 'overview' | 'context' | 'access' | 'reported' | 'guidance' |
 export interface Page<T> { items: T[]; next_cursor: string | null }
 
 /** Acknowledged access secret, held only in this identity’s memory until dismissed. */
-export interface AccessSecret { title: string; value: string; workspace_id: string }
+export interface AccessSecret { title: string; value: string; workspace_id: string; workspace_name?: string }

@@ -127,14 +127,27 @@ export const wording = {
 
 // ---- shared flow ------------------------------------------------------------
 
-/** Sends once. Verification failures and lost responses come back as `error`. */
-async function send(app: ViewApp, attempt: Attempt, accept: (result: any) => boolean, refusal: string, settleDraft: () => void = () => {}): Promise<{operation: ViewApp; result: any} | {operation: ViewApp; error: Error}> {
+interface SendOptions {
+  createsSecret: boolean;
+  settleDraft: () => void;
+  ask?: () => Promise<boolean>;
+}
+
+function requireSecretSlot(app: ViewApp, createsSecret: boolean): void {
+  if (createsSecret && app.accessSecret) throw new Error('Save and dismiss the previous access secret before issuing another.');
+}
+
+/** Sends once after validation and confirmation. Lost responses come back as `error`. */
+async function send(app: ViewApp, attempt: Attempt, accept: (result: any) => boolean, refusal: string, {createsSecret, settleDraft, ask}: SendOptions): Promise<{operation: ViewApp; result: any} | {operation: ViewApp; error: Error} | null> {
+  requireSecretSlot(app, createsSecret);
+  if (ask && !await ask()) return null;
   // The operation owns facts; the component only owns rendering and focus.
   const operation = app.forSession();
-  if (operation.accessSecret) throw new Error('Save and dismiss the previous access secret before another action.');
+  const workspaceName = app.workspace?.id === attempt.workspace_id ? app.workspace.name : undefined;
   panelApp.accessWrites += 1;
   try {
     await verifySession(app, {wire: app.wire, lock: app.lock});
+    requireSecretSlot(operation, createsSecret);
     operation.pending = attempt;
     try {
       const request = attempt.request(operation.session as Session);
@@ -142,9 +155,9 @@ async function send(app: ViewApp, attempt: Attempt, accept: (result: any) => boo
       if (!accept(result)) throw new Error(refusal);
       operation.pending = null;
       operation.clean();
-      if (nonEmpty(result.secret)) operation.accessSecret = {
+      if (createsSecret && nonEmpty(result.secret)) operation.accessSecret = {
         title: result.key_id ? `Workspace admin key · ${result.key_id}` : `Client invitation · ${result.invitation_id}`,
-        value: result.secret, workspace_id: attempt.workspace_id,
+        value: result.secret, workspace_id: attempt.workspace_id, workspace_name: workspaceName,
       };
       operation.effect(settleDraft);
       return {operation, result};
@@ -177,7 +190,8 @@ export async function changeAdmission(app: ViewApp, report: Report, workspace: W
   const attempt = new AdmissionAttempt(app.session, workspace, action, body) as Attempt;
   const sent = await send(app, attempt, result => action === 'individual'
     ? nonEmpty(result?.invitation_id) && nonEmpty(result.secret) : result?.completed === true,
-  'The invitation response could not be verified.', settleDraft);
+  'The invitation response could not be verified.', {createsSecret: action === 'individual', settleDraft});
+  if (!sent) return;
   const operation = sent.operation;
   if ('error' in sent) {
     unconfirmed(operation, report, wording.admission, attempt, sent.error, async () => {
@@ -210,11 +224,11 @@ export async function readEnrollment(app: ViewApp, workspaceId: string): Promise
 /** `ask` runs after the attempt validated, so invalid input never reaches a confirmation. */
 export async function changeEnrollment(app: ViewApp, report: Report, state: Enrollment, action: 'initial' | 'close', body: Record<string, unknown>, confirmed: boolean, ask: () => Promise<boolean>, settleDraft: () => void = () => {}): Promise<boolean> {
   const attempt = new EnrollmentAttempt(app.session, state, action, body, confirmed) as Attempt;
-  if (!await ask()) return false;
   const opening = action === 'initial';
   const sent = await send(app, attempt, result => opening
     ? nonEmpty(result?.invitation_id) && nonEmpty(result.secret) : result?.completed === true,
-  'The initial-window response could not be verified.', settleDraft);
+  'The initial-window response could not be verified.', {createsSecret: opening, settleDraft, ask});
+  if (!sent) return false;
   const operation = sent.operation;
   if ('error' in sent) {
     unconfirmed(operation, report, wording.enrollment, attempt, sent.error, async () => ({
@@ -255,10 +269,10 @@ type ClientChange = {action: 'recover' | 'readmit'; expires_at: number; role?: s
 
 export async function changeClientAccess(app: ViewApp, report: Report, workspace: Workspace, client: Grant, change: ClientChange, ask: () => Promise<boolean>, settleDraft: () => void = () => {}): Promise<boolean> {
   const attempt = new ClientAccessAttempt(app.session, workspace, client, change) as Attempt & {client_id: string; scope: RecoveryScope; action: string};
-  if (!await ask()) return false;
   const sent = await send(app, attempt, result => attempt.action === 'revoke_recovery'
     ? result?.completed === true : nonEmpty(result?.invitation_id) && nonEmpty(result.secret),
-  'The client access response could not be verified.', settleDraft);
+  'The client access response could not be verified.', {createsSecret: attempt.action !== 'revoke_recovery', settleDraft, ask});
+  if (!sent) return false;
   const operation = sent.operation;
   if ('error' in sent) {
     unconfirmed(operation, report, wording.clientAccess, attempt, sent.error, async () => {
@@ -294,7 +308,7 @@ const SECURITY_DONE: Record<SecurityAction, string> = {
   'team/appoint': 'Administrator appointed', 'team/revoke': 'Administrator removed', 'keys/issue': 'Admin key issued', 'keys/revoke': 'Admin key revoked',
 };
 
-export async function changeSecurity(app: ViewApp, report: Report, action: SecurityAction, body: Record<string, any>, settleDraft: () => void = () => {}): Promise<void> {
+export async function changeSecurity(app: ViewApp, report: Report, action: SecurityAction, body: Record<string, any>, settleDraft: () => void = () => {}, ask?: () => Promise<boolean>): Promise<void> {
   const attempt = new SecurityAttempt(app.session, action, body) as Attempt;
   const issuing = action === 'team/appoint' || action === 'keys/issue';
   const sent = await send(app, attempt, result => issuing
@@ -302,7 +316,8 @@ export async function changeSecurity(app: ViewApp, report: Report, action: Secur
       && !(action === 'keys/issue' && result.principal_id !== body.principal_id)
       && !(action === 'team/appoint' && body.principal.kind === 'existing' && result.principal_id !== body.principal.principal_id)
     : result?.completed === true,
-  issuing ? 'The key creation response could not be verified.' : 'The revocation response could not be verified.', settleDraft);
+  issuing ? 'The key creation response could not be verified.' : 'The revocation response could not be verified.', {createsSecret: issuing, settleDraft, ask});
+  if (!sent) return;
   const operation = sent.operation;
   if ('error' in sent) {
     unconfirmed(operation, report, wording.security, attempt, sent.error, async () => {
