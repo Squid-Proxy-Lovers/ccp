@@ -58,6 +58,21 @@ test('setup names use UTF8 byte limits and malformed key receipts cannot open th
   for (const value of [null,{}, {...receipt,workspace_id:'not-an-id'}, {...receipt,workspace_owner_key:{secret:'foreign'}}]) assert.throws(()=>setupKeys(value),error=>error.uncertain);
 });
 
+test('setup rejects nil identifiers in verification and every claim receipt field', async () => {
+  const nil = '00000000-0000-0000-0000-000000000000';
+  const keys = {instance_id: instance, workspace_id: instance, principal_id: instance,
+    instance_admin_key: {secret: 'ccp_admin_'+'a'.repeat(64)}, workspace_owner_key: {secret: 'ccp_admin_'+'b'.repeat(64)}};
+  for (const field of ['instance_id', 'workspace_id', 'principal_id']) {
+    assert.throws(() => setupKeys({...keys, [field]: nil}), error => error instanceof SetupError && error.uncertain);
+  }
+  assert.throws(() => setupKeys({...keys, instance_id: nil, workspace_id: nil, principal_id: nil}), SetupError);
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => ({ok: true, status: 200, json: async () => ({api_version: 1, data: {verified: true, instance_id: nil}})});
+    await assert.rejects(setupRequest('verify', {}), error => error instanceof SetupError && !error.uncertain);
+  } finally { globalThis.fetch = original; }
+});
+
 // Oracle tests for the refactor, deliberately retaining the old predicates.
 // This finite corpus covers every UUID position, valid generated identifiers,
 // malformed strings and JS type coercion boundaries without node_modules.
@@ -80,7 +95,7 @@ function uuidInputs() {
     [], [seed], {}, new String(seed), {toString: () => seed}];
 }
 
-test('shared UUID checks preserve setup, link parsing and receipt acceptance across varied inputs', async t => {
+test('shared UUID checks preserve non-nil acceptance and reject nil setup identifiers across varied inputs', async t => {
   const oldSetup = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
   const oldLink = value => oldSetup(value) && value.replaceAll('-', '') !== '0'.repeat(32);
   const accepts = fn => { try { fn(); return true; } catch { return false; } };
@@ -98,24 +113,25 @@ test('shared UUID checks preserve setup, link parsing and receipt acceptance acr
   const inputs = uuidInputs(); let setupAccepted = 0, linkAccepted = 0;
   try {
     for (const value of inputs) {
+      const expectedSetup = oldSetup(value) && value !== '00000000-0000-0000-0000-000000000000';
       const label = typeof value === 'string' ? JSON.stringify(value) : typeof value;
       assert.equal(isStrictUuid(value), oldLink(value), `strict predicate: ${label}`);
       for (const field of ['instance_id', 'workspace_id', 'principal_id']) {
-        assert.equal(accepts(() => setupKeys({...keys, [field]: value})), oldSetup(value), `setup ${field}: ${label}`);
+        assert.equal(accepts(() => setupKeys({...keys, [field]: value})), expectedSetup, `setup ${field}: ${label}`);
       }
       globalThis.fetch = async () => ({ok: true, status: 200, json: async () => ({api_version: 1, data: {verified: true, instance_id: value}})});
       const verified = await setupRequest('verify', {}).then(() => true, () => false);
-      assert.equal(verified, oldSetup(value), `setup verify: ${label}`);
+      assert.equal(verified, expectedSetup, `setup verify: ${label}`);
       assert.equal(accepts(() => attempt.receipt({...receipt, invitation_id: value})), oldLink(value), `issuance: ${label}`);
       if (typeof value === 'string') for (const field of ['i', 'w']) {
         const url = new URL(uri), params = new URLSearchParams(url.hash.slice(1));
         params.set(field, value); url.hash = params.toString();
         assert.equal(accepts(() => parseEnrollmentLink(url.href)), oldLink(value), `link ${field}: ${label}`);
       }
-      setupAccepted += Number(oldSetup(value)); linkAccepted += Number(oldLink(value));
+      setupAccepted += Number(expectedSetup); linkAccepted += Number(oldLink(value));
     }
   } finally { globalThis.fetch = original; }
   assert.ok(inputs.length > 1600); assert.ok(linkAccepted > 1000);
-  assert.equal(setupAccepted, linkAccepted + 1, 'only setup retains its nil UUID acceptance');
+  assert.equal(setupAccepted, linkAccepted, 'all three validators now reject nil UUIDs');
   t.diagnostic(`${inputs.length} inputs: ${setupAccepted} accepted by setup, ${linkAccepted} accepted by links and issuance`);
 });

@@ -39,7 +39,7 @@ export async function setupRequest(action, body) {
     };
     throw new SetupError(messages[response.status] ?? 'Setup could not be verified.', response.status, action === 'claim' && ![400, 401, 403, 409, 410, 413, 429].includes(response.status));
   }
-  if (action === 'verify' && (value.data.verified !== true || !validUuid(value.data.instance_id))) {
+  if (action === 'verify' && (value.data.verified !== true || !isStrictUuid(value.data.instance_id))) {
     throw new SetupError('The setup state response could not be verified. Try checking its state again.');
   }
   return value.data;
@@ -48,10 +48,8 @@ export function validSetupName(value) {
   const name = value.trim();
   return name.length > 0 && new TextEncoder().encode(name).length <= 256 && !/\p{Cc}/u.test(name);
 }
-// Setup receipts historically accept nil UUIDs; keep that contract here.
-function validUuid(value) { return isStrictUuid(value) || value === '00000000-0000-0000-0000-000000000000'; }
 export function setupKeys(value) {
-  if (!value || !['instance_id', 'workspace_id', 'principal_id'].every(k => validUuid(value[k]))
+  if (!value || !['instance_id', 'workspace_id', 'principal_id'].every(k => isStrictUuid(value[k]))
     || !['instance_admin_key', 'workspace_owner_key'].every(k => /^ccp_admin_[0-9a-f]{64}$/.test(value[k]?.secret ?? ''))) {
     throw new SetupError('Setup may have completed, but its key response could not be verified. Check setup state; do not create another owner.', 0, true);
   }
