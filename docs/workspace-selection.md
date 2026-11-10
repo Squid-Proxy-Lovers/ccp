@@ -111,5 +111,7 @@ is refused under the same host/Unix/Windows limits as the
 Keep caller directories private and back them up only with clients stopped.
 No automatic repair, old-state fallback or preference import is performed.
 The [workspace MCP bridge](workspace-mcp.md) uses explicit selection handles for
-callers, including sessionless requests. Context content operations remain later
-work; the supported native MCP path keeps its current behavior.
+callers, including sessionless requests.
+[Context content operations](workspace-mcp.md#read-content-in-one-workspace)
+use these same selection handles; the supported native MCP path keeps its
+current behavior.

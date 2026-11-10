@@ -12,7 +12,7 @@ protocol = { version = "0.1.0", path = "../crates/protocol" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 rustls = { version = "0.23.45", features = ["ring"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 server = { version = "0.1.0", path = "../crates/server" }

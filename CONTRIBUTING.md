@@ -25,7 +25,7 @@ native binaries from `tools/lint-tools.json`. Native downloads are SHA-256 check
 before installation in `.lint-tools/bin`; Linux and macOS support x86_64 and
 ARM64. These tools support development checks.
 
-Rustup selects the compiler in `rust-toolchain.toml`. Rust 1.88 is the supported
+Rustup selects the compiler in `rust-toolchain.toml`. Rust 1.89 is the supported
 minimum. Builds and tests use `Cargo.lock` with `--locked`.
 
 ## Build from a checkout

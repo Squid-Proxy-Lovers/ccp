@@ -12,8 +12,8 @@ pub enum Actor {
     Credential(Uuid),
 }
 
-/// Workspace-level capabilities. Entry ownership is checked by the later
-/// content layer in addition to these coarse create/append/write capabilities.
+/// Workspace-level capabilities. Entry ownership is checked by the content
+/// layer in addition to these coarse create/append/write capabilities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     ReadContext,
@@ -70,7 +70,8 @@ impl DataRole {
 }
 
 /// Records a new registration and its first workspace grant. Certificate
-/// issuance and invitation redemption are the next phase's external boundary.
+/// issuance and invitation redemption happen at the external enrollment
+/// boundary, not here.
 #[derive(Clone, Debug)]
 pub struct ClientRegistration {
     pub workspace_id: Uuid,
