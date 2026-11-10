@@ -19,6 +19,7 @@ CHANNEL="stable"
 RELEASE_VERSION=""
 RELEASE_STAGE=""
 PUBLISH_STAGE=""
+MCP_CONFIG_WARNINGS=""
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -408,6 +409,12 @@ install_mcp_bridge() {
     ok "MCP bridge installed in $venv_dir"
 }
 
+mcp_config_warning() {
+    warn "$2"
+    if [ -n "$MCP_CONFIG_WARNINGS" ]; then MCP_CONFIG_WARNINGS+="; "; fi
+    MCP_CONFIG_WARNINGS+="the $1 MCP config was not written"
+}
+
 configure_mcp() {
     local client_bin="$INSTALL_DIR/ccp-client"
     local venv_dir="$HOME/.ccp-mcp/venv"
@@ -459,7 +466,7 @@ TOMLEOF
             then
                 ok "Added to $codex_config"
             else
-                warn "Could not update $codex_config"
+                mcp_config_warning "Codex" "Could not update $codex_config"
             fi
         else
             ok "$codex_config already configured"
@@ -485,7 +492,7 @@ with open('$tmp', 'w') as f:
 " 2>/dev/null && mv "$tmp" "$claude_config"; then
                 ok "Added to $claude_config"
             else
-                warn "Could not update $claude_config"
+                mcp_config_warning "Claude" "Could not update $claude_config"
             fi
         else
             ok "$claude_config already configured"
@@ -500,7 +507,7 @@ with open('$tmp', 'w') as f:
             if echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"; then
                 ok "Created $cursor_config"
             else
-                warn "Could not create $cursor_config"
+                mcp_config_warning "Cursor" "Could not create $cursor_config"
             fi
         elif ! python3 -c "import json; cfg=json.load(open('$cursor_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
             local tmp
@@ -518,7 +525,7 @@ with open('$tmp', 'w') as f:
 " 2>/dev/null && mv "$tmp" "$cursor_config"; then
                 ok "Added to $cursor_config"
             else
-                warn "Could not update $cursor_config"
+                mcp_config_warning "Cursor" "Could not update $cursor_config"
             fi
         else
             ok "$cursor_config already configured"
@@ -679,8 +686,6 @@ fi
 ensure_path
 
 echo ""
-echo -e "${BOLD}${GREEN}Done.${RESET}"
-echo ""
 if [ "$MODE" = "client" ]; then
     info "Enroll with a server:"
     echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
@@ -692,3 +697,8 @@ else
     echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
 fi
 echo ""
+if [ -n "$MCP_CONFIG_WARNINGS" ]; then
+    echo -e "${BOLD}${GREEN}Done, with warnings: $MCP_CONFIG_WARNINGS; see above.${RESET}"
+else
+    echo -e "${BOLD}${GREEN}Done.${RESET}"
+fi

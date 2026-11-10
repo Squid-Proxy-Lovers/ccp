@@ -723,7 +723,6 @@ elif name == 'cat':
                 self.assertEqual(unrelated.read_bytes(), b"unrelated-client")
                 self.assertTrue(binary.is_symlink())
 
-
     def test_relative_install_dir_ignores_cdpath(self):
         self.source_fixture()
         intended = self.root / "relative-bin"
@@ -739,7 +738,6 @@ elif name == 'cat':
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((intended / "ccp-client").read_bytes(), b"replacement-client")
         self.assertEqual(unrelated.read_bytes(), b"unrelated-client")
-
 
     def test_stable_failed_transfer_preserves_installed_bytes(self):
         target = self.install_dir / "ccp-client"
@@ -824,7 +822,10 @@ elif name == 'cat':
         codex_config.write_text("")
         result, _ = self.install("--client", failure="cat")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Done.", result.stdout)
+        self.assertEqual(
+            re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()[-1],
+            "Done, with warnings: the Codex MCP config was not written; see above.",
+        )
         self.assertNotIn(f"Added to {codex_config}", result.stdout)
         self.assertIn(f"Could not update {codex_config}", result.stdout)
 
@@ -839,7 +840,10 @@ elif name == 'cat':
         cursor_config.mkdir()
         result, _ = self.install("--client")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("Done.", result.stdout)
+        self.assertEqual(
+            re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()[-1],
+            "Done, with warnings: the Cursor MCP config was not written; see above.",
+        )
         self.assertNotIn(f"Created {cursor_config}", result.stdout)
         self.assertIn(f"Could not create {cursor_config}", result.stdout)
 
