@@ -44,8 +44,10 @@ exclusive maintenance can reconcile the stronger persisted mode.
 
 Activation preserves current clients, keys, workspaces and grants. It does not
 convert legacy contents, generate a new CA, issue credentials, open group
-enrollment or start a network listener. Content migration and the independently
-trusted workspace transport remain subsequent work.
+enrollment or start a network listener. `server legacy-convert` ships an offline
+conversion into a new instance; in-place, journal-aware conversion remains open.
+The independently trusted workspace transport is the separate
+[`workspace-serve`](workspace-http-api.md) command.
 
 After activation, current native server, health and token-issuance commands
 refuse the directory even when no workspace process is running. Removing only

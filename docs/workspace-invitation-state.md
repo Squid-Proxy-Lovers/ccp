@@ -55,7 +55,9 @@ expiry and stored-capacity closure, migration and reopening persistence. The pol
 capacity-transition test seeds an exhausted counter directly; separate redemption
 race tests now verify actual quota consumption and retry receipts. The HTTPS
 adapter tests additionally cover actual TLS requests and current scoped keys.
-Normal client/MCP and browser workflows remain subsequent work.
+The desktop admin panel already issues, lists and revokes invitations in the
+browser; normal client/MCP workflows for issuing and managing them remain
+subsequent work.
 
 ## Explicit targeted readmission
 

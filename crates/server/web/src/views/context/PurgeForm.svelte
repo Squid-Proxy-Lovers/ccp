@@ -5,11 +5,14 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {ContentAdminIntent} from '../../lib/model.js';
   import {focusId, type EntrySummary} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
+
+  const app = mountedView(panelApp);
+  const {confirmAction} = app;
 
   let {entry, onarchive}: {entry: EntrySummary; onarchive: (intent: AdminIntent, outcome: ArchiveOutcome) => void} = $props();
   let open = $state(false);
@@ -27,7 +30,7 @@
     consent = false;
     open = false;
     app.clean();
-    void focusId('purge-summary');
+    void focusId(app, 'purge-summary');
   }
 
   function submit(event: SubmitEvent) {
@@ -42,7 +45,7 @@
         confirm: 'Purge permanently', destructive: true,
       });
       if (!ok) return;
-      const outcome = await sendArchive(intent);
+      const outcome = await sendArchive(app, intent);
       if (outcome) onarchive(intent, outcome);
     }, 'entry-purge');
   }

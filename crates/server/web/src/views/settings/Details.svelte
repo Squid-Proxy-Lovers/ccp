@@ -6,11 +6,14 @@
   import Card from '../../lib/ui/Card.svelte';
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import WorkspaceAvatar from '../../components/WorkspaceAvatar.svelte';
   import type {Session, Workspace} from '../../lib/types';
+
+  const app = mountedView(panelApp);
+  const {copyText} = app;
 
   let {workspace, session}: {workspace: Workspace; session: Session} = $props();
 

@@ -18,6 +18,7 @@
   import DeletionTracker from './views/DeletionTracker.svelte';
   import {app} from './lib/app.svelte';
   import {theme} from './lib/theme.svelte';
+  import {focusHandoffKey} from './lib/focusHandoff.js';
 
   let drawer = $state(false);
   let drawerDialog: HTMLDialogElement | undefined = $state();
@@ -25,14 +26,21 @@
   void app.boot();
 
   // Focus handoff: after any view, workspace, sign-in or lock change, move
-  // focus to the new view's title so keyboard users keep their place.
+  // focus to the new view's title so keyboard users keep their place. Tracking
+  // `activating` means the run that lands when ShellSkeleton gives way to the
+  // real shell (it has no #page-title) also refocuses, instead of only the run
+  // that entered the activating state.
   let previous = '';
   $effect(() => {
-    const key = `${app.session ? 'in' : 'out'}:${app.locked}:${app.workspace?.id ?? ''}:${app.view}`;
+    const key = focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view, app.sessionEpoch);
     if (key === previous || !app.booted) return;
     const first = previous === '';
     previous = key;
     if (first && !app.session) return;
+    if (app.activating) return;
+    // A mobile drawer left open from a prior session would otherwise still be
+    // modal here, and an inert #page-title cannot take focus.
+    drawer = false;
     void tick().then(() => document.getElementById('page-title')?.focus({preventScroll: false}));
   });
   $effect(() => {
@@ -42,14 +50,9 @@
   });
 
   function refresh() {
-    void app.run(async () => {
-      if (!app.mayLeave()) return;
-      app.generation += 1;
-      if (app.view === 'workspaces' || !app.workspace) await app.loadWorkspaces(app.workspacesAfter);
-      else await app.inspectWorkspace();
-      app.refreshTick += 1;
-    }, 'refresh');
+    void app.run(() => app.refreshView(), 'refresh');
   }
+
 </script>
 
 {#if app.locked}

@@ -155,9 +155,14 @@ original book causes a conflict and is never replaced. Resolve that collision
 separately before retrying the uncommitted restore operation.
 
 Archived workspaces remain readable, including archive summaries, but reject all
-content mutations and operation replay. Permanent purge, optional timed retention
-and verified legacy conversion remain subsequent work.
-No cleanup worker starts in this slice. Workspaces mapped from native sessions
+content mutations and operation replay. `server legacy-convert` ships an offline
+conversion into a new instance; in-place, journal-aware conversion remains open.
+Permanent purge and
+[optional timed retention](workspace-retention.md) are available for
+individual archived entries, with no whole-shelf/book cleanup worker.
+[Confirmed whole-workspace deletion](workspace-deletion.md#cleanup-and-retained-records)
+uses the same `retention_worker::run` → `cycle()` loop as timed entry purge.
+Workspaces mapped from native sessions
 return `content_conversion_required` until their journal-aware conversion exists;
 continue using the original native data under the [mode rules](workspace-runtime-mode.md).
 

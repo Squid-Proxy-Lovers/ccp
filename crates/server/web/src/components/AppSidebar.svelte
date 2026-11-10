@@ -6,7 +6,10 @@
   import Logo from './Logo.svelte';
   import WorkspaceAvatar from './WorkspaceAvatar.svelte';
   import {app} from '../lib/app.svelte';
-  import {stamp, relative, copyText} from '../lib/notify.svelte';
+  import {viewLifetime} from '../lib/viewLifecycle.js';
+  const scoped = viewLifetime(app);
+  const copyText = (value: string) => scoped().copyText(value);
+  import {stamp, relative} from '../lib/notify.svelte';
   import type {View, Workspace} from '../lib/types';
 
   let {onnavigate}: {onnavigate?: () => void} = $props();

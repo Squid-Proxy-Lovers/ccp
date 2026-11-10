@@ -3,8 +3,9 @@
 This unreleased internal batch adds admin-key issuance, authentication and
 revocation to the workspace access foundation. The limited
 [workspace HTTPS API](workspace-http-api.md) now retains these checks on each
-request. Local setup/reset commands exist; browser login and session cookies
-remain later work.
+request. Local setup/reset commands exist, and
+[browser login and session cookies](workspace-browser-session.md) build on
+these same keys.
 
 ## Key scope and current authority
 

@@ -9,11 +9,13 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {keyExpiry, principalIdentity} from '../../lib/model.js';
   import {changeSecurity, FormDraft, type Admin, type Report} from './actions';
+
+  const app = mountedView(panelApp);
+  const {notice, confirmAction} = app;
 
   let {admin = null, onclose, onoutcome}: {admin?: Admin | null; onclose: () => void; onoutcome: Report} = $props();
   const form = $derived(new FormDraft(admin ? `team-key:${app.workspace?.id}:${admin.id}` : `team-appoint:${app.workspace?.id}`, {mode: 'new_principal'}));
@@ -24,21 +26,22 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
     void app.run(async () => {
+      const submitted = form;
       if (app.pending) throw new Error('Resolve the original security action first.');
       const workspace = app.workspace!;
-      const expiry = keyExpiry(form.get('expires'));
+      const expiry = keyExpiry(submitted.get('expires'));
       let body: Record<string, unknown>;
-      if (admin) body = {workspace_id: workspace.id, principal_id: admin.id, name: form.get('name'), expires_at: expiry};
+      if (admin) body = {workspace_id: workspace.id, principal_id: admin.id, name: submitted.get('name'), expires_at: expiry};
       else {
-        body = {workspace_id: workspace.id, principal: principalIdentity(form.get('mode'), form.get('principal')), key_expires_at: expiry};
+        body = {workspace_id: workspace.id, principal: principalIdentity(submitted.get('mode'), submitted.get('principal')), key_expires_at: expiry};
       }
       const ok = await confirmAction(admin
         ? {title: 'Create an additional key?', confirm: 'Create key', body: `Create an additional key for ${admin.name} (${admin.id})? Existing keys remain valid.`}
         : {title: 'Appoint workspace administrator?', confirm: 'Appoint and create key',
           body: 'Appoint this principal as a workspace administrator and create its first key? This permits client admission and data management in this workspace.'});
       if (!ok) return;
-      await changeSecurity(onoutcome, admin ? 'keys/issue' : 'team/appoint', body);
-      form.drop();
+      await changeSecurity(app, onoutcome, admin ? 'keys/issue' : 'team/appoint', body);
+      submitted.drop();
     }, 'key-form-submit');
   }
 

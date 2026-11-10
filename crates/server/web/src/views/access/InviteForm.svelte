@@ -7,12 +7,14 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {LinkAttempt} from '../../lib/link_issuance.js';
   import LinkOptions from './LinkOptions.svelte';
   import {changeLink, linkFields, FormDraft, roles, type Report} from './actions';
+
+  const app = mountedView(panelApp);
+  const {notice, confirmAction} = app;
 
   let {unused, onoutcome}: {unused: boolean; onoutcome: Report} = $props();
   const form = new FormDraft(`invite:${app.workspace?.id}`, {role: 'read', mode: 'short'});
@@ -20,10 +22,10 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
     void app.run(async () => {
+      const submitted = form;
       if (app.pending) throw new Error('Resolve the original invitation action first.');
       const workspace = app.workspace!;
-      await changeLink(onoutcome, new LinkAttempt(app.session, workspace, form.get('role'), linkFields(form)));
-      form.drop();
+      await changeLink(app, onoutcome, new LinkAttempt(app.session, workspace, submitted.get('role'), linkFields(submitted)), () => submitted.drop());
     }, 'invite-submit');
   }
 

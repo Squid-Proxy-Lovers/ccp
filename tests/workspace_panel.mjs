@@ -1,9 +1,39 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+// Pure-function tests for the panel's behavioural decisions. model.js and
+// creationConfirm.js are loaded as base64 data: URLs (an established pattern
+// in this file, kept as-is); every other lib/*.js module here is imported
+// directly by relative path -- plain ESM file imports, not a bundler and not
+// node_modules, which is what lets draftCreate.js etc. import drafts.js
+// normally instead of inlining everything to dodge data: URLs' inability to
+// resolve relative specifiers.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+
 const source = await readFile(new URL('../crates/server/web/src/lib/model.js', import.meta.url), 'utf8');
-const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+const {WorkspaceDeletionIntent, canDeleteWorkspace, deletionPreview, deletionLookup, deletionStatusRequest, deletionReceipt, deletionTracking, StatusClearIntent, reportedWorkStatus, reportedWorkPage, ContentAdminIntent, shelfState, archivedShelfPage, ClientAccessAttempt, clientRecoveryScope, recoveryStatus, recoveryPage, EnrollmentAttempt, enrollmentStatus, initialBounds, AdmissionAttempt, canManageInvitations, invitationDeadline, invitationStatus, invitationPage, TransferAttempt, canTransferOwnership, SecurityAttempt, principalIdentity, canManageTeam, keyExpiry, Intent, GuidanceIntent, LifecycleAttempt, RetentionIntent, canChangeLifecycle, retentionSeconds, retentionPolicy, workspaceSnapshot, canPublish, guidanceBundle, signature, canWrite, exactRevision, takeFragment, wire, isStrictUuid, identityKey} = await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+
+const creationConfirmSource = await readFile(new URL('../crates/server/web/src/views/context/creationConfirm.js', import.meta.url), 'utf8');
+const {creationConfirmedText} = await import('data:text/javascript;base64,' + Buffer.from(creationConfirmSource).toString('base64'));
+
+import {acquireDraft, dropDraft, dropDraftIfCurrent, isCurrentDraft, peekDraft, hasDraftContent, hasAnyDraftContent,
+  draftLabels, draftsRecoveryParts, recoveryText, draftLabel, shelfBadgeLabel} from '../crates/server/web/src/lib/drafts.js';
+import {WORKSPACE_DRAFT_KEY, shelfDraftKey, bookDraftKey} from '../crates/server/web/src/lib/draftKeys.js';
+import {submitDraftCreate, reportCreateFailure} from '../crates/server/web/src/lib/draftCreate.js';
+import {discardDraft} from '../crates/server/web/src/lib/draftDiscard.js';
+import {identitySwitchInFlight, formFrozen, hashSwitchBlocked, unsavedWorkSummary, runSignOut, runLogin, runIdentitySwitch}
+  from '../crates/server/web/src/lib/identitySwitch.js';
+import {createWorkspaceFlow} from '../crates/server/web/src/lib/workspaceCreate.js';
+import {focusHandoffKey} from '../crates/server/web/src/lib/focusHandoff.js';
+import {hasUnsavedWork} from '../crates/server/web/src/lib/unsavedWork.js';
+import {clearedSessionState} from '../crates/server/web/src/lib/sessionReset.js';
+
+/** A promise whose resolution is controlled from outside, for simulating an in-flight request. */
+function defer() {
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  return {promise, resolve, reject};
+}
 
 const session = () => ({instance_id: 'instance', csrf_token: 'proof', identity: {
   key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: 'workspace', role: 'owner'},
@@ -742,3 +772,2033 @@ test('existing principal UUIDs are canonical before freezing and verifying a key
   }
   assert.throws(() => principalIdentity('other', lower));
 });
+
+test('the shared strict UUID check accepts only canonical lowercase, non-nil UUIDs', () => {
+  const canonical = '12345678-1111-2222-3333-123456789abc';
+  assert.equal(isStrictUuid(canonical), true);
+  assert.equal(isStrictUuid(canonical.toUpperCase()), false);
+  assert.equal(isStrictUuid('00000000-0000-0000-0000-000000000000'), false);
+  assert.equal(isStrictUuid('not-a-uuid'), false);
+  assert.equal(isStrictUuid(123), false);
+  assert.equal(isStrictUuid(null), false);
+});
+
+test('identityKey ignores the CSRF/session token the real server rotates on every login', () => {
+  const base = session();
+  const rotated = {...base, csrf_token: 'a-completely-different-token'};
+  assert.notEqual(signature(base), signature(rotated), 'signature() still cares about csrf_token (session-drift detection needs that)');
+  assert.equal(identityKey(base), identityKey(rotated), 'identityKey() must not, since the server issues a fresh one on every login, same key or not');
+});
+
+test('identityKey distinguishes instance, key, principal and scope, each independently', () => {
+  const base = session();
+  assert.notEqual(identityKey(base), identityKey({...base, instance_id: 'other-instance'}));
+  for (const mutate of [s => { s.identity = {...s.identity, key_id: 'other'}; },
+    s => { s.identity = {...s.identity, principal_id: 'other'}; },
+    s => { s.identity = {...s.identity, scope: {...s.identity.scope, role: 'admin'}}; }]) {
+    const changed = session(); mutate(changed);
+    assert.notEqual(identityKey(changed), identityKey(base));
+  }
+  const same = session();
+  assert.equal(identityKey(same), identityKey(base));
+});
+
+test('a dropped form draft is actually gone; re-acquiring it returns a live, independent object', () => {
+  const drafts = {};
+  const first = acquireDraft(drafts, 'create-workspace');
+  first.name = 'Orphan';
+  assert.equal(drafts['create-workspace'], first);
+  dropDraft(drafts, 'create-workspace');
+  assert.equal('create-workspace' in drafts, false);
+  // The caller's old reference is now orphaned: it keeps its stale value but no
+  // longer reaches the live store, so edits to it would never resurface.
+  assert.equal(first.name, 'Orphan');
+  const second = acquireDraft(drafts, 'create-workspace');
+  assert.notEqual(second, first);
+  assert.deepEqual(second, {});
+  second.name = 'Fresh';
+  assert.equal(drafts['create-workspace'].name, 'Fresh');
+  assert.equal(first.name, 'Orphan');
+});
+
+test('peeking a form draft never creates it, unlike acquiring', () => {
+  const drafts = {};
+  assert.deepEqual(peekDraft(drafts, 'context.book.ws.shelf'), {});
+  assert.equal('context.book.ws.shelf' in drafts, false);
+  acquireDraft(drafts, 'context.book.ws.shelf').name = 'Notes';
+  assert.deepEqual(peekDraft(drafts, 'context.book.ws.shelf'), {name: 'Notes'});
+});
+
+test('draft content is blank-trimmed, so sign-out treats whitespace-only fields as nothing to lose', () => {
+  assert.equal(hasDraftContent({name: '', description: ''}), false);
+  assert.equal(hasDraftContent({name: '   ', description: '\n'}), false);
+  assert.equal(hasDraftContent({name: 'Research', description: ''}), true);
+  assert.equal(hasAnyDraftContent({}), false);
+  assert.equal(hasAnyDraftContent({a: {name: ''}, b: {name: '  '}}), false);
+  assert.equal(hasAnyDraftContent({a: {name: ''}, b: {name: 'Shelf'}}), true);
+});
+
+test('an acknowledged shelf or book create drops out of recovery text once its draft is dropped', () => {
+  const drafts = {'context.shelf.ws': {name: 'Research', description: ''}, 'context.book.ws.shelf1': {name: '', description: ''}};
+  const before = recoveryText(null, '', drafts);
+  assert.match(before, /Research/);
+  assert.match(before, /name: Research/);
+  // The create for this shelf is now confirmed server-side; its draft is dropped
+  // exactly like entryWrite.ts clears `app.pending` once a write is confirmed.
+  dropDraft(drafts, 'context.shelf.ws');
+  const after = recoveryText(null, '', drafts);
+  assert.doesNotMatch(after, /Research/);
+});
+
+test('discarding one draft leaves other unsaved work visible in recovery text', () => {
+  const drafts = {'context.book.ws.shelf1': {name: 'Second shelf book', description: ''}};
+  const withNote = recoveryText(null, 'An unsaved append note', drafts);
+  assert.match(withNote, /unsaved append note/);
+  assert.match(withNote, /Second shelf book/);
+  // Discarding the separate note (app.draft) must not also discard the kept
+  // creation draft that recoveryText reports independently.
+  const noteDiscarded = recoveryText(null, '', drafts);
+  assert.doesNotMatch(noteDiscarded, /unsaved append note/);
+  assert.match(noteDiscarded, /Second shelf book/);
+  assert.deepEqual(draftsRecoveryParts({}), []);
+});
+
+test('an uncertain pending write takes recovery precedence over a plain text draft', () => {
+  assert.equal(recoveryText({body: 'PENDING_INTENT'}, 'ignored draft text', {}), 'PENDING_INTENT');
+  assert.equal(recoveryText(null, 'kept draft text', {}), 'kept draft text');
+  assert.equal(draftLabel('context.book.11111111-1111-4111-8111-111111111111'), 'Context book draft');
+});
+
+test('a confirmed shelf or book create reads like entryWrite.ts: confirmed, named and not a retry invitation', () => {
+  const shelf = creationConfirmedText('shelf', {id: 'shelf-1', name: 'Research'});
+  assert.match(shelf, /^Shelf “Research” creation confirmed \(id shelf-1\)/);
+  assert.match(shelf, /do not repeat the create/);
+  const book = creationConfirmedText('book', {id: 'book-1', name: 'Notes'});
+  assert.match(book, /^Book “Notes” creation confirmed \(id book-1\)/);
+});
+
+test('dropping one form draft never touches another form\'s draft', () => {
+  const drafts = {};
+  acquireDraft(drafts, 'create-workspace').name = 'Workspace draft';
+  const book = acquireDraft(drafts, 'context.book.ws.shelf');
+  book.name = 'Book draft';
+  dropDraft(drafts, 'create-workspace');
+  assert.equal('create-workspace' in drafts, false);
+  assert.equal(drafts['context.book.ws.shelf'], book);
+  assert.equal(drafts['context.book.ws.shelf'].name, 'Book draft');
+});
+
+test('dropDraftIfCurrent and isCurrentDraft only act on the exact object they were given', () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  assert.equal(isCurrentDraft(drafts, 'k', a), true);
+  const stranger = {name: 'not the live one'};
+  assert.equal(isCurrentDraft(drafts, 'k', stranger), false);
+  assert.equal(dropDraftIfCurrent(drafts, 'k', stranger), false);
+  assert.equal(drafts['k'], a, 'a mismatched identity must not drop the real draft');
+  assert.equal(dropDraftIfCurrent(drafts, 'k', a), true);
+  assert.equal('k' in drafts, false);
+  assert.equal(dropDraftIfCurrent(drafts, 'k', a), false, 'dropping an already-gone draft reports nothing to drop');
+});
+
+test('draftLabels names only the drafts that currently have content', () => {
+  const drafts = {'create-workspace': {name: 'Probe', owner: ''}, 'context.shelf.ws': {name: '', description: '  '}};
+  assert.deepEqual(draftLabels(drafts), ['Create workspace draft']);
+  assert.deepEqual(draftLabels({}), []);
+});
+
+// ---- draft keys: every reader of the same target must agree on the same key ----
+
+test('shelf and book draft keys are stable, parameterised and distinct per target', () => {
+  assert.equal(WORKSPACE_DRAFT_KEY, 'create-workspace');
+  assert.equal(shelfDraftKey('ws-1'), 'context.shelf.ws-1');
+  assert.equal(bookDraftKey('ws-1', 'shelf-1'), 'context.book.ws-1.shelf-1');
+  assert.notEqual(bookDraftKey('ws-1', 'shelf-1'), bookDraftKey('ws-1', 'shelf-2'));
+  assert.notEqual(shelfDraftKey('ws-1'), shelfDraftKey('ws-2'));
+});
+
+test('shelfBadgeLabel prefers New over a kept book draft, and never mutates its input', () => {
+  assert.equal(shelfBadgeLabel(true, {name: 'kept'}), 'New');
+  assert.equal(shelfBadgeLabel(true, {}), 'New');
+  assert.equal(shelfBadgeLabel(false, {name: 'Notes', description: ''}), 'Book draft kept');
+  assert.equal(shelfBadgeLabel(false, {name: '', description: '  '}), undefined);
+  assert.equal(shelfBadgeLabel(false, {}), undefined);
+});
+
+// ---- the create-then-drop flow (bug: a replacement draft erased by a stale create) ----
+// submitDraftCreate now performs the drop itself, directly against `drafts`,
+// rather than through an injectable "drop"/"isCurrent" callback a caller (or
+// a mutation) could silently neuter -- there is no such parameter any more.
+
+test('submitDraftCreate drops the submitted draft on success, not whatever replaced it', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const write = defer();
+  const outcomePromise = submitDraftCreate({
+    drafts, key: 'k', submitted: a,
+    request: () => write.promise,
+    confirmedText: () => { throw new Error('must not be called on a plain success'); },
+  });
+  // While the create for A is still in flight, discard it and type a fresh draft B.
+  dropDraft(drafts, 'k');
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  write.resolve({id: 'created-a'});
+  const outcome = await outcomePromise;
+  assert.equal(outcome.ok, true);
+  assert.deepEqual(outcome.result, {id: 'created-a'});
+  // B must survive: the stale completion for A must not erase it.
+  assert.equal(drafts['k'], b);
+  assert.equal(drafts['k'].name, 'B');
+});
+
+test('submitDraftCreate drops the submitted draft on success when nothing raced it', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const outcome = await submitDraftCreate({
+    drafts, key: 'k', submitted: a,
+    request: async () => ({id: 'created-a'}),
+    confirmedText: () => '',
+  });
+  assert.equal(outcome.ok, true);
+  assert.equal('k' in drafts, false);
+});
+
+test('submitDraftCreate reports whether a failed create\'s draft is still the one it submitted', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const untouched = await submitDraftCreate({
+    drafts, key: 'k', submitted: a,
+    request: async () => { throw new Error('503'); },
+    confirmedText: () => '',
+  });
+  assert.equal(untouched.ok, false);
+  assert.equal(untouched.keptCurrent, true, 'nothing raced it, so claiming the draft is kept is true');
+  assert.equal(drafts['k'], a, 'a failed write never drops the draft');
+
+  // Now repeat with a discard racing the same failing write.
+  const write = defer();
+  const racedPromise = submitDraftCreate({
+    drafts, key: 'k', submitted: a,
+    request: () => write.promise,
+    confirmedText: () => '',
+  });
+  dropDraft(drafts, 'k');
+  write.reject(new Error('503'));
+  const raced = await racedPromise;
+  assert.equal(raced.ok, false);
+  assert.equal(raced.keptCurrent, false, 'the draft was already discarded, so it is false to call it kept');
+});
+
+test('submitDraftCreate\'s confirmed callback drops the draft and uses confirmedText, before the caller\'s lock throws', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  let seenData = null;
+  const outcome = await submitDraftCreate({
+    drafts, key: 'k', submitted: a,
+    // Mirrors app.request(): calls `confirmed` with the write's result, then
+    // throws with its text, when the post-write session check fails.
+    request: async confirmed => { const text = confirmed({id: 'created-a', name: 'A'}); seenData = text; throw new Error(text); },
+    confirmedText: data => `confirmed ${data.id} (${data.name})`,
+  });
+  assert.equal(seenData, 'confirmed created-a (A)');
+  assert.equal('k' in drafts, false, 'the confirmed callback drops the draft before the request rejects');
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.error.message, 'confirmed created-a (A)');
+});
+
+test('submitDraftCreate\'s confirmed callback is also identity-safe: a draft replaced first is not dropped', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  dropDraft(drafts, 'k');
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  const outcome = await submitDraftCreate({
+    drafts, key: 'k', submitted: a,
+    request: async confirmed => { const text = confirmed({id: 'created-a'}); throw new Error(text); },
+    confirmedText: () => 'confirmed',
+  });
+  assert.equal(outcome.ok, false);
+  assert.equal(drafts['k'], b, 'B must survive a confirmed callback for the stale submission A');
+});
+
+// ---- the locked-or-failed create message: one place that decides it, not a Svelte branch ----
+
+test('reportCreateFailure says nothing once the page is already locked', () => {
+  let notified = false;
+  reportCreateFailure({
+    locked: true, outcome: {error: new Error('x'), keptCurrent: true}, kind: 'shelf',
+    message: () => 'x', outcomeUnknown: () => true, notify: () => { notified = true; },
+  });
+  assert.equal(notified, false, 'the lock message already covers it');
+});
+
+test('reportCreateFailure names the draft kept only when it actually still is, with the uncertain-outcome hint when relevant', () => {
+  const seen = [];
+  const notify = (text, tone) => seen.push([text, tone]);
+  reportCreateFailure({locked: false, outcome: {error: 'e', keptCurrent: true}, kind: 'shelf', message: () => 'Server unavailable.', outcomeUnknown: () => true, notify});
+  assert.match(seen[0][0], /^Server unavailable\. Your shelf draft is kept\. Refresh the list/);
+  assert.equal(seen[0][1], 'destructive');
+  seen.length = 0;
+  reportCreateFailure({locked: false, outcome: {error: 'e', keptCurrent: true}, kind: 'book', message: () => 'Rejected.', outcomeUnknown: () => false, notify});
+  assert.equal(seen[0][0], 'Rejected. Your book draft is kept.');
+  seen.length = 0;
+  reportCreateFailure({locked: false, outcome: {error: 'e', keptCurrent: false}, kind: 'shelf', message: () => 'Rejected.', outcomeUnknown: () => false, notify});
+  assert.match(seen[0][0], /^Rejected\. Your original shelf draft was discarded or replaced/);
+});
+
+// ---- the discard decision (bug: discard must not race a create, or lose B to a stale A) ----
+// discardDraft performs the drop AND the re-acquire directly against
+// `drafts`, not via injectable callbacks a mutation could redirect or drop:
+// there is nothing left at the call site responsible for "fetch a fresh
+// draft after a successful discard" -- the returned value already is one.
+
+test('discardDraft refuses while the matching create is already in flight', async () => {
+  const drafts = {}; const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  let confirmCalled = false;
+  const fresh = await discardDraft({
+    drafts, key: 'k', current: a,
+    isBlocked: () => true,
+    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
+  });
+  assert.equal(fresh, null);
+  assert.equal(confirmCalled, false, 'blocked discard never even asks');
+  assert.equal(drafts['k'], a);
+});
+
+test('discardDraft re-checks after the confirmation dialog closes, in case a create started meanwhile', async () => {
+  const drafts = {}; const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  let blocked = false;
+  const confirmation = defer();
+  const promise = discardDraft({
+    drafts, key: 'k', current: a,
+    isBlocked: () => blocked,
+    confirm: () => confirmation.promise,
+  });
+  // The user is still looking at the confirm dialog when a create for this form starts.
+  blocked = true;
+  confirmation.resolve(true);
+  const fresh = await promise;
+  assert.equal(fresh, null);
+  assert.equal(drafts['k'], a, 'a create that started while the dialog was open must still win');
+});
+
+test('discardDraft drops and returns a fresh, empty replacement for exactly the draft it was given, never another key', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const other = acquireDraft(drafts, 'other'); other.name = 'untouched';
+  const fresh = await discardDraft({drafts, key: 'k', current: a, isBlocked: () => false, confirm: () => Promise.resolve(true)});
+  assert.notEqual(fresh, a);
+  assert.deepEqual(fresh, {});
+  assert.equal(drafts['k'], fresh, 'the returned draft must already be the live one, not a detached copy');
+  assert.equal(drafts['other'], other, 'discarding one form must never touch another');
+
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  const declined = await discardDraft({drafts, key: 'k', current: b, isBlocked: () => false, confirm: () => Promise.resolve(false)});
+  assert.equal(declined, null);
+  assert.equal(drafts['k'], b);
+});
+
+test('discardDraft is identity-safe: discarding a stale reference never drops the current draft', async () => {
+  const drafts = {};
+  const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  dropDraft(drafts, 'k');
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  // `current` is `a`, a stale reference -- as if discard() had been asked
+  // about a draft that something else already replaced.
+  const fresh = await discardDraft({drafts, key: 'k', current: a, isBlocked: () => false, confirm: () => Promise.resolve(true)});
+  assert.equal(fresh, null);
+  assert.equal(drafts['k'], b);
+});
+
+// ---- form freezing: an identity switch, or this exact form's own create ----
+
+test('identitySwitchInFlight freezes forms only for sign-out and login busy keys', () => {
+  assert.equal(identitySwitchInFlight(true, 'signout'), true);
+  assert.equal(identitySwitchInFlight(true, 'login'), true);
+  assert.equal(identitySwitchInFlight(true, 'create-shelf'), false);
+  assert.equal(identitySwitchInFlight(true, ''), false);
+  assert.equal(identitySwitchInFlight(false, 'signout'), false);
+});
+
+test('formFrozen freezes for an identity switch or this form\'s own create, and nothing else', () => {
+  assert.equal(formFrozen(true, 'signout', 'create-workspace'), true);
+  assert.equal(formFrozen(true, 'login', 'create-shelf'), true);
+  assert.equal(formFrozen(true, 'create-workspace', 'create-workspace'), true, 'this exact form\'s own create freezes it');
+  assert.equal(formFrozen(true, 'create-shelf', 'create-book'), false, 'a different form\'s own create does not');
+  assert.equal(formFrozen(false, '', 'create-workspace'), false);
+  // Not busy, but busyKey happens to still equal formKey (a stale value):
+  // must not freeze. Only an actually in-flight busy action (busy === true)
+  // freezes anything.
+  assert.equal(formFrozen(false, 'create-workspace', 'create-workspace'), false);
+});
+
+test('unsavedWorkSummary names kept drafts and an undismissed owner key, together or alone', () => {
+  assert.equal(unsavedWorkSummary(['Create workspace draft'], true), 'Create workspace draft, the workspace owner key shown on screen');
+  assert.equal(unsavedWorkSummary([], true), 'the workspace owner key shown on screen');
+  assert.equal(unsavedWorkSummary(['A', 'B'], false), 'A, B');
+  assert.equal(unsavedWorkSummary([], false), '');
+});
+
+test('hashSwitchBlocked refuses while busy, locked, or an unresolved pending/dirty edit blocks leaving', () => {
+  assert.equal(hashSwitchBlocked(true, false, true), true, 'busy');
+  assert.equal(hashSwitchBlocked(false, true, true), true, 'locked');
+  assert.equal(hashSwitchBlocked(false, false, false), true, '!mayLeave()');
+  assert.equal(hashSwitchBlocked(false, false, true), false, 'nothing blocking');
+});
+
+// ---- sign-out: confirm (only if there is something to lose), then verify, log out, reset, in that order ----
+
+test('runSignOut signs out without asking when there is nothing to lose', async () => {
+  let confirmCalled = false, resetCalled = false;
+  const proceeded = await runSignOut({
+    hasUnsavedWork: () => false,
+    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
+    verify: async () => 'session',
+    logout: async () => {},
+    reset: () => { resetCalled = true; },
+  });
+  assert.equal(proceeded, true);
+  assert.equal(confirmCalled, false);
+  assert.equal(resetCalled, true);
+});
+
+test('runSignOut asks when there is unsaved work, and a decline skips verify/logout/reset entirely', async () => {
+  let verifyCalled = false, logoutCalled = false, resetCalled = false;
+  const proceeded = await runSignOut({
+    hasUnsavedWork: () => true,
+    confirm: () => Promise.resolve(false),
+    verify: () => { verifyCalled = true; return Promise.resolve('session'); },
+    logout: async () => { logoutCalled = true; },
+    reset: () => { resetCalled = true; },
+  });
+  assert.equal(proceeded, false);
+  assert.equal(verifyCalled, false);
+  assert.equal(logoutCalled, false);
+  assert.equal(resetCalled, false);
+});
+
+test('runSignOut verifies, logs out and resets in exactly that order', async () => {
+  const order = [];
+  const verifyDeferred = defer();
+  const promise = runSignOut({
+    hasUnsavedWork: () => true,
+    confirm: async () => true,
+    verify: () => { order.push('verify-start'); return verifyDeferred.promise; },
+    logout: async session => { order.push('logout:' + session); },
+    reset: () => order.push('reset'),
+  });
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(order, ['verify-start'], 'logout/reset must not run before verify settles');
+  verifyDeferred.resolve('SESSION');
+  const proceeded = await promise;
+  assert.equal(proceeded, true);
+  assert.deepEqual(order, ['verify-start', 'logout:SESSION', 'reset']);
+});
+
+// ---- establishing a new identity: clear only after the request succeeds, before activating ----
+
+test('runLogin clears drafts/owner-key only after the request succeeds, then activates', async () => {
+  const order = [];
+  await runLogin({
+    request: async () => { order.push('request'); return 'SESSION'; },
+    clearForNewIdentity: () => order.push('clear'),
+    activate: async session => order.push('activate:' + session),
+  });
+  assert.deepEqual(order, ['request', 'clear', 'activate:SESSION']);
+});
+
+test('runLogin leaves drafts and the owner key untouched when the request is rejected', async () => {
+  let cleared = false, activated = false;
+  await assert.rejects(runLogin({
+    request: () => Promise.reject(new Error('bad key')),
+    clearForNewIdentity: () => { cleared = true; },
+    activate: async () => { activated = true; },
+  }), /bad key/);
+  assert.equal(cleared, false);
+  assert.equal(activated, false);
+});
+
+// ---- a hash-key sign-in over a live session -------------------------------
+// The key is opaque, so whose identity it holds cannot be known before the
+// request. Whenever there is unsaved work, runIdentitySwitch must ask BEFORE
+// sending anything -- the server replaces the session cookie (and
+// invalidates the old one) on every successful login, same identity or not,
+// so a decline must truly send no request at all. identity is only compared
+// AFTER a successful request, and never via the CSRF/session token (which
+// always differs, even for the same key -- see model.js's identityKey()).
+
+test('runIdentitySwitch asks before sending anything when there is unsaved work, and a decline sends no request', async () => {
+  let requestCalled = false, adopted = false, cleared = false, activated = false;
+  const outcome = await runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => Promise.resolve(false),
+    request: () => { requestCalled = true; return Promise.resolve('SESSION'); },
+    sameIdentity: () => true,
+    adoptSession: () => { adopted = true; },
+    clearForNewIdentity: () => { cleared = true; },
+    activate: async () => { activated = true; },
+  });
+  assert.equal(outcome, 'declined');
+  assert.equal(requestCalled, false, 'a decline must never send the login request at all');
+  assert.equal(adopted, false);
+  assert.equal(cleared, false);
+  assert.equal(activated, false);
+});
+
+test('runIdentitySwitch resolves the confirm before ever calling request (order, not just outcome)', async () => {
+  const order = [];
+  const confirmation = defer();
+  const promise = runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => { order.push('confirm-start'); return confirmation.promise; },
+    request: async () => { order.push('request'); return 'SESSION'; },
+    sameIdentity: () => true,
+    adoptSession: () => order.push('adopt'),
+    clearForNewIdentity: () => order.push('clear'),
+    activate: async () => order.push('activate'),
+  });
+  await Promise.resolve(); await Promise.resolve();
+  assert.deepEqual(order, ['confirm-start'], 'request must not run before the confirm settles');
+  confirmation.resolve(true);
+  await promise;
+  assert.deepEqual(order, ['confirm-start', 'request', 'adopt']);
+});
+
+test('runIdentitySwitch sends the request directly, without asking, when there is nothing to lose', async () => {
+  let confirmCalled = false, requestCalled = false;
+  const outcome = await runIdentitySwitch({
+    hasUnsavedWork: () => false,
+    confirm: () => { confirmCalled = true; return Promise.resolve(true); },
+    request: async () => { requestCalled = true; return 'SESSION'; },
+    sameIdentity: () => false,
+    adoptSession: () => {}, clearForNewIdentity: () => {}, activate: async () => {},
+  });
+  assert.equal(outcome, 'switched');
+  assert.equal(confirmCalled, false);
+  assert.equal(requestCalled, true);
+});
+
+test('runIdentitySwitch adopts the new session/CSRF for the same identity, keeping every draft and the owner key', async () => {
+  let cleared = false, activated = false, adoptedWith = null;
+  const outcome = await runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => Promise.resolve(true),
+    request: async () => 'NEW_SESSION_SAME_IDENTITY',
+    sameIdentity: session => session === 'NEW_SESSION_SAME_IDENTITY',
+    adoptSession: session => { adoptedWith = session; },
+    clearForNewIdentity: () => { cleared = true; },
+    activate: async () => { activated = true; },
+  });
+  assert.equal(outcome, 'same');
+  assert.equal(adoptedWith, 'NEW_SESSION_SAME_IDENTITY');
+  assert.equal(cleared, false, 'the same identity must never clear drafts or the owner key');
+  assert.equal(activated, false, 'adopting in place must not run the full activate (no workspace/view reset)');
+});
+
+test('runIdentitySwitch clears then activates for a different identity, in that order', async () => {
+  const order = [];
+  const outcome = await runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => Promise.resolve(true),
+    request: async () => 'OTHER_SESSION',
+    sameIdentity: () => false,
+    adoptSession: () => order.push('adopt'),
+    clearForNewIdentity: () => order.push('clear'),
+    activate: async session => order.push('activate:' + session),
+  });
+  assert.equal(outcome, 'switched');
+  assert.deepEqual(order, ['clear', 'activate:OTHER_SESSION']);
+});
+
+test('runIdentitySwitch leaves drafts, the owner key and the current session untouched when a confirmed request is rejected', async () => {
+  let adopted = false, cleared = false, activated = false;
+  await assert.rejects(runIdentitySwitch({
+    hasUnsavedWork: () => true,
+    confirm: () => Promise.resolve(true),
+    request: () => Promise.reject(new Error('bad key')),
+    sameIdentity: () => false,
+    adoptSession: () => { adopted = true; }, clearForNewIdentity: () => { cleared = true; }, activate: async () => { activated = true; },
+  }), /bad key/);
+  assert.equal(adopted, false);
+  assert.equal(cleared, false);
+  assert.equal(activated, false);
+});
+
+// ---- workspace creation's one-time owner key: block a second create, never drop its own draft unconditionally ----
+
+test('createWorkspaceFlow blocks while the previous owner key is undismissed, without even trying the write', async () => {
+  const activity = {workspaceCreates: 0};
+  let requestCalled = false;
+  const outcome = await createWorkspaceFlow({
+    hasUndismissedOwnerKey: () => true,
+    activity,
+    drafts: {}, key: 'k', submitted: {},
+    request: () => { requestCalled = true; return Promise.resolve({}); },
+    confirmedText: () => '',
+  });
+  assert.deepEqual(outcome, {ok: false, blocked: true});
+  assert.equal(activity.workspaceCreates, 0);
+  assert.equal(requestCalled, false);
+});
+
+test('createWorkspaceFlow behaves exactly like submitDraftCreate once unblocked', async () => {
+  const drafts = {}; const a = acquireDraft(drafts, 'k'); a.name = 'A';
+  const ok = await createWorkspaceFlow({
+    hasUndismissedOwnerKey: () => false,
+    drafts, key: 'k', submitted: a,
+    request: async () => ({workspace_id: 'ws-1'}),
+    confirmedText: () => '',
+  });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.blocked, false);
+  assert.equal('k' in drafts, false);
+
+  const b = acquireDraft(drafts, 'k'); b.name = 'B';
+  const failed = await createWorkspaceFlow({
+    hasUndismissedOwnerKey: () => false,
+    drafts, key: 'k', submitted: b,
+    request: async () => { throw new Error('503'); },
+    confirmedText: () => '',
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.blocked, false);
+  assert.equal(failed.keptCurrent, true);
+});
+
+// ---- one hasUnsavedWork(state), shared by sign-out, the hash switch, beforeunload and LockedView ----
+
+test('hasUnsavedWork is true for a kept draft, an undismissed owner key, either, neither or both', () => {
+  assert.equal(hasUnsavedWork({drafts: {}, createdWorkspace: null}), false);
+  assert.equal(hasUnsavedWork({drafts: {k: {name: ''}}, createdWorkspace: null}), false, 'a blank draft is not unsaved work');
+  assert.equal(hasUnsavedWork({drafts: {k: {name: 'Research'}}, createdWorkspace: null}), true);
+  assert.equal(hasUnsavedWork({drafts: {}, createdWorkspace: {workspace_id: 'w', owner_key: 'k'}}), true);
+  assert.equal(hasUnsavedWork({drafts: {k: {name: 'Research'}}, createdWorkspace: {workspace_id: 'w', owner_key: 'k'}}), true);
+});
+
+// ---- what signing out, or activating a new identity, actually clears ----
+
+test('clearedSessionState clears the session, every draft, the owner key, and returns to overview', () => {
+  const cleared = clearedSessionState();
+  assert.deepEqual(cleared, {
+    session: null, workspace: null, inspection: null, workspaces: [], workspacesNext: null, workspacesAfter: null,
+    dirty: false, pending: null, draft: '', drafts: {}, locked: false, lockMessage: '', createdWorkspace: null, view: 'overview',
+  });
+});
+
+test('clearedSessionState returns fresh objects each time (no shared mutable state across resets)', () => {
+  const first = clearedSessionState();
+  first.drafts.leaked = {name: 'should not appear in the next reset'};
+  first.workspaces.push('should not appear either');
+  const second = clearedSessionState();
+  assert.deepEqual(second.drafts, {});
+  assert.deepEqual(second.workspaces, []);
+});
+
+// ---- the focus-handoff effect's dependency key must change when `activating` does ----
+
+test('focusHandoffKey changes with activating, independently of session, locked, workspace and view', () => {
+  const base = focusHandoffKey({}, false, true, 'ws', 'overview');
+  assert.notEqual(focusHandoffKey({}, false, false, 'ws', 'overview'), base);
+  assert.notEqual(focusHandoffKey(null, false, true, 'ws', 'overview'), base);
+  assert.notEqual(focusHandoffKey({}, true, true, 'ws', 'overview'), base);
+  assert.notEqual(focusHandoffKey({}, false, true, 'other', 'overview'), base);
+  assert.notEqual(focusHandoffKey({}, false, true, 'ws', 'context'), base);
+  assert.equal(focusHandoffKey({}, false, true, 'ws', 'overview'), base);
+  assert.equal(focusHandoffKey({}, false, true, undefined, 'overview'), focusHandoffKey({}, false, true, '', 'overview'));
+});
+
+
+// These tests drive the actual request/verify/adoption/discard implementations.
+// No test calls a create's confirmed callback itself. The mock models the Rust
+// login handler: success rotates cookie + CSRF and invalidates the previous
+// token; rejection changes neither. A held request retains its dispatch cookie.
+import {sessionRequest, verifySession, adoptSession, creationRecovery} from '../crates/server/web/src/lib/sessionRequests.js';
+import {discardAndSignIn, lockedSignInBlocked} from '../crates/server/web/src/lib/lockedSignIn.js';
+
+function browserSessionServer() {
+  let serial = 1, cookie = 'token-1';
+  const sessions = new Map([[cookie, {...session(), csrf_token: 'csrf-1'}]]);
+  const holds = new Map();
+  const requests = [];
+  const created = {workspace_id: 'created-workspace', owner_key: 'one-time-test-owner'};
+  const fail = (status, message) => Object.assign(new Error(message), {status});
+  function hold(path, options = {}) {
+    const started = defer(), response = defer();
+    const gate = {started: started.promise, release: null};
+    const queue = holds.get(path) ?? [];
+    queue.push({started, response, gate, options}); holds.set(path, queue);
+    return gate;
+  }
+  function wire(path, body, csrf) {
+    const token = cookie;
+    requests.push({path, token, csrf});
+    function reply() {
+      if (path.endsWith('/login')) {
+        if (csrf !== 'login' || JSON.parse(body).key !== 'accepted-test-key') throw fail(401, 'Invalid key');
+        const next = {...session(), csrf_token: `csrf-${++serial}`};
+        sessions.delete(cookie); cookie = `token-${serial}`; sessions.set(cookie, next);
+        return next;
+      }
+      const current = sessions.get(token);
+      if (!current) throw fail(401, 'Expired browser session');
+      if (body !== undefined && csrf !== current.csrf_token) throw fail(403, 'Invalid CSRF');
+      if (path === '/api/v1/admin/workspaces/inspect') return {workspace: {id: JSON.parse(body).workspace_id, name: 'Example', archived: false}, owner_id: 'owner'};
+      if (path.startsWith('/api/v1/content/') && path.endsWith('/create')) return {id: 'created-node', name: JSON.parse(body).name};
+      if (path.startsWith('/api/v1/admin/workspaces?')) return {workspaces: [], next_cursor: null};
+      if (path === '/denied') throw fail(403, 'Permission revoked');
+      if (path.endsWith('/create')) return created;
+      return current;
+    }
+    const held = holds.get(path)?.shift();
+    if (held) {
+      const early = held.options.processFirst ? reply() : undefined;
+      held.gate.release = () => {
+        try {
+          if (held.options.status) throw fail(held.options.status, 'Held request failed');
+          held.response.resolve(held.options.processFirst ? early : reply());
+        } catch (error) { held.response.reject(error); }
+      };
+      held.started.resolve({token, csrf});
+      return held.response.promise;
+    }
+    try { return Promise.resolve(reply()); } catch (error) { return Promise.reject(error); }
+  }
+  return {wire, hold, created, requests, current: () => sessions.get(cookie), cookie: () => cookie};
+}
+
+function requestHarness() {
+  const server = browserSessionServer();
+  const state = {...clearedSessionState(), session: server.current(), generation: 0, inflight: 0};
+  const deps = {wire: server.wire, lock: message => { state.locked = true; state.lockMessage = message; state.generation++; }};
+  state.recoveryText = () => recoveryText(state.pending, state.draft, state.drafts);
+  const request = (path, body, confirmed) => sessionRequest(state, deps, path, body, confirmed);
+  function create() {
+    const submitted = acquireDraft(state.drafts, WORKSPACE_DRAFT_KEY); submitted.name = 'Created';
+    return createWorkspaceFlow({
+      hasUndismissedOwnerKey: () => state.createdWorkspace !== null,
+      drafts: state.drafts, key: WORKSPACE_DRAFT_KEY, submitted,
+      request: confirmed => request('/api/v1/admin/workspaces/create', {name: submitted.name}, confirmed),
+      confirmedText: data => { state.createdWorkspace = data; return creationRecovery('/api/v1/admin/workspaces/create', data); },
+    });
+  }
+  const login = () => runIdentitySwitch({
+    hasUnsavedWork: () => hasUnsavedWork(state), confirm: async () => true,
+    request: () => server.wire('/api/v1/admin/session/login', JSON.stringify({key: 'accepted-test-key'}), 'login'),
+    sameIdentity: next => identityKey(next) === identityKey(state.session),
+    adoptSession: next => adoptSession(state, next),
+    clearForNewIdentity: () => { throw new Error('same identity must preserve local work'); },
+    activate: async () => { throw new Error('same identity must adopt in place'); },
+  });
+  return {server, state, deps, request, create, login};
+}
+
+test('request ordering: a concurrent lock after successful post-create verification keeps the key and drops the submitted draft', async () => {
+  const h = requestHarness();
+  const write = h.server.hold('/api/v1/admin/workspaces/create');
+  const creating = h.create(); await write.started;
+  const postcheck = h.server.hold('/api/v1/admin/session');
+  write.release(); await postcheck.started;
+  const denied = h.server.hold('/denied');
+  const other = assert.rejects(h.request('/denied'), /Permission revoked/); await denied.started;
+  // Resolving these in order lets verify succeed, then locks from the other
+  // request before the create's continuation resumes (FIFO promise jobs).
+  postcheck.release(); denied.release();
+  await other;
+  const outcome = await creating;
+  assert.equal(outcome.ok, false);
+  assert.equal(h.state.locked, true);
+  assert.equal(h.state.createdWorkspace, h.server.created);
+  assert.equal(WORKSPACE_DRAFT_KEY in h.state.drafts, false);
+  assert.equal(h.state.inflight, 0);
+});
+
+test('discard ordering: an owner key arriving during the open sign-in confirmation requires a fresh decision', async () => {
+  const h = requestHarness();
+  const write = h.server.hold('/api/v1/admin/workspaces/create');
+  const creating = h.create(); await write.started;
+  h.deps.lock('Session ended');
+  const choice = defer(); let dialog;
+  const reset = () => Object.assign(h.state, clearedSessionState());
+  const discarding = discardAndSignIn(h.state, options => { dialog = options; return choice.promise; }, reset);
+  assert.doesNotMatch(dialog.body, /owner key/);
+  write.release(); await creating;
+  assert.equal(h.state.createdWorkspace, h.server.created);
+  choice.resolve(true); await discarding;
+  assert.equal(h.state.createdWorkspace, h.server.created, 'old approval never covered the new owner key');
+  assert.equal(h.state.locked, true);
+  await discardAndSignIn(h.state, async options => { assert.match(options.body, /owner key/); return true; }, reset);
+  assert.equal(h.state.createdWorkspace, null, 'a fresh explicit approval may discard it');
+  assert.equal(h.state.session, null);
+});
+
+test('adoption ordering: a same-identity login completing during a lock unlocks the rotated session and preserves local work', async () => {
+  const h = requestHarness();
+  acquireDraft(h.state.drafts, 'k').name = 'Kept'; h.state.createdWorkspace = h.server.created;
+  const original = h.state.session, drafts = h.state.drafts, cookie = h.server.cookie();
+  const login = h.server.hold('/api/v1/admin/session/login');
+  const switching = h.login(); await login.started;
+  h.deps.lock('Old session expired'); login.release();
+  assert.equal(await switching, 'same');
+  assert.notEqual(h.server.cookie(), cookie); assert.notEqual(h.state.session.csrf_token, original.csrf_token);
+  assert.equal(h.state.session, h.server.current());
+  assert.equal(h.state.locked, false); assert.equal(h.state.lockMessage, '');
+  assert.equal(h.state.drafts, drafts); assert.equal(h.state.createdWorkspace, h.server.created);
+});
+
+test('adoption ordering: a late write 401 under the invalidated token cannot lock the adopted session', async () => {
+  const h = requestHarness();
+  const cookie = h.server.cookie(), original = h.server.current();
+  await assert.rejects(h.server.wire('/api/v1/admin/session/login', JSON.stringify({key: 'rejected-test-key'}), 'login'), /Invalid key/);
+  assert.equal(h.server.cookie(), cookie); assert.equal(h.server.current(), original, 'failed login never replaces the session');
+  const write = h.server.hold('/write');
+  const writing = assert.rejects(h.request('/write', {}), /Expired browser session/); await write.started;
+  await h.login(); const adopted = h.state.session, generation = h.state.generation;
+  write.release(); await writing;
+  assert.equal(h.state.session, adopted); assert.equal(h.state.locked, false);
+  assert.equal(h.state.generation, generation); assert.equal(h.state.lockMessage, '');
+});
+
+test('adoption ordering: a late preflight 401 under the invalidated token cannot lock the adopted session', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session');
+  const verifying = assert.rejects(verifySession(h.state, h.deps), /Expired browser session/); await preflight.started;
+  await h.login(); const generation = h.state.generation;
+  preflight.release(); await verifying;
+  assert.equal(h.state.locked, false); assert.equal(h.state.generation, generation);
+});
+
+test('adoption ordering: a login between preflight success and request continuation prevents dispatch under the replacement session', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session');
+  const writing = h.request('/write', {}); const rejected = assert.rejects(writing, /session changed|view changed/i);
+  await preflight.started;
+  const login = h.server.hold('/api/v1/admin/session/login');
+  const switching = h.login(); await login.started;
+  preflight.release(); login.release();
+  await switching; await rejected;
+  assert.equal(h.server.requests.some(request => request.path === '/write'), false, 'preflight approval cannot authorize a write under the adopted session');
+  assert.equal(h.state.locked, false); assert.equal(h.state.inflight, 0);
+});
+
+test('adoption ordering: a superseded post-create verification cannot clear pending work or lock the adopted session', async () => {
+  const h = requestHarness();
+  const write = h.server.hold('/api/v1/admin/workspaces/create');
+  const creating = h.create(); await write.started;
+  const postcheck = h.server.hold('/api/v1/admin/session');
+  write.release(); await postcheck.started;
+  await h.login(); const pending = {body: 'new-session-work'}; h.state.pending = pending;
+  const generation = h.state.generation;
+  postcheck.release(); await creating;
+  assert.equal(h.state.locked, false); assert.equal(h.state.generation, generation);
+  assert.equal(h.state.pending, pending); assert.equal(h.state.inflight, 0);
+});
+
+test('create recovery: a failed post-write verification describes the owner key actually displayed', async () => {
+  const h = requestHarness();
+  const write = h.server.hold('/api/v1/admin/workspaces/create');
+  const creating = h.create(); await write.started;
+  h.deps.lock('Session ended'); write.release(); await creating;
+  assert.equal(h.state.createdWorkspace, h.server.created);
+  assert.match(h.state.lockMessage, /owner key shown below/);
+  assert.doesNotMatch(h.state.lockMessage, /no longer displayed|reset-owner-key/);
+  assert.equal(WORKSPACE_DRAFT_KEY in h.state.drafts, false);
+});
+
+
+// Real App methods with native TypeScript erasure and in-memory rune fields.
+// Browser tests separately verify that Svelte observes the same transitions.
+import {panelAppClass, panelNotifyModule, componentCallback, readTaskClass, runtime as appRuntime, answerConfirmation} from './helpers/panelApp.mjs';
+const PanelApp = await panelAppClass();
+
+function realAppHarness(t) {
+  const server = browserSessionServer(), app = new PanelApp();
+  app.session = server.current(); app.booted = true;
+  appRuntime.confirmation = null; appRuntime.toasts.length = 0;
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (path, options) => {
+    try {
+      const data = await server.wire(path, options.body, options.headers?.['X-CCP-CSRF']);
+      return {ok: true, status: 200, json: async () => ({api_version: 1, data})};
+    } catch (error) {
+      return {ok: false, status: error.status ?? 503, json: async () => ({api_version: 1, error: {code: 'test'}})};
+    }
+  };
+  const create = () => {
+    const submitted = app.formDraft(WORKSPACE_DRAFT_KEY); submitted.name = 'Created'; submitted.owner = 'Owner';
+    return app.run(() => app.createWorkspace(submitted.name, submitted.owner, WORKSPACE_DRAFT_KEY, submitted), WORKSPACE_DRAFT_KEY);
+  };
+  return {app, server, create};
+}
+
+for (const empty of [false, true]) test(`round 5: locked sign-in cannot discard an in-flight create, empty recovery=${empty}`, async t => {
+  const {app, server, create} = realAppHarness(t);
+  const denied = server.hold('/denied');
+  const background = assert.rejects(app.request('/denied'), {status: 403}); await denied.started;
+  const write = server.hold('/api/v1/admin/workspaces/create');
+  const creating = create(); await write.started;
+  denied.release(); await background;
+  if (empty) app.drafts = {};
+  const original = app.session;
+  const blocked = app.discardAndSignIn();
+  assert.equal(appRuntime.confirmation, null, 'blocked action must not open a discard decision');
+  await blocked;
+  assert.equal(app.session, original);
+  assert.equal(app.waitingForWorkspaceCreate, true);
+  write.release(); await creating;
+  assert.equal(app.waitingForWorkspaceCreate, false);
+  assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
+  const discard = app.discardAndSignIn();
+  assert.match(appRuntime.confirmation.body, /owner key/);
+  answerConfirmation(true); await discard;
+  assert.equal(app.session, null); assert.equal(app.createdWorkspace, null);
+});
+
+test('round 5: failed workspace create releases the locked sign-in guard', async t => {
+  const {app, server, create} = realAppHarness(t);
+  const write = server.hold('/api/v1/admin/workspaces/create', {status: 503});
+  const creating = create(); await write.started;
+  app.lock('Background permission failure');
+  assert.equal(app.waitingForWorkspaceCreate, true);
+  write.release(); await creating;
+  assert.equal(app.waitingForWorkspaceCreate, false); assert.equal(app.createdWorkspace, null);
+  assert.equal(app.workspaceCreates, 0, 'failed create must balance its lifetime exactly');
+  const discard = app.discardAndSignIn();
+  assert.doesNotMatch(appRuntime.confirmation.body, /owner key/);
+  answerConfirmation(false); await discard;
+  assert.equal(app.hasFormDrafts, true); assert.equal(app.busy, false);
+  await app.run(() => app.login('accepted-test-key'), 'login');
+  const retry = server.hold('/api/v1/admin/workspaces/create');
+  const retrying = create(); await retry.started;
+  assert.equal(app.workspaceCreates, 1); assert.equal(app.waitingForWorkspaceCreate, true);
+  retry.release(); await retrying; assert.equal(app.workspaceCreates, 0);
+});
+
+test('round 5: superseded successful create cannot acknowledge into an adopted session', async () => {
+  const h = requestHarness();
+  const write = h.server.hold('/api/v1/admin/workspaces/create', {processFirst: true});
+  const creating = h.create(); await write.started;
+  await h.login(); const pending = {body: 'adopted work'}; h.state.pending = pending;
+  write.release(); const outcome = await creating;
+  assert.equal(outcome.ok, false); assert.equal(h.state.createdWorkspace, null);
+  assert.equal(WORKSPACE_DRAFT_KEY in h.state.drafts, true, 'no old-session callback may drop this draft');
+  assert.equal(h.state.pending, pending); assert.equal(h.state.locked, false);
+});
+
+test('round 5: preflight reference binding survives generation reuse', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session');
+  const checking = assert.rejects(verifySession(h.state, h.deps), /Expired browser session/); await preflight.started;
+  const generation = h.state.generation;
+  await h.login(); h.state.generation = generation;
+  preflight.release(); await checking;
+  assert.equal(h.state.locked, false); assert.equal(h.state.generation, generation);
+});
+
+test('round 5: adoption advances the view generation and remount key while preserving stored drafts', async () => {
+  const h = requestHarness(); h.state.refreshTick = 3;
+  const oldGeneration = h.state.generation, oldMount = h.state.refreshTick;
+  const draft = acquireDraft(h.state.drafts, 'context.shelf.ws'); draft.name = 'Kept';
+  await h.login();
+  assert.equal(h.state.generation, oldGeneration + 1);
+  assert.equal(h.state.refreshTick, oldMount + 1, 'old pane callbacks belong to the unmounted view');
+  assert.equal(h.state.drafts['context.shelf.ws'], draft);
+});
+
+test('round 5: confirmed create clears its pending work when postverification locks', async () => {
+  const h = requestHarness(); h.state.pending = {body: 'original create'};
+  const write = h.server.hold('/api/v1/admin/workspaces/create');
+  const creating = h.create(); await write.started;
+  h.deps.lock('Concurrent failure'); write.release(); await creating;
+  assert.equal(h.state.createdWorkspace, h.server.created); assert.equal(h.state.pending, null);
+});
+
+test('round 5: a view change after verification success but before request continuation rejects old data', async () => {
+  const h = requestHarness();
+  const read = h.server.hold('/read');
+  const reading = assert.rejects(h.request('/read'), /view changed/i); await read.started;
+  const postcheck = h.server.hold('/api/v1/admin/session');
+  read.release(); await postcheck.started;
+  postcheck.release(); queueMicrotask(() => { h.state.generation++; });
+  await reading; assert.equal(h.state.locked, false);
+});
+
+test('round 5: adoption in the gap after preflight success cannot send with either old or new CSRF', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session');
+  const writing = assert.rejects(h.request('/write', {}), /session changed/i); await preflight.started;
+  const generation = h.state.generation;
+  preflight.release();
+  // verifySession resumes first and succeeds; adoption runs before the
+  // sessionRequest continuation. Reuse isolates the reference safeguard.
+  queueMicrotask(() => { adoptSession(h.state, {...h.state.session, csrf_token: 'rotated'}); h.state.generation = generation; });
+  await writing;
+  assert.equal(h.server.requests.some(request => request.path === '/write'), false);
+});
+
+test('round 5: owner-only locked recovery requires consent and cancellation keeps the key', async t => {
+  const {app, server} = realAppHarness(t);
+  app.createdWorkspace = server.created; app.lock('Ended');
+  const first = app.discardAndSignIn();
+  assert.match(appRuntime.confirmation.body, /owner key/);
+  answerConfirmation(false); await first; assert.equal(app.createdWorkspace, server.created);
+  const second = app.discardAndSignIn(); answerConfirmation(true); await second;
+  assert.equal(app.createdWorkspace, null); assert.equal(app.session, null);
+});
+
+for (const binding of ['session', 'pending']) test(`round 5: discard consent is bound to the ${binding} object independently of recovery text`, async t => {
+  const {app, server} = realAppHarness(t);
+  app.createdWorkspace = server.created; app.pending = {body: 'same text'}; app.lock('Ended');
+  const discarding = app.discardAndSignIn();
+  app[binding] = {...app[binding]};
+  answerConfirmation(true); await discarding;
+  assert.equal(app.createdWorkspace, server.created); assert.ok(app.session);
+});
+
+for (const rejected of [false, true]) test(`round 5: run retains serialization across lock and releases busy state on completion, reject=${rejected}`, async t => {
+  const {app} = realAppHarness(t); const work = defer(); let calls = 0;
+  const running = app.run(() => work.promise, 'create-workspace');
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'create-workspace');
+  app.lock('Background failure'); await app.run(() => { calls++; }, 'second');
+  assert.equal(calls, 0); assert.equal(app.busy, true); assert.equal(app.busyKey, 'create-workspace');
+  if (rejected) work.reject(new Error('failed')); else work.resolve();
+  await running; assert.equal(app.busy, false); assert.equal(app.busyKey, '');
+});
+
+for (const rejected of [false, true]) test(`round 5: activation screen settles on completion, reject=${rejected}`, async t => {
+  const {app, server} = realAppHarness(t); const work = defer();
+  app.loadWorkspaces = () => work.promise;
+  const current = {...server.current(), identity: {...server.current().identity, scope: {kind: 'instance'}}};
+  const activating = app.activate(current); const outcome = rejected ? assert.rejects(activating, /failed/) : activating;
+  assert.equal(app.activating, true);
+  if (rejected) work.reject(new Error('failed')); else work.resolve();
+  await outcome; assert.equal(app.activating, false);
+});
+
+test('round 5: reset advances generation rather than reusing zero', async t => {
+  const {app} = realAppHarness(t); app.generation = 17;
+  app.reset(); assert.equal(app.generation, 18); assert.equal(app.session, null);
+});
+
+test('round 5: workspace refresh never resurrects an explicitly dismissed owner key', async t => {
+  const {app, server, create} = realAppHarness(t);
+  const refresh = server.hold('/api/v1/admin/workspaces?limit=32');
+  const creating = create(); await refresh.started;
+  assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
+  app.createdWorkspace = null; refresh.release(); await creating;
+  assert.equal(app.createdWorkspace, null); assert.equal(app.busy, false);
+});
+
+test('round 5: a successful superseded preflight cannot be accepted when generation is reused', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session', {processFirst: true});
+  const checking = assert.rejects(verifySession(h.state, h.deps), /session changed/i); await preflight.started;
+  const generation = h.state.generation;
+  await h.login(); h.state.generation = generation;
+  preflight.release(); await checking;
+  assert.equal(h.state.locked, false);
+});
+
+test('round 5: workspace postverification never restores an owner key dismissed after acknowledgement', async t => {
+  const {app, server, create} = realAppHarness(t);
+  const write = server.hold('/api/v1/admin/workspaces/create');
+  const creating = create(); await write.started;
+  const postcheck = server.hold('/api/v1/admin/session');
+  write.release(); await postcheck.started;
+  assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
+  app.createdWorkspace = null; postcheck.release(); await creating;
+  assert.equal(app.createdWorkspace, null);
+});
+
+
+// Deadline and retired-action probes use real App methods and cooperative
+// fetch mocks: native fetch also rejects when its supplied signal aborts.
+function hangUntilAbort(signal) {
+  const finish = defer();
+  if (signal) signal.addEventListener('abort', () => finish.reject(signal.reason), {once: true});
+  return finish;
+}
+
+for (const body of [undefined, '{}']) test(`round 6: every request has a 60-second default and an injectable deadline, write=${body !== undefined}`, async t => {
+  const original = globalThis.fetch;
+  const calls = [];
+  let pending;
+  globalThis.fetch = (_path, options) => {
+    calls.push(options); pending = hangUntilAbort(options.signal); return pending.promise;
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const work = wire('/deadline', body, 'proof', 5).then(() => ({resolved: true}), error => ({error}));
+  const observation = await Promise.race([work, new Promise(resolve => setTimeout(() => resolve(null), 80))]);
+  if (!observation) { pending.reject(new Error('fixture cleanup')); await work; }
+  assert.ok(observation, 'a never-settling request must leave through its deadline');
+  assert.match(observation.error.message, /^No confirmed response\..*may have completed/);
+  assert.equal(observation.error.status, undefined, 'a deadline cannot claim a confirmed HTTP refusal');
+  assert.ok(calls[0].signal instanceof AbortSignal);
+  const {REQUEST_TIMEOUT_MS} = await import('../crates/server/web/src/lib/model.js');
+  assert.equal(REQUEST_TIMEOUT_MS, 60_000);
+});
+
+test('round 6: a response body that stalls also takes the unknown-outcome deadline path', async t => {
+  const original = globalThis.fetch; let pending;
+  globalThis.fetch = async (_path, options) => {
+    pending = hangUntilAbort(options.signal);
+    return {ok: true, status: 200, json: () => pending.promise};
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const work = wire('/deadline-body', '{}', 'proof', 5).catch(error => error);
+  const observation = await Promise.race([work, new Promise(resolve => setTimeout(() => resolve(null), 80))]);
+  if (!observation) { pending.reject(new Error('fixture cleanup')); await work; }
+  assert.ok(observation, 'response parsing cannot outlive the request deadline');
+  assert.match(observation.message, /^No confirmed response\..*may have completed/);
+  assert.equal(observation.status, undefined);
+});
+
+for (const stage of ['preflight', 'write', 'postflight']) test(`round 6: a never-settling workspace ${stage} releases the locked-screen guard at the deadline`, async t => {
+  const {app, create} = realAppHarness(t);
+  const nativeTimeout = AbortSignal.timeout, fetch = globalThis.fetch;
+  const started = defer(); let pending, checks = 0;
+  AbortSignal.timeout = milliseconds => { assert.equal(milliseconds, 60_000); return nativeTimeout(10); };
+  t.after(() => { AbortSignal.timeout = nativeTimeout; });
+  globalThis.fetch = (path, options) => {
+    if (path === '/api/v1/admin/session') checks++;
+    if ((stage === 'write' && path.endsWith('/workspaces/create')) ||
+        (path === '/api/v1/admin/session' && checks === (stage === 'preflight' ? 1 : stage === 'postflight' ? 2 : -1))) {
+      pending = hangUntilAbort(options.signal); started.resolve(); return pending.promise;
+    }
+    return fetch(path, options);
+  };
+  const creating = create(); await started.promise; app.lock('Background permission failure');
+  assert.equal(app.workspaceCreates, 1);
+  const observation = await Promise.race([creating.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]);
+  if (!observation) { pending.reject(new Error('fixture cleanup')); await creating; }
+  assert.equal(observation, true, 'the create lifetime must settle without a response');
+  assert.equal(app.workspaceCreates, 0); assert.equal(app.waitingForWorkspaceCreate, false);
+  assert.equal(app.busy, false);
+  if (stage === 'postflight') { assert.ok(app.createdWorkspace); assert.equal(app.hasFormDrafts, false); }
+  else { assert.equal(app.createdWorkspace, null); assert.equal(app.hasFormDrafts, true); }
+});
+
+for (const kind of ['shelf', 'book', 'refresh']) for (const reject of [false, true]) test(`round 6: discard and login supersede a stalled ${kind} without late busy changes, reject=${reject}`, async t => {
+  const {app, create, server} = realAppHarness(t);
+  const path = kind === 'refresh' ? '/api/v1/admin/workspaces?limit=32' : `/api/v1/content/${kind === 'shelf' ? 'shelves' : 'books'}/create`;
+  const held = server.hold(path, reject ? {status: 503} : {});
+  const old = kind === 'refresh' ? create() : app.run(() => app.request(path, {name: 'Old draft'}), `create-${kind}`);
+  await held.started;
+  t.after(async () => { held.release(); await old; });
+  if (kind !== 'refresh') app.draft = 'Uncertain original write';
+  app.lock('Background permission failure');
+  const discard = app.discardAndSignIn(); answerConfirmation(true); await discard;
+  let loginRan = false;
+  await app.run(async () => { loginRan = true; await app.login('accepted-test-key'); }, 'login');
+  assert.equal(loginRan, true, 'login must not inherit a retired action slot');
+  assert.equal(app.session, server.current()); assert.equal(app.busy, false);
+  const fresh = defer(); const current = app.run(() => fresh.promise, 'new-action');
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'new-action');
+  held.release(); await old;
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'new-action', 'old finally cannot release the replacement slot');
+  assert.equal(app.locked, false);
+  fresh.resolve(); await current;
+  assert.equal(app.busy, false); assert.equal(app.busyKey, '');
+});
+
+for (const status of [200, 401, 403]) test(`round 6: an old Guidance-style callback has no global effects after adoption, response=${status}`, async t => {
+  const {app, server} = realAppHarness(t);
+  // The fallback models the former unscoped Guidance import on the pinned baseline.
+  const visit = app.forView?.() ?? app;
+  const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
+  const held = server.hold('/api/v1/guidance/get', status === 200 ? {processFirst: true} : {status});
+  let afterNotice;
+  const loading = visit.request('/api/v1/guidance/get', {workspace_id: null}).catch(error => {
+    if (visit.locked) return;
+    notice(error.message, 'destructive');
+    afterNotice = [...appRuntime.toasts];
+    visit.pending = null;
+    visit.lock('Retired callback');
+  });
+  await held.started;
+  await app.hashKeySwitch('accepted-test-key');
+  const pending = {body: 'new session work'}; app.pending = pending;
+  const before = [...appRuntime.toasts]; held.release(); await loading;
+  assert.deepEqual(afterNotice, before, 'the Guidance catch itself must not emit a retired notification');
+  assert.deepEqual(appRuntime.toasts, before, 'retired notification must not reach the shared toaster');
+  assert.equal(app.pending, pending); assert.equal(app.locked, false);
+  const current = app.forView?.() ?? app;
+  (current.notice ?? notice)('Fresh notification', 'success');
+  assert.equal(appRuntime.toasts.at(-1).text, 'Fresh notification');
+});
+
+test('round 6: unmount retires global side effects even within the same session', async t => {
+  const {app} = realAppHarness(t);
+  const visit = app.forView?.() ?? app;
+  const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
+  const pending = {body: 'keep'}; app.pending = pending;
+  app.generation++; visit.dispose?.();
+  notice('Old view', 'destructive'); visit.pending = null; visit.clean();
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.pending, pending);
+});
+
+test('round 6: owner-key guard is independent of busy and excludes shelf, book and refresh operations', () => {
+  const state = {workspaceCreates: 1, busy: false, busyKey: '', inflight: 0};
+  assert.equal(lockedSignInBlocked(state), true);
+  for (const busyKey of ['create-shelf', 'create-book', 'refresh']) {
+    Object.assign(state, {workspaceCreates: 0, busy: true, busyKey});
+    assert.equal(lockedSignInBlocked(state), false, `${busyKey} must not block locked-screen recovery`);
+  }
+});
+
+test('round 6: a workspace create started during confirmation invalidates the accepted decision', async () => {
+  const choice = defer(); let reset = false;
+  const state = {workspaceCreates: 0, createdWorkspace: null, pending: null, deletion: null, session: {}, recoveryText: () => 'kept'};
+  const discarding = discardAndSignIn(state, () => choice.promise, () => { reset = true; });
+  state.workspaceCreates = 1; choice.resolve(true); await discarding;
+  assert.equal(reset, false);
+});
+
+test('round 6: same-identity remount advances the focus handoff to the page title', () => {
+  const before = focusHandoffKey({}, false, false, 'workspace', 'context', 3);
+  assert.notEqual(focusHandoffKey({}, false, false, 'workspace', 'context', 4), before);
+});
+
+test('round 6: an old activation cannot clear a replacement activation screen', async t => {
+  const {app, server} = realAppHarness(t);
+  const first = defer(), second = defer();
+  app.loadWorkspaces = () => first.promise;
+  const old = app.activate(server.current());
+  app.reset(); app.loadWorkspaces = () => second.promise;
+  const current = app.activate({...server.current()});
+  first.resolve(); await old; assert.equal(app.activating, true);
+  second.resolve(); await current; assert.equal(app.activating, false);
+});
+
+test('round 6: the deadline settles even when fetch ignores its abort signal', async t => {
+  const original = globalThis.fetch;
+  globalThis.fetch = () => new Promise(() => {});
+  t.after(() => { globalThis.fetch = original; });
+  const result = await Promise.race([
+    wire('/uncooperative', '{}', 'proof', 5).catch(error => error),
+    new Promise(resolve => setTimeout(() => resolve(null), 80)),
+  ]);
+  assert.ok(result, 'the deadline owns settlement rather than relying on a cooperative transport');
+  assert.match(result.message, /^No confirmed response\..*may have completed/);
+});
+
+for (const method of ['login', 'hashKeySwitch']) test(`round 6: a retired ${method} response cannot adopt or clear the replacement action`, async t => {
+  const {app, server} = realAppHarness(t);
+  const held = server.hold('/api/v1/admin/session/login');
+  const old = app.run(() => app[method]('accepted-test-key'), 'login'); await held.started;
+  app.lock('Old session'); await app.discardAndSignIn();
+  await app.run(() => app.login('accepted-test-key'), 'login'); const session = app.session;
+  const fresh = defer(), current = app.run(() => fresh.promise, 'replacement');
+  held.release(); await old;
+  assert.equal(app.session, session); assert.equal(app.busy, true); assert.equal(app.busyKey, 'replacement');
+  fresh.resolve(); await current; assert.equal(app.busy, false);
+});
+
+test('round 6: an unmounted view cannot affect its navigation destination', async t => {
+  const {app} = realAppHarness(t);
+  const visit = app.forView?.() ?? app;
+  const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
+  await visit.navigate('workspaces'); visit.dispose?.();
+  notice('Old view after its own navigation', 'destructive');
+  assert.deepEqual(appRuntime.toasts, []);
+});
+
+for (const fail of [false, true]) test(`round 6: a late clipboard completion cannot notify the replacement visit, fail=${fail}`, async t => {
+  const {app} = realAppHarness(t);
+  const notifications = await panelNotifyModule(); notifications.clearToasts();
+  const clipboard = defer();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {clipboard: {writeText: () => clipboard.promise}}});
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'navigator', previous); else delete globalThis.navigator; });
+  const visit = app.forView?.() ?? app;
+  notifications.bindNoticeScope?.(() => visit.notice ?? notifications.notice);
+  const copying = notifications.copyText('private test value'); app.sessionEpoch++;
+  if (fail) clipboard.reject(new Error('denied')); else clipboard.resolve();
+  assert.equal(await copying, !fail);
+  assert.equal(notifications.toasts.length, 0); assert.equal(appRuntime.toasts.length, 0);
+});
+
+test('round 6: the admitted login action keeps its own slot until initial loading settles', async t => {
+  const {app, server} = realAppHarness(t); const loading = defer();
+  app.loadWorkspaces = () => loading.promise;
+  const signingIn = app.run(() => app.activate({...server.current()}), 'login');
+  assert.equal(app.activating, true); assert.equal(app.busy, true); assert.equal(app.busyKey, 'login');
+  loading.resolve(); await signingIn;
+  assert.equal(app.activating, false); assert.equal(app.busy, false); assert.equal(app.busyKey, '');
+});
+
+
+// The read generation may change while a view is still mounted. Session and
+// component lifetime, rather than read invalidation, own its actions/effects.
+import {viewScope} from '../crates/server/web/src/lib/viewScope.js';
+
+for (const failure of [503, 'deadline']) for (const view of ['workspaces', 'guidance']) test(`round 7: failed ${failure} Refresh leaves ${view} actions and new drafts live`, async t => {
+  const {app, server} = realAppHarness(t);
+  app.view = view;
+  if (view === 'guidance') app.workspace = {id: 'workspace', name: 'Example', archived: false};
+  const visit = app.forView();
+  const submitted = view === 'workspaces' ? visit.formDraft(WORKSPACE_DRAFT_KEY) : null;
+  const mount = app.refreshTick, epoch = app.sessionEpoch;
+  const path = view === 'workspaces' ? '/api/v1/admin/workspaces?limit=32' : '/api/v1/admin/workspaces/inspect';
+  const held = server.hold(path, failure === 503 ? {status: 503} : {});
+  const nativeTimeout = AbortSignal.timeout;
+  if (failure === 'deadline') AbortSignal.timeout = () => nativeTimeout(5);
+  t.after(() => { AbortSignal.timeout = nativeTimeout; held.release(); });
+  // The fallback is the original header Refresh body, before extraction.
+  const refresh = () => app.refreshView ? app.refreshView() : (async () => {
+    if (!app.mayLeave()) return;
+    app.generation++;
+    if (app.view === 'workspaces' || !app.workspace) await app.loadWorkspaces(app.workspacesAfter);
+    else await app.inspectWorkspace();
+    app.refreshTick++;
+  })();
+  const refreshing = app.run(refresh, 'refresh'); await held.started;
+  if (failure === 503) held.release();
+  const settled = await Promise.race([refreshing.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]);
+  if (!settled) { held.release(); await refreshing; }
+  assert.equal(settled, true); AbortSignal.timeout = nativeTimeout;
+  assert.equal(app.locked, false); assert.equal(app.refreshTick, mount); assert.equal(app.sessionEpoch, epoch);
+  if (view === 'workspaces') {
+    submitted.name = 'After refresh'; submitted.owner = 'Owner';
+    await visit.run(() => visit.createWorkspace(submitted.name, submitted.owner, WORKSPACE_DRAFT_KEY, submitted), WORKSPACE_DRAFT_KEY);
+    assert.equal(server.requests.filter(r => r.path.endsWith('/workspaces/create')).length, 1);
+    assert.equal(app.createdWorkspace, server.created);
+  } else {
+    visit.setDraft('Guidance typed after refresh');
+    assert.equal(app.dirty, true); assert.equal(app.draft, 'Guidance typed after refresh');
+    await visit.navigate('workspaces');
+    assert.equal(app.view, 'guidance'); assert.match(app.recoveryText(), /Guidance typed after refresh/);
+  }
+});
+
+for (const view of ['context', 'guidance']) test(`round 7: selecting the current workspace leaves ${view} actions and new drafts live`, async t => {
+  const {app, server} = realAppHarness(t);
+  app.workspace = {id: 'workspace', name: 'Example', archived: false}; app.view = view;
+  const visit = app.forView(); const epoch = app.sessionEpoch, mount = app.refreshTick;
+  const key = shelfDraftKey('workspace'), submitted = view === 'context' ? visit.formDraft(key) : null;
+  await app.openWorkspace({...app.workspace}, view);
+  assert.equal(app.sessionEpoch, epoch); assert.equal(app.refreshTick, mount);
+  if (view === 'guidance') {
+    visit.setDraft('Guidance after reselect');
+    assert.equal(app.dirty, true); assert.equal(app.draft, 'Guidance after reselect');
+    await visit.navigate('workspaces'); assert.equal(app.view, 'guidance');
+    assert.match(app.recoveryText(), /Guidance after reselect/);
+  } else {
+    submitted.name = 'Shelf after reselect';
+    let result;
+    await visit.run(async () => {
+      result = await submitDraftCreate({drafts: visit.drafts, key, submitted,
+        request: confirmed => visit.request('/api/v1/content/shelves/create', {name: submitted.name}, confirmed),
+        confirmedText: data => creationConfirmedText('shelf', data)});
+    }, 'create-shelf');
+    assert.equal(server.requests.filter(r => r.path.endsWith('/shelves/create')).length, 1);
+    assert.equal(result.ok, true); assert.equal(key in app.drafts, false);
+  }
+});
+
+test('round 7: successful Refresh preserves the mounted view and its local state', async t => {
+  const {app} = realAppHarness(t); app.view = 'workspaces';
+  const visit = app.forView(), mount = app.refreshTick;
+  const local = {text: 'local form state'};
+  const focus = () => focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view, app.sessionEpoch);
+  const focusBefore = focus();
+  await app.run(() => app.refreshView ? app.refreshView() : (async () => { app.generation++; await app.loadWorkspaces(); app.refreshTick++; })(), 'refresh');
+  assert.equal(app.refreshTick, mount, 'Refresh must not remount local state or focus');
+  visit.setDraft(local.text); assert.equal(app.draft, local.text);
+  assert.equal(focus(), focusBefore, 'Refresh must not request a root focus handoff');
+});
+
+test('round 7: an unmounted view retires without changing its session or read generation', async t => {
+  const {app} = realAppHarness(t); const visit = app.forView();
+  const session = app.session, generation = app.generation;
+  visit.dispose?.(); visit.notice('Old mounted view', 'destructive'); visit.setDraft('old edit');
+  assert.equal(app.session, session); assert.equal(app.generation, generation);
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.dirty, false);
+});
+
+test('round 7: reset retires a scope even if its null session is reused', async t => {
+  const {app} = realAppHarness(t); app.reset(); const visit = app.forView();
+  app.reset(); visit.notice('Old login visit', 'destructive'); visit.setDraft('stale');
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.dirty, false);
+});
+
+test('round 7: a retired action catch cannot post into the replacement session', async t => {
+  const {app} = realAppHarness(t); const old = defer();
+  const oldAction = app.run(() => old.promise, 'old-read');
+  app.reset(); await app.run(() => app.login('accepted-test-key'), 'login');
+  const fresh = defer(), current = app.run(() => fresh.promise, 'current');
+  const before = [...appRuntime.toasts];
+  old.reject(new Error('Retired request failed')); await oldAction;
+  assert.deepEqual(appRuntime.toasts, before); assert.equal(app.busyKey, 'current'); assert.equal(app.busy, true);
+  fresh.resolve(); await current;
+});
+
+for (const operation of ['confirmAction', 'wire']) test(`round 7: a retired ${operation} completion is not delivered`, async () => {
+  const state = {session: {}, generation: 0, sessionEpoch: 0}; const pending = defer();
+  const visit = viewScope(state, {[operation]: () => pending.promise});
+  const started = visit[operation]('/fixture');
+  const result = operation === 'wire' ? assert.rejects(started, /superseded/) : started;
+  state.session = {};
+  pending.resolve(operation === 'wire' ? {receipt: 'old data'} : true);
+  if (operation === 'confirmAction') assert.equal(await result, false); else await result;
+});
+
+for (const failure of [false, true]) test(`round 7: the scoped clipboard wrapper drops a retired completion, failure=${failure}`, async () => {
+  const state = {session: {}, generation: 0, sessionEpoch: 0}; const pending = defer(), notices = [];
+  const visit = viewScope(state, {
+    notice: (...args) => notices.push(args),
+    copyText: async (_value, notify) => {
+      try { await pending.promise; notify('Copied', 'success'); return true; }
+      catch { notify('Clipboard failed', 'warning'); return false; }
+    },
+  });
+  const copying = visit.copyText('private fixture'); state.session = {};
+  if (failure) pending.reject(new Error('denied')); else pending.resolve();
+  assert.equal(await copying, !failure); assert.deepEqual(notices, []);
+});
+
+test('round 7: boot retains its slot while loading and refuses a concurrent focus verify', async t => {
+  const {app, server} = realAppHarness(t); const listeners = {};
+  const originals = Object.fromEntries(['window', 'location', 'history'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries({window: {addEventListener: (name, fn) => { listeners[name] = fn; }}, location: {hash: ''}, history: {replaceState: () => {}}})) {
+    Object.defineProperty(globalThis, key, {configurable: true, value});
+  }
+  t.after(() => { for (const [key, descriptor] of Object.entries(originals)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
+  const held = server.hold('/api/v1/admin/workspaces?limit=32');
+  const booting = app.boot(); await held.started; t.after(async () => { held.release(); await booting; });
+  const checks = server.requests.filter(r => r.path === '/api/v1/admin/session').length;
+  listeners.focus(); await Promise.resolve();
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'boot');
+  assert.equal(server.requests.filter(r => r.path === '/api/v1/admin/session').length, checks);
+  held.release(); await booting; assert.equal(app.busy, false);
+});
+
+test('round 7: Already signed in is not announced after a later replacement', async t => {
+  const {app, server} = realAppHarness(t); let current = app.session, armed = true;
+  const replacement = {...server.current(), identity: {...server.current().identity, principal_name: 'Replacement'}};
+  Object.defineProperty(app, 'session', {configurable: true, get: () => current, set: value => {
+    current = value;
+    if (armed && value) { armed = false; queueMicrotask(() => { app.reset(); app.session = replacement; }); }
+  }});
+  await app.run(() => app.hashKeySwitch('accepted-test-key'), 'login');
+  assert.equal(app.session, replacement);
+  assert.equal(appRuntime.toasts.some(item => item.text === 'Already signed in with this key.'), false);
+});
+
+test('round 7: a component lifetime retires every operation scope without changing session state', async t => {
+  const {app} = realAppHarness(t); let mounted = true;
+  const first = app.forView(() => mounted), second = app.forView(() => mounted);
+  first.notice('Current', 'success'); assert.equal(appRuntime.toasts.length, 1);
+  mounted = false; first.notice('Old first', 'destructive'); second.notice('Old second', 'destructive'); second.setDraft('old');
+  assert.equal(appRuntime.toasts.length, 1); assert.equal(app.dirty, false);
+});
+
+test('round 7: an unmounted action catch cannot notify another view in the same session', async t => {
+  const {app} = realAppHarness(t); const visit = app.forView(), work = defer();
+  const running = visit.run(() => work.promise, 'old-child');
+  visit.dispose?.(); work.reject(new Error('Old child failed')); await running;
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.busy, false);
+});
+
+test('round 7: same-identity adoption releases its old action before the next action starts', async t => {
+  const {app} = realAppHarness(t); const old = defer(), fresh = defer();
+  const running = app.run(() => old.promise, 'old');
+  t.after(async () => { old.resolve(); await running; });
+  adoptSession(app, {...app.session});
+  assert.equal(app.busy, false); assert.equal(app.busyKey, ''); assert.equal(app.actionOwner, null);
+  const current = app.run(() => fresh.promise, 'current');
+  t.after(async () => { fresh.resolve(); await current; });
+  old.resolve(); await running; assert.equal(app.busy, true); assert.equal(app.busyKey, 'current');
+  fresh.resolve(); await current; assert.equal(app.busy, false);
+});
+
+test('round 7: current confirmation, wire and clipboard effects still complete normally', async () => {
+  const state = {session: {}, sessionEpoch: 0, generation: 0}, notices = [];
+  const current = viewScope(state, {
+    notice: text => notices.push(text), confirmAction: async () => true,
+    wire: async () => ({fresh: true}),
+    copyText: async (_value, notify) => { notify('Copied current'); return true; },
+  });
+  state.generation++;
+  assert.equal(await current.confirmAction({}), true);
+  assert.deepEqual(await current.wire('/fixture'), {fresh: true});
+  assert.equal(await current.copyText('fixture'), true); assert.deepEqual(notices, ['Copied current']);
+});
+
+for (const transition of ['activate', 'adopt']) test(`round 7: ${transition} advances session lifetime even with the same session object`, async t => {
+  const {app} = realAppHarness(t); const old = app.forView(), session = app.session, epoch = app.sessionEpoch;
+  app.loadWorkspaces = async () => {};
+  if (transition === 'activate') await app.activate(session); else adoptSession(app, session);
+  assert.equal(app.session, session); assert.equal(app.sessionEpoch, epoch + 1);
+  old.setDraft('Retired'); assert.equal(app.dirty, false);
+  app.forView().setDraft('Current'); assert.equal(app.draft, 'Current');
+});
+
+test('round 7: persistent draft cleanup outlives its form but cannot reach a replacement session', async t => {
+  const {app} = realAppHarness(t); const model = app.forSession?.() ?? app.forView(), view = app.forView();
+  model.formDraft('access-model').name = 'Submitted';
+  view.dispose?.(); model.dropFormDraft('access-model');
+  assert.equal('access-model' in app.drafts, false, 'acknowledged cleanup must survive outcome UI replacement');
+  app.reset(); const replacement = app.forSession?.() ?? app.forView();
+  const current = replacement.formDraft('access-model'); current.name = 'New session draft';
+  model.dropFormDraft('access-model');
+  assert.equal(app.drafts['access-model'], current); assert.equal(current.name, 'New session draft');
+});
+
+
+const ReadTask = await readTaskClass();
+const families = [
+  ['Overview', '/api/v1/admin/workspaces/overview'], ['Context', '/api/v1/content/shelves/list'],
+  ['Access', '/api/v1/admin/workspaces/grants'], ['Reported', '/api/v1/work/status/list'],
+  ['Guidance', '/api/v1/guidance/get'], ['Settings', '/api/v1/admin/content/retention/get'],
+  ['Workspaces', '/api/v1/admin/workspaces?limit=32'],
+];
+function familyLoader(t, family, path) {
+  const h = realAppHarness(t), fetch = globalThis.fetch;
+  let version = 1, calls = 0, hold = null;
+  globalThis.fetch = async (target, options) => {
+    if (target !== path) return fetch(target, options);
+    calls++;
+    const pending = hold; hold = null;
+    if (pending) { pending.started.resolve(); return pending.promise; }
+    return {ok: true, status: 200, json: async () => ({api_version: 1, data: {version, family}})};
+  };
+  const api = h.app.forView(), reader = new ReadTask(api);
+  const state = {data: null, error: '', loading: false};
+  const load = async () => {
+    await reader.run(() => api.read ? api.read(path) : api.request(path), {
+      start: () => { state.loading = true; state.error = ''; },
+      receive: data => { state.data = data; }, error: error => { state.error = error.message; api.notice(error.message, 'destructive'); },
+      finish: () => { state.loading = false; },
+    });
+  };
+  const unregister = api.registerReload?.(load) ?? (() => {});
+  t.after(unregister);
+  return {...h, api, reader, state, load, unregister, calls: () => calls,
+    version: value => { version = value; }, hold: () => { const pending = defer(); pending.started = defer(); hold = pending; return pending; }};
+}
+for (const [family, path] of families) test(`round 8: Refresh re-reads ${family} data without replacing its view state`, async t => {
+  const h = familyLoader(t, family, path); await h.load(); assert.equal(h.state.data.version, 1);
+  const draft = h.api.formDraft('view-fixture:' + family); draft.name = 'Kept draft';
+  const mount = h.app.refreshTick;
+  const focus = () => focusHandoffKey(h.app.session, h.app.locked, h.app.activating, h.app.workspace?.id, h.app.view, h.app.sessionEpoch);
+  const beforeFocus = focus();
+  h.version(2); const before = h.calls(); await h.app.run(() => h.app.refreshView(), 'refresh');
+  assert.ok(h.calls() > before, `${family}'s registered read must run`); assert.equal(h.state.data.version, 2);
+  assert.equal(h.app.refreshTick, mount); assert.equal(h.app.drafts['view-fixture:' + family], draft);
+  assert.equal(draft.name, 'Kept draft'); assert.equal(focus(), beforeFocus);
+});
+for (const [family, path] of families) for (const status of [200, 503]) test(`round 8: obsolete ${family} ${status} cannot replace fresh data or create an error`, async t => {
+  const h = familyLoader(t, family, path); const old = h.hold();
+  const reading = h.load(); await old.started.promise;
+  h.version(2); await h.app.run(() => h.app.refreshView(), 'refresh');
+  // Baseline did not register reloads; issue the fresh read explicitly to
+  // isolate the stale consumer behavior from the missing-Refresh defect.
+  if (!h.app.registerReload) await h.load();
+  const notices = [...appRuntime.toasts];
+  old.resolve({ok: status === 200, status, json: async () => status === 200
+    ? {api_version: 1, data: {version: 0, family}} : {api_version: 1, error: {code: 'old'}}});
+  await reading;
+  assert.equal(h.state.data.version, 2); assert.equal(h.state.error, '');
+  assert.equal(h.state.loading, false); assert.deepEqual(appRuntime.toasts, notices);
+});
+
+test('round 8: Refresh keeps the dirty and pending guard before metadata and loaders', async t => {
+  const {app, server} = realAppHarness(t); let reloads = 0;
+  const unregister = app.registerReload?.(async () => { reloads++; }); t.after(() => unregister?.());
+  for (const pending of [false, true]) {
+    app.dirty = !pending; app.pending = pending ? {body: 'uncertain'} : null;
+    const generation = app.generation, calls = server.requests.length;
+    await app.refreshView();
+    assert.equal(app.generation, generation); assert.equal(server.requests.length, calls); assert.equal(reloads, 0);
+  }
+});
+
+test('round 8: destroyed reload registration cannot execute or remove its replacement', async t => {
+  const {app} = realAppHarness(t); let old = 0, fresh = 0;
+  const visit = app.forView(), unregister = visit.registerReload?.(async () => { old++; });
+  visit.dispose(); unregister?.();
+  const current = app.forView(), stop = current.registerReload?.(async () => { fresh++; }); t.after(() => stop?.());
+  unregister?.(); await app.refreshView();
+  assert.equal(old, 0); assert.equal(fresh, 1);
+});
+
+test('round 8: same-generation read replacement owns loading, data and failure effects', async t => {
+  const {app} = realAppHarness(t), reader = new ReadTask(app.forView()); const first = defer(), second = defer();
+  const state = {data: '', error: '', loading: false};
+  const effects = {start: () => { state.loading = true; }, receive: data => { state.data = data; },
+    error: error => { state.error = error.message; }, finish: () => { state.loading = false; }};
+  const old = reader.run(() => first.promise, effects), fresh = reader.run(() => second.promise, effects);
+  first.reject(new Error('old')); await old; assert.equal(state.loading, true); assert.equal(state.error, '');
+  second.resolve('fresh'); await fresh; assert.equal(state.data, 'fresh'); assert.equal(state.loading, false);
+});
+
+for (const status of [401, 403]) test(`round 8: an obsolete read ${status} cannot lock the current view`, async t => {
+  const {app, server} = realAppHarness(t); const held = server.hold('/read-old', {status});
+  const reading = (app.read ? app.read('/read-old') : app.request('/read-old')).catch(error => error); await held.started;
+  app.generation++; held.release(); const error = await reading;
+  assert.equal(app.locked, false); assert.equal(error.name, 'SupersededRead');
+});
+
+for (const retired of [false, true]) test(`round 8: Secret fallback focus and selection respect lifetime, retired=${retired}`, async t => {
+  const {app} = realAppHarness(t); const visit = app.forView(); const clipboard = defer(), started = defer();
+  let focus = 0, selection = 0;
+  const context = {app: visit, value: 'private fixture', shown: false, tick: async () => {},
+    copyText: () => { started.resolve(); return clipboard.promise; }, code: {focus: () => { focus++; }},
+    document: {createRange: () => ({selectNodeContents: () => { selection++; }})},
+    getSelection: () => ({removeAllRanges: () => { selection++; }, addRange: () => { selection++; }}),
+  };
+  const copying = componentCallback('lib/ui/Secret.svelte', '  async function copy()', '\n</script>', context, 'copy();');
+  await started.promise; if (retired) visit.dispose(); clipboard.resolve(false); await copying;
+  assert.equal(focus, retired ? 0 : 1); assert.equal(selection, retired ? 0 : 3);
+});
+for (const retired of [false, true]) test(`round 8: DeletionTracker queued heading focus respects lifetime, retired=${retired}`, async t => {
+  const {app} = realAppHarness(t), visit = app.forView(), tick = defer(); let focus = 0;
+  const body = {}, context = {$effect: fn => fn(), scoped: () => visit, title: 'Tracking',
+    heading: {focus: () => { focus++; }}, document: {body, activeElement: body}, tick: () => tick.promise};
+  await componentCallback('views/DeletionTracker.svelte', '  $effect(() => {', '\n\n  async function forget()', context);
+  if (retired) visit.dispose(); tick.resolve(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(focus, retired ? 0 : 1);
+});
+
+
+// Round 9 exercises the production callbacks, not copies of their decisions.
+import {captureContextRecovery, discardContextRecovery, nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, focusRetiredContext} from '../crates/server/web/src/lib/contextRecovery.js';
+import {reloadContextSelection} from '../crates/server/web/src/lib/contextReload.js';
+for (const phase of ['mount', 'Refresh']) for (const endpoint of ['admin', 'key']) for (const order of ['failure first', 'success first'])
+  test(`round 9: Team ${phase}, ${endpoint} failure persists with sibling ${order}`, async t => {
+    const {app} = realAppHarness(t), api = app.forView();
+    const queues = {admin: [], key: []};
+    api.read = path => queues[path.includes('/team/') ? 'admin' : 'key'].shift().promise;
+    const context = {app: api, ReadTask, workspace: {id: 'workspace'}, admins: null, keys: null,
+      adminAfter: null, keyAfter: null, adminError: '', keyError: '', error: '', adminLoading: false, keyLoading: false};
+    const loaders = await componentCallback('views/access/TeamTab.svelte', '  const adminRead =', '\n  reloadView(', context, '({readAll, readAdmins, readKeys});');
+    if (phase === 'Refresh') {
+      queues.admin.push({promise: Promise.resolve({admins: [{id: 'old-admin'}]})}); queues.key.push({promise: Promise.resolve({keys: [{id: 'old-key'}]})});
+      await loaders.readAll(null, null); app.generation++;
+    }
+    const failure = defer(), success = defer(); queues[endpoint].push(failure); queues[endpoint === 'admin' ? 'key' : 'admin'].push(success);
+    const reading = loaders.readAll(null, null);
+    const fail = async () => { failure.reject(new Error(endpoint + ' unavailable')); await new Promise(resolve => setImmediate(resolve)); };
+    const succeed = async () => { success.resolve(endpoint === 'admin' ? {keys: []} : {admins: []}); await new Promise(resolve => setImmediate(resolve)); };
+    if (order === 'failure first') { await fail(); await succeed(); } else { await succeed(); await fail(); }
+    await reading;
+    assert.equal(context[endpoint + 'Error'], endpoint + ' unavailable');
+    assert.equal(context[endpoint === 'admin' ? 'keyError' : 'adminError'], '');
+    assert.equal(context.adminLoading, false); assert.equal(context.keyLoading, false);
+    queues[endpoint].push({promise: Promise.resolve(endpoint === 'admin' ? {admins: []} : {keys: []})});
+    await (endpoint === 'admin' ? loaders.readAdmins(null) : loaders.readKeys(null));
+    assert.equal(context[endpoint + 'Error'], '', 'only its own success clears the error');
+  });
+
+for (const status of [401, 503]) test(`round 9: obsolete 200 skips post-read session verification (${status})`, async t => {
+  const {app, server} = realAppHarness(t), held = server.hold('/obsolete-200');
+  const transport = globalThis.fetch; let obsolete = false, checks = 0;
+  globalThis.fetch = (path, options) => {
+    if (obsolete && path === '/api/v1/admin/session') {
+      checks++; return Promise.resolve({ok: false, status, json: async () => ({api_version: 1, error: {code: 'old'}})});
+    }
+    return transport(path, options);
+  };
+  const reading = app.read('/obsolete-200').catch(error => error); await held.started;
+  app.generation++; obsolete = true; held.release(); const error = await reading;
+  assert.equal(checks, 0); assert.equal(app.locked, false); assert.equal(error.name, 'SupersededRead');
+  assert.deepEqual(appRuntime.toasts, []);
+});
+
+for (const status of [401, 403]) test(`round 9: a current read ${status} locks`, async t => {
+  const {app, server} = realAppHarness(t), held = server.hold('/current-denied', {status});
+  const reading = app.read('/current-denied').catch(error => error); await held.started; held.release(); await reading;
+  assert.equal(app.locked, true);
+});
+
+for (const kind of ['entry', 'book', 'shelf']) test(`round 9: inactive ${kind} clears selection, descendants and editor, keeping recovery`, async t => {
+  const {app} = realAppHarness(t); const api = app.forView();
+  const shelf = {id: 'shelf', name: 'Shelf'}, book = {id: 'book', shelf_id: 'shelf', name: 'Book'}, entry = {id: 'entry', book_id: 'book', archived: false, name: 'Entry'};
+  const page = item => ({items: [item], reload: async function () { if (item.id === kind) this.items = []; }, clear() { this.items = []; this.cleared = true; }});
+  const context = {app: api, workspaceId: 'workspace', detailElement: undefined, document: {}, crypto, tick: async () => {},
+    captureContextRecovery, discardContextRecovery, nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, focusRetiredContext, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveSerial: 0, shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry),
+    selectionRead: new ReadTask(api), reloadContextSelection, contentPath: x => x, detail: {kind: 'entry'}, stage: 'detail', inactiveNotice: '',
+    closeDetail: () => { context.detail = {kind: 'none'}; }};
+  api.read = async path => {
+    // Text typed after Refresh began must remain recoverable when it closes.
+    app.setDraft('unsaved original entry text');
+    if (path.startsWith(kind === 'entry' ? 'entries/' : kind === 'book' ? 'books/' : 'shelves/')) throw Object.assign(new Error('NotFound'), {status: 404});
+    return path.startsWith('entries/') ? {entry} : path.startsWith('books/') ? book : shelf;
+  };
+  await componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();');
+  assert.equal(context.entry, null); assert.equal(context.detail.kind, 'none');
+  assert.match(context.inactiveNotice, /no longer active \(archived or removed\)/);
+  if (kind !== 'entry') { assert.equal(context.book, null); assert.deepEqual(context.entries.items, []); }
+  if (kind === 'shelf') { assert.equal(context.shelf, null); assert.deepEqual(context.books.items, []); }
+  assert.equal(app.dirty, false, 'the closed editor transfers ownership to the kept draft record');
+  assert.equal(app.hasFormDrafts, true); assert.equal(app.hasUnsavedIdentityWork, true); assert.match(app.recoveryText(), /unsaved original entry text/);
+  assert.equal(context.stage, kind === 'shelf' ? 'shelves' : kind === 'book' ? 'books' : 'entries');
+  if (kind === 'entry') { assert.equal(context.book, book); assert.equal(context.shelf, shelf); }
+});
+
+test('round 9: an off-page active selection is retained and lookup errors propagate', async () => {
+  const selection = {shelf: {id: 'shelf'}, book: null, entry: null}, failure = new Error('read failed');
+  const pages = {shelf: {items: [], reload: async () => {}}, book: {items: [], reload: async () => {}}};
+  const active = await reloadContextSelection({selection, pages, read: async () => ({id: 'shelf', name: 'current'})});
+  assert.equal(active.shelf.name, 'current'); assert.equal(active.missing, undefined);
+  await assert.rejects(reloadContextSelection({selection, pages, read: async () => { throw failure; }}), failure);
+});
+
+for (const guard of ['dirty', 'pending']) test(`round 9: EntryEditor reload keeps ${guard} text and loaded revision`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), response = defer(); api.read = () => response.promise;
+  const context = {app: api, reader: new ReadTask(api), contentPath: x => x, notice: api.notice,
+    entry: {id: 'entry', revision: 1}, original: {text: 'original'}, description: '', labels: '', text: 'typed'};
+  const loading = componentCallback('views/context/EntryEditor.svelte', '  async function reloadMounted()', '\n  reloadView(', context, 'reloadMounted();');
+  await Promise.resolve(); app[guard] = guard === 'dirty' ? true : {body: 'pending'};
+  response.resolve({entry: {id: 'entry', revision: 7}, content: {text: 'remote', description: 'remote', labels: []}}); await loading;
+  assert.equal(context.text, 'typed'); assert.equal(context.entry.revision, 1);
+});
+for (const guard of ['dirty', 'pending']) test(`round 9: Guidance reload keeps ${guard} bundle and expected revision`, async t => {
+  const {app} = realAppHarness(t), response = defer(), api = app.forView();
+  const bundle = {workspace: {revision: 1, text: 'original'}};
+  const context = {app: api, reader: new ReadTask(api), workspaceId: 'workspace', readGuidance: () => response.promise, bundle, failed: '', notice: api.notice};
+  const loading = componentCallback('views/Guidance.svelte', '  async function load()', '\n  reloadView(', context, 'load();');
+  await Promise.resolve(); app[guard] = guard === 'dirty' ? true : {body: 'pending'};
+  response.resolve({workspace: {revision: 7, text: 'remote'}}); await loading;
+  assert.equal(context.bundle, bundle); assert.equal(context.bundle.workspace.revision, 1);
+});
+for (const guard of ['edited', 'intent', 'forgotten']) test(`round 9: Board sync preserves ${guard} text`, async () => {
+  const context = {board: {text: 'remote'}, text: 'typed', edited: guard === 'edited', intent: guard === 'intent' ? {} : null,
+    forgotten: guard === 'forgotten', untrack: fn => fn(), $effect: fn => fn()};
+  await componentCallback('views/guidance/Board.svelte', '  $effect(() => {', '\n\n  const global', context);
+  assert.equal(context.text, 'typed');
+});
+for (const guard of ['dirty', 'pending']) test(`round 9: Settings header read cannot unfreeze ${guard} work`, async () => {
+  const app = {dirty: guard === 'dirty', pending: guard === 'pending' ? {} : null};
+  const context = {app};
+  const frozen = await componentCallback('views/settings/state.svelte.ts', '  async reloadMounted()', '\n\n  #resetLocal()', context,
+    '}\nconst state = new Controller(); await state.reloadMounted(); return state.frozen; })();',
+    '(async () => { class Controller { #app = app; frozen = true; rosterAfter = null; loadPolicy = async () => ({}); loadRoster = async () => {};');
+  assert.equal(frozen, true);
+});
+
+test('round 9: current reload failures propagate after every sibling loader runs', async t => {
+  const {app} = realAppHarness(t); let sibling = 0;
+  app.registerReload(async () => { throw new Error('current read failed'); }); app.registerReload(async () => { sibling++; });
+  await assert.rejects(app.refreshView(), /current read failed/); assert.equal(sibling, 1);
+});
+test('round 9: Pager preserves its current error and throws to its caller', async t => {
+  const {app} = realAppHarness(t), failure = new Error('pager failed');
+  const context = {ReadTask, PAGE_SIZE: 32, app: app.forView(), fetch: async () => { throw failure; }, $state: Object.assign(x => x, {raw: x => x})};
+  const pager = await componentCallback('views/context/pager.svelte.ts', 'class Pager', '\n}\n', context, '\n}\nnew Pager(app, fetch);');
+  await assert.rejects(pager.reload(), failure); assert.equal(pager.error, failure.message); assert.equal(pager.loading, false);
+});
+test('round 9: app.run silently finishes a SupersededRead', async t => {
+  const {app} = realAppHarness(t); await app.run(async () => { throw Object.assign(new Error('obsolete'), {name: 'SupersededRead'}); });
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.busy, false);
+});
+test('round 9: opening the same workspace invokes its mounted reload', async t => {
+  const {app} = realAppHarness(t); app.workspace = {id: 'workspace', name: 'Workspace'}; app.view = 'context'; let reloads = 0;
+  app.registerReload(async () => { reloads++; }); await app.openWorkspace(app.workspace, 'context'); assert.equal(reloads, 1);
+});
+
+
+test('round 9: ReadTask drops direct obsolete success and error before receive, catch or finish', async t => {
+  const {app} = realAppHarness(t);
+  for (const failure of [false, true]) {
+    const reader = new ReadTask(app.forView()), deferred = defer(); let effects = 0;
+    const reading = reader.run(() => deferred.promise, {receive: () => { effects++; }, error: () => { effects++; }, finish: () => { effects++; }});
+    app.generation++; if (failure) deferred.reject(new Error('old')); else deferred.resolve('old'); await reading;
+    assert.equal(effects, 0);
+  }
+});
+test('round 9: reload registry skips raw registrations from a replaced session or epoch', async t => {
+  const {app} = realAppHarness(t); let calls = 0;
+  app.registerReload(async () => { calls++; }); app.sessionEpoch++;
+  await app.refreshView(); assert.equal(calls, 0);
+  app.registerReload(async () => { calls++; }); app.session = {...app.session};
+  await app.refreshView(); assert.equal(calls, 0);
+});
+test('round 9: reload callback is inert between scope disposal and cleanup', async t => {
+  const {app} = realAppHarness(t), visit = app.forView(); let calls = 0;
+  const stop = visit.registerReload(async () => { calls++; }); t.after(stop); visit.dispose();
+  await app.refreshView(); assert.equal(calls, 0);
+});
+
+
+for (const transition of ['replacement', 'disposal']) for (const status of [401, 503])
+  test(`round 10: Team ${transition} retires old verification ${status} within one generation`, async t => {
+    const {app, server} = realAppHarness(t), api = app.forView();
+    const held = server.hold('/api/v1/admin/team/list');
+    const context = {app: api, ReadTask, workspace: {id: 'workspace'}, admins: null, keys: null,
+      adminAfter: null, keyAfter: null, adminError: '', keyError: '', adminLoading: false, keyLoading: false};
+    const loaders = await componentCallback('views/access/TeamTab.svelte', '  const adminRead =', '\n  reloadView(', context, '({readAdmins, readKeys});');
+    const initial = loaders.readAdmins(null); await held.started; const generation = app.generation;
+    if (transition === 'replacement') await loaders.readAdmins(null); else api.dispose();
+    const transport = globalThis.fetch; let checks = 0;
+    globalThis.fetch = (path, options) => path === '/api/v1/admin/session'
+      ? (checks++, Promise.resolve({ok: false, status, json: async () => ({api_version: 1, error: {code: 'obsolete'}})}))
+      : transport(path, options);
+    const notices = [...appRuntime.toasts]; held.release(); await initial;
+    assert.equal(app.generation, generation); assert.equal(checks, 0); assert.equal(app.locked, false);
+    assert.deepEqual(appRuntime.toasts, notices);
+  });
+for (const transition of ['replacement', 'disposal']) for (const status of [401, 503])
+  test(`round 10: retirement during session verification suppresses ${transition} ${status}`, async t => {
+    const {app, server} = realAppHarness(t), api = app.forView(), task = new ReadTask(api);
+    const response = server.hold('/read-verifying');
+    const reading = task.run(readApp => readApp.read('/read-verifying'), {receive: () => assert.fail('retired data')});
+    await response.started;
+    const verification = server.hold('/api/v1/admin/session', {status}); response.release(); await verification.started;
+    if (transition === 'replacement') task.invalidate(); else api.dispose();
+    verification.release(); await reading; assert.equal(app.locked, false);
+  });
+for (const status of [401, 403]) test(`round 10: disposed read body ${status} cannot lock a live sibling`, async t => {
+  const {app, server} = realAppHarness(t), api = app.forView(), task = new ReadTask(api);
+  const response = server.hold('/retired-denied', {status});
+  const reading = task.run(readApp => readApp.read('/retired-denied'), {receive: () => assert.fail('retired data')});
+  await response.started; api.dispose(); response.release(); await reading; assert.equal(app.locked, false);
+});
+
+test('round 10: recovery owns a snapshot; discarding it cannot clean a later editor', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:first';
+  app.setDraft('retired text'); captureContextRecovery(api, key);
+  const record = app.peekFormDraft(key); assert.equal(record.text, 'retired text');
+  assert.equal(app.dirty, false); assert.equal(app.hasUnsavedIdentityWork, true);
+  app.setDraft('second entry new edit');
+  assert.equal(record.text, 'retired text'); assert.equal(app.mayLeave(), false);
+  assert.equal(discardContextRecovery(api, key, record), true);
+  assert.equal(app.draft, 'second entry new edit'); assert.equal(app.dirty, true); assert.equal(app.mayLeave(), false);
+});
+test('round 11: hierarchy reload preserves copied and uncopied records and the current editor', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), prefix = 'context-recovery:workspace:';
+  app.setDraft('first recovered text'); captureContextRecovery(api, prefix + 'one');
+  app.setDraft('second recovered text'); captureContextRecovery(api, prefix + 'two');
+  app.setDraft('current editor text'); app.drafts[prefix + 'one'].copied = 'true';
+  await componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', {
+    app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf: null, book: null, entry: null,
+    shelves: {items: [], reload: async () => {}}, books: {}, entries: {}, recoveries: Object.entries(app.drafts), inactiveNotice: 'retired',
+  }, 'reload();');
+  assert.equal(app.peekFormDraft(prefix + 'one').text, 'first recovered text');
+  assert.equal(app.peekFormDraft(prefix + 'two').text, 'second recovered text');
+  assert.equal(app.draft, 'current editor text'); assert.equal(app.dirty, true); assert.equal(app.mayLeave(), false);
+});
+test('round 10: a delayed discard decision covers only its captured recovery object', async t => {
+  const {app} = realAppHarness(t), key = 'context-recovery:workspace:one';
+  app.setDraft('retired'); captureContextRecovery(app, key); const original = app.peekFormDraft(key);
+  app.drafts[key] = {text: 'replacement'}; app.setDraft('live editor');
+  assert.equal(discardContextRecovery(app, key, original), false);
+  assert.equal(app.drafts[key].text, 'replacement'); assert.equal(app.dirty, true); assert.equal(app.draft, 'live editor');
+});
+for (const kind of ['shelf', 'book', 'entry']) test(`round 10: accepted ${kind} selection clears only the inactive notice`, async () => {
+  const record = {text: 'captured closed editor text'};
+  const context = {app: {mayLeave: () => true, run: async fn => fn()}, inactiveNotice: 'Entry is no longer active', record,
+    shelf: null, book: null, entry: null, books: {clear() {}, first: async () => {}}, entries: {clear() {}, first: async () => {}},
+    archivedEntries: false, closeDetail() {}, stage: 'entries', wide: () => true, focusId() {},
+    detail: {kind: 'none'}, detailSerial: 0, openEntry: async () => {}, show() {}};
+  const marker = kind === 'shelf' ? '  function selectShelf' : kind === 'book' ? '  function selectBook' : '  function selectEntry';
+  const end = kind === 'shelf' ? '\n  function selectBook' : kind === 'book' ? '\n  function selectEntry' : '\n  function toggleArchived';
+  await componentCallback('views/Context.svelte', marker, end, context, `select${kind[0].toUpperCase()+kind.slice(1)}({id: 'next', archived: false});`);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.inactiveNotice, ''); assert.equal(record.text, 'captured closed editor text');
+});
+for (const hadFocus of [false, true]) for (const retired of [false, true]) test(`round 10: retired Context focus ownership, editor focused=${hadFocus}, scope retired=${retired}`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), dom = defer(); let focused = 0;
+  const body = {}, document = {body, activeElement: body, getElementById: () => ({focus: () => { focused++; }})};
+  const focusing = focusRetiredContext(api, hadFocus, () => dom.promise, document);
+  if (retired) api.dispose(); dom.resolve(); await focusing;
+  assert.equal(focused, hadFocus && !retired ? 1 : 0);
+});
+test('round 10: queued retirement focus preserves a newly focused Refresh button', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), dom = defer(); let focused = 0;
+  const body = {}, document = {body, activeElement: body, getElementById: () => ({focus: () => { focused++; }})};
+  const focusing = focusRetiredContext(api, true, () => dom.promise, document); document.activeElement = {label: 'Refresh'};
+  dom.resolve(); await focusing; assert.equal(focused, 0);
+});
+
+test('round 10 N1: off-page archived entry summary is kept without active body lookup', async () => {
+  const selection = {shelf: {id: 's'}, book: {id: 'b'}, entry: {id: 'e', archived: true}};
+  const pages = Object.fromEntries(['shelf', 'book', 'entry'].map(kind => [kind, {items: kind === 'entry' ? [] : [selection[kind]], reload: async () => {}}]));
+  const result = await reloadContextSelection({selection, pages, read: async () => assert.fail('archived active-body lookup')});
+  assert.equal(result.entry, selection.entry); assert.equal(result.missing, undefined);
+});
+test('round 10 N3: listed selection metadata is adopted at every hierarchy level', async () => {
+  const selection = Object.fromEntries(['shelf','book','entry'].map(kind => [kind, {id: kind, name: 'old'}]));
+  const pages = Object.fromEntries(Object.keys(selection).map(kind => [kind, {items: [{id: kind, name: 'fresh'}], reload: async () => {}}]));
+  const result = await reloadContextSelection({selection, pages, read: async () => assert.fail('listed lookup')});
+  for (const kind of Object.keys(selection)) assert.equal(result[kind], pages[kind].items[0]);
+});
+for (const status of [400, 401, 403, 409, 503]) test(`round 10 N4: selected lookup ${status} never means inactive`, async () => {
+  const selection = {shelf: {id: 's'}, book: null, entry: null}, failure = Object.assign(new Error('lookup failed'), {status});
+  const pages = {shelf: {items: [], reload: async () => {}}};
+  await assert.rejects(reloadContextSelection({selection, pages, read: async () => { throw failure; }}), failure);
+});
+test('round 10 N6: Context reload propagates active lookup errors', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); api.read = async () => { throw new Error('active lookup failed'); };
+  const context = {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf: {id: 's'}, book: null, entry: null,
+    shelves: {items: [], reload: async () => {}}, books: {}, entries: {}, contentPath: x => x, workspaceId: 'workspace'};
+  await assert.rejects(componentCallback('views/Context.svelte','  async function reload() {','\n  reloadView(',context,'reload();'), /active lookup failed/);
+});
+test('round 10 N9: archived-entry details adopt the refreshed selected summary', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); const shelf = {id: 's'}, book = {id: 'b'}, entry = {id: 'e', archived: true, name: 'old'};
+  const page = item => ({items: [{...item, name: 'fresh'}], reload: async () => {}});
+  const context = {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf, book, entry,
+    shelves: page(shelf), books: page(book), entries: page(entry), detail: {kind: 'archived-entry', entry},
+    nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveNotice: 'old'};
+  await componentCallback('views/Context.svelte','  async function reload() {','\n  reloadView(',context,'reload();');
+  assert.equal(context.detail.entry.name, 'fresh'); assert.equal(context.inactiveNotice, '');
+});
+
+test('round 10: the actual recovery discard callback cannot clean a live editor', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:retired';
+  app.setDraft('closed editor text'); captureContextRecovery(api, key); const record = app.peekFormDraft(key);
+  app.setDraft('second entry new edit');
+  const callbackApp = {confirmAction: async () => true, clean: () => api.clean(),
+    peekFormDraft: key => api.peekFormDraft(key), dropFormDraft: key => api.dropFormDraft(key)};
+  await componentCallback('views/Context.svelte', "if (await app.confirmAction({title: 'Discard recovered local work?'", '\n',
+    {app: callbackApp, key, record, discardContextRecovery, nextContextRecovery: () => undefined, focusAfterContextDiscard: async () => {}, tick: async () => {}, document: {}, stage: 'entries', recoveryPrefix: ''}, '})()', '(async () => {');
+  assert.equal(app.dirty, true); assert.equal(app.draft, 'second entry new edit'); assert.equal(app.mayLeave(), false);
+});
+
+
+function contextReloadHarness(api, extra = {}) {
+  return {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf: null, book: null, entry: null,
+    shelves: {items: [], reload: async () => {}}, books: {}, entries: {}, inactiveNotice: '',
+    recoveries: Object.entries(api.drafts), ...extra};
+}
+async function beforeUnloadHandler(app) {
+  let handler;
+  await componentCallback('lib/app.svelte.ts', "    window.addEventListener('beforeunload'", "    window.addEventListener('focus'",
+    {app, window: {addEventListener: (_name, fn) => { handler = fn; }}}, '}).call(app);', '(function(){');
+  return () => { let prevented = false; handler({preventDefault: () => { prevented = true; }}); return prevented; };
+}
+test('round 11: copy then Refresh and lock retain exact recovery and beforeunload protection', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:one';
+  app.setDraft('ONLY RECOVERABLE TEXT'); captureContextRecovery(api, key, 'Selected entry'); const record = app.peekFormDraft(key);
+  assert.equal(await api.copyText(record.text), true);
+  // Also tolerate a marker from the former implementation: it is never consent.
+  record.copied = 'true';
+  app.drafts['context-recovery:foreign:one'] = {text: 'foreign recovery', copied: 'true'};
+  const context = contextReloadHarness(api);
+  api.registerReload(() => componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();'));
+  const unload = await beforeUnloadHandler(app); assert.equal(unload(), true);
+  await app.refreshView(); assert.equal(app.peekFormDraft(key), record); assert.equal(record.text, 'ONLY RECOVERABLE TEXT');
+  assert.equal(app.drafts['context-recovery:foreign:one'].text, 'foreign recovery');
+  assert.equal(unload(), true); app.lock('current session unavailable');
+  assert.match(app.recoveryText(), /ONLY RECOVERABLE TEXT/); assert.equal(unload(), true);
+});
+test('round 11: lock recovery is a human label and text without internal fields', () => {
+  const parts = draftsRecoveryParts({'context-recovery:workspace:one': {label: 'Entry “Selected entry” — unsaved text', text: 'EXACT BODY', copied: 'true'}});
+  assert.deepEqual(parts, ['Entry “Selected entry” — unsaved text\nEXACT BODY']);
+  assert.deepEqual(draftsRecoveryParts({'context-recovery:w:empty': {label: 'empty', copied: 'true'}}), []);
+});
+test('round 11: capture names an existing or new entry', async t => {
+  const {app} = realAppHarness(t);
+  app.setDraft('existing text'); captureContextRecovery(app, 'context-recovery:w:one', 'First item');
+  app.setDraft(JSON.stringify({entry: {name: 'New item', text: 'new text'}})); captureContextRecovery(app, 'context-recovery:w:two');
+  assert.equal(app.drafts['context-recovery:w:one'].label, 'Entry “First item” — unsaved text');
+  assert.equal(app.drafts['context-recovery:w:two'].label, 'Entry “New item” — unsaved text');
+});
+test('round 11 M12: two production retirement callbacks keep separate exact snapshots', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); let id = 0;
+  const shelf = {id: 's', name: 'Shelf'}, book = {id: 'b', name: 'Book'};
+  const context = contextReloadHarness(api, {shelf, book, captureContextRecovery, announceContextRecovery, focusRetiredContext,
+    detailElement: undefined, document: {}, tick: async () => {}, crypto: {randomUUID: () => 'unique-' + (++id)},
+    recoveryPrefix: 'context-recovery:workspace:', contentPath: x => x, workspaceId: 'workspace', stage: 'detail',
+    shelves: {items: [shelf], reload: async () => {}}, books: {items: [book], reload: async () => {}},
+    entries: {items: [], reload: async () => {}, clear() {}}, closeDetail() {}});
+  api.read = async () => { throw Object.assign(new Error('NotFound'), {status: 404}); };
+  for (const name of ['FIRST UNIQUE', 'SECOND UNIQUE']) {
+    context.entry = {id: name, name}; app.setDraft(name);
+    await componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();');
+  }
+  const records = Object.values(app.drafts);
+  assert.equal(records.length, 2); assert.deepEqual(records.map(record => record.text), ['FIRST UNIQUE', 'SECOND UNIQUE']);
+  assert.equal(new Set(records.map(record => record.label)).size, 2);
+});
+test('round 11 X13: Context and EntryEditor 503 reloads report exactly one notification', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), read = api.read;
+  api.read = async (...args) => { if (args[0].includes('entries/get')) throw Object.assign(new Error('server unavailable'), {status: 503}); return read(...args); };
+  api.registerReload(async () => { throw new Error('server unavailable'); });
+  const context = {app: api, reader: new ReadTask(api), entry: {id: 'e'}, contentPath: x => '/entries/get', notice: api.notice};
+  api.registerReload(() => componentCallback('views/context/EntryEditor.svelte', '  async function reloadMounted()', '\n  reloadView(', context, 'reloadMounted();'));
+  await app.run(() => app.refreshView(), 'refresh');
+  assert.equal(appRuntime.toasts.filter(toast => toast.text === 'server unavailable').length, 1);
+});
+for (const survivor of ['next', 'notice', 'heading']) test(`round 11: discard focus chooses ${survivor} with session ownership`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), body = {}, calls = [];
+  const ids = {'next-record': {focus: () => calls.push('next')}, 'context-inactive-notice': {focus: () => calls.push('notice')}, 'entries-title': {focus: () => calls.push('heading')}};
+  if (survivor !== 'next') delete ids['next-record']; if (survivor === 'heading') delete ids['context-inactive-notice'];
+  await focusAfterContextDiscard(api, async () => {}, {body, activeElement: body, getElementById: id => ids[id]}, {nextKey: 'next-record', headingId: 'entries-title'});
+  assert.deepEqual(calls, [survivor]);
+});
+test('round 11: discard chooses the next record in order and wraps to a survivor', async t => {
+  const {app} = realAppHarness(t), prefix = 'context-recovery:w:';
+  for (const id of ['one','two','three']) app.drafts[prefix + id] = {text: id};
+  assert.equal(nextContextRecovery(app, prefix, prefix + 'two'), prefix + 'three');
+  assert.equal(nextContextRecovery(app, prefix, prefix + 'three'), prefix + 'one');
+  delete app.drafts[prefix + 'two']; delete app.drafts[prefix + 'three'];
+  assert.equal(nextContextRecovery(app, prefix, prefix + 'one'), undefined);
+});
+for (const retired of [false, true]) test(`round 11: queued discard focus preserves ownership, retired=${retired}`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), dom = defer(), body = {}; let focused = 0;
+  const document = {body, activeElement: body, getElementById: () => ({focus: () => { focused++; }})};
+  const focusing = focusAfterContextDiscard(api, () => dom.promise, document, {nextKey: 'next', headingId: 'entries-title'});
+  if (retired) api.dispose(); else document.activeElement = {id: 'Refresh'};
+  dom.resolve(); await focusing; assert.equal(focused, 0);
+});
+test('round 11: announcement clears before the DOM tick and repeats after it', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); const values = [];
+  for (let i = 0; i < 2; i++) {
+    const dom = defer(), announce = announceContextRecovery(api, 'Entry no longer active', () => dom.promise, text => values.push(text));
+    assert.equal(values.at(-1), ''); dom.resolve(); await announce; assert.equal(values.at(-1), 'Entry no longer active');
+  }
+  assert.deepEqual(values, ['', 'Entry no longer active', '', 'Entry no longer active']);
+});
+test('round 11: recovery focus target remains present and named while captures exist', async () => {
+  const template = await readFile(new URL('../crates/server/web/src/views/Context.svelte', import.meta.url), 'utf8');
+  assert.match(template, /\{#if inactiveNotice \|\| recoveries\.length\}/);
+  assert.match(template, /id="context-inactive-notice" role="region" aria-label=/);
+  const region = template.indexOf('role="status" aria-live="polite"');
+  assert.ok(region >= 0 && region < template.indexOf('{#if inactiveNotice || recoveries.length}'));
+});
+
+
+test('round 11: disposed task errors do not escape a rethrowing reload', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), response = defer();
+  const reading = new ReadTask(api).run(() => response.promise, {receive: () => assert.fail('retired data'), rethrow: true});
+  api.dispose(); response.reject(new Error('retired error')); await assert.doesNotReject(reading);
+});
+test('round 11: a replaced loader cannot begin a late session verification', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), delayed = defer(), task = new ReadTask(api);
+  const reading = task.run(async readApp => { await delayed.promise; return readApp.read('/late'); }, {receive: () => assert.fail('retired data')});
+  await task.run(readApp => readApp.read('/fresh'), {receive() {}});
+  const transport = globalThis.fetch; let requests = 0;
+  globalThis.fetch = (...args) => { requests++; return transport(...args); };
+  delayed.resolve(); await reading; assert.equal(requests, 0);
+});
+for (const status of [401, 503, 200]) test(`round 11: raw scoped verification ${status} after disposal cannot lock`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), verify = defer(), started = defer();
+  const transport = globalThis.fetch; let checks = 0;
+  globalThis.fetch = async (...args) => {
+    if (args[0] === '/api/v1/admin/session' && ++checks === 2) {
+      started.resolve(); await verify.promise;
+      return {ok: status === 200, status, json: async () => status === 200
+        ? {api_version: 1, data: {...app.session, identity: {...app.session.identity, key_id: 'changed'}}}
+        : {api_version: 1, error: {code: 'retired'}}};
+    }
+    return transport(...args);
+  };
+  const reading = api.read('/raw-view').catch(error => error); await started.promise; api.dispose(); verify.resolve();
+  await reading; assert.equal(app.locked, false);
+});
+
+test('round 11: Refresh of another selection never expires copied recovery', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:previous';
+  app.setDraft('previous editor text'); captureContextRecovery(api, key, 'Previous entry');
+  const record = app.peekFormDraft(key); await api.copyText(record.text); record.copied = 'true';
+  const shelf = {id: 's'}, book = {id: 'b'}, entry = {id: 'new-entry'};
+  const page = item => ({items: [item], reload: async () => {}});
+  const context = contextReloadHarness(api, {shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry), detail: {kind: 'none'}});
+  api.registerReload(() => componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();'));
+  await app.refreshView(); assert.equal(app.peekFormDraft(key), record); assert.equal(record.text, 'previous editor text');
+  assert.equal(context.entry.id, 'new-entry'); assert.equal(app.hasUnsavedIdentityWork, true);
+});
+
+import './workspace_panel_wiring.mjs';
+import './helpers/accessLink.mjs';

@@ -3,16 +3,25 @@
   // breakpoint, a stacked drill-down below it, and one detail panel.
   // Selection is kept by ID, so a selected or newly created item stays visible
   // even when it is not on the page currently shown.
-  import {onMount} from 'svelte';
+  import {onMount, tick} from 'svelte';
   import {Archive, ChevronLeft, Library, Plus} from '@lucide/svelte';
   import Delayed from '../lib/ui/Delayed.svelte';
   import EntrySkeleton from './context/EntrySkeleton.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
+  import Alert from '../lib/ui/Alert.svelte';
+  import Textarea from '../lib/ui/Textarea.svelte';
+  import {captureContextRecovery, discardContextRecovery, nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, focusRetiredContext} from '../lib/contextRecovery.js';
+  import {ReadTask} from '../lib/readTask.js';
+  import {reloadContextSelection} from '../lib/contextReload.js';
   import Button from '../lib/ui/Button.svelte';
   import Empty from '../lib/ui/Empty.svelte';
-  import {app} from '../lib/app.svelte';
-  import {notice} from '../lib/notify.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
+  import {shelfBadgeLabel} from '../lib/drafts.js';
+  import {submitDraftCreate, reportCreateFailure} from '../lib/draftCreate.js';
+  import {shelfDraftKey, bookDraftKey} from '../lib/draftKeys.js';
+  import {creationConfirmedText} from './context/creationConfirm.js';
   import ListPane from './context/ListPane.svelte';
   import CreateNodeForm from './context/CreateNodeForm.svelte';
   import EntryEditor from './context/EntryEditor.svelte';
@@ -25,6 +34,9 @@
     type Book, type EntryReceipt, type EntrySummary, type Shelf, type Snapshot} from './context/content';
   import type {EntryChange} from './context/entryWrite';
   import type {AdminIntent, ArchiveOutcome} from './context/archiveWrite';
+
+  const app = mountedView(panelApp);
+  const {notice} = app;
 
   type Stage = 'shelves' | 'books' | 'entries' | 'detail';
   type Detail =
@@ -39,7 +51,7 @@
     | {kind: 'message'; title: string; text: string};
 
   const workspaceId = app.workspace?.id ?? '';
-  const writable = app.writable();
+  const writable = $derived(app.writable());
 
   let shelf = $state.raw<Shelf | null>(null);
   let book = $state.raw<Book | null>(null);
@@ -50,13 +62,23 @@
   let detail = $state.raw<Detail>({kind: 'none'});
   let detailSerial = $state(0);
   let detailFrom = $state<Stage>('shelves');
+  let inactiveNotice = $state('');
+  let recoveryAnnouncement = $state('');
+  let detailElement = $state<HTMLElement>();
+  const recoveryPrefix = `context-recovery:${workspaceId}:`;
+  const recoveries = $derived(Object.entries(app.drafts).filter(([key, record]) => key.startsWith(recoveryPrefix) && record.text));
 
-  const shelves = new Pager<Shelf>((after, limit) => app.request(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
-  const books = new Pager<Book>((after, limit) => app.request(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
-  const entries = new Pager<EntrySummary>((after, limit) => app.request(contentPath('entries/list'), {workspace_id: workspaceId, book_id: book?.id, archived: archivedEntries, after, limit}));
+  const shelves = new Pager<Shelf>(app, (after, limit, readApp) => readApp.read(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
+  const books = new Pager<Book>(app, (after, limit, readApp) => readApp.read(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
+  const entries = new Pager<EntrySummary>(app, (after, limit, readApp) => readApp.read(contentPath('entries/list'), {workspace_id: workspaceId, book_id: book?.id, archived: archivedEntries, after, limit}));
 
   const pinnedEntry = $derived(entry && entry.book_id === book?.id && entry.archived === archivedEntries ? entry : null);
   const isNew = (item: {id: string}) => (created.has(item.id) ? 'New' : undefined);
+  // A shelf's own create-form shows its kept draft once selected; this badge
+  // makes a kept book draft under a shelf discoverable before that shelf is
+  // reselected, since Context.svelte remounts with `shelf` reset to null.
+  // peekFormDraft (not formDraft) so rendering the list never creates a draft.
+  const shelfBadge = (item: Shelf) => shelfBadgeLabel(created.has(item.id), app.peekFormDraft(bookDraftKey(workspaceId, item.id)));
   const paneClass = (pane: Stage) => (stage === pane ? 'flex' : 'hidden md:flex');
 
   // ---- detail -------------------------------------------------------------
@@ -65,7 +87,7 @@
     detailSerial += 1;
     detailFrom = from;
     stage = 'detail';
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 
   function closeDetail() {
@@ -74,7 +96,7 @@
   }
 
   async function openEntry(id: string) {
-    const snapshot = await app.request<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null});
+    const snapshot = await app.read<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null});
     entry = snapshot.entry;
     show({kind: 'entry', snapshot}, 'entries');
   }
@@ -83,10 +105,11 @@
   function selectShelf(next: Shelf) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
+      inactiveNotice = '';
       shelf = next; book = null; entry = null; archivedEntries = false;
       books.clear(); entries.clear(); closeDetail();
       stage = 'books';
-      if (!wide()) void focusId('books-title');
+      if (!wide()) void focusId(app, 'books-title');
       await books.first();
     }, 'select-shelf');
   }
@@ -94,10 +117,11 @@
   function selectBook(next: Book) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
+      inactiveNotice = '';
       book = next; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'entries';
-      if (!wide()) void focusId('entries-title');
+      if (!wide()) void focusId(app, 'entries-title');
       await entries.first();
     }, 'select-book');
   }
@@ -105,6 +129,7 @@
   function selectEntry(next: EntrySummary) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
+      inactiveNotice = '';
       if (next.archived) { entry = next; show({kind: 'archived-entry', entry: next}, 'entries'); }
       else {
         detail = {kind: 'loading'};
@@ -137,29 +162,36 @@
   function back(to: Stage) {
     stage = to;
     const row = to === 'shelves' && shelf ? `shelf:${shelf.id}` : to === 'books' && book ? `book:${book.id}` : to === 'entries' && entry ? `entry:${entry.id}` : '';
-    void (row ? focusRow(row) : focusId(`${to}-title`));
+    void (row ? focusRow(app, row) : focusId(app, `${to}-title`));
   }
 
   // ---- creation (shelf and book) ---------------------------------------------
   // The acknowledged create and the following list read are reported apart:
   // a failed refresh never turns a confirmed create into an unknown outcome.
+  // If the session check after the write fails, the create is still known to have
+  // happened: the lock message says so (like entryWrite.ts) and the draft that
+  // would otherwise be offered back as unsaved work is dropped. submitDraftCreate
+  // (lib/draftCreate.js) makes both the drop and the "draft is kept" claim below
+  // identity-safe: a draft discarded or replaced while this request was in
+  // flight is never the one dropped, and never the one claimed "kept".
   async function create<T extends Shelf>(kind: 'shelf' | 'book', path: string, body: Record<string, unknown>,
-    reveal: (item: T) => Promise<string>): Promise<boolean> {
+    draftKey: string, submitted: Record<string, string>, reveal: (item: T) => Promise<string>): Promise<boolean> {
     if (!app.mayLeave()) return false;
-    let item: T;
-    try { item = await app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}); }
-    catch (error) {
-      if (app.locked) return false;
-      notice(outcomeUnknown(error)
-        ? `${message(error)} Your ${kind} draft is kept. Refresh the list to check whether the ${kind} exists before you try again.`
-        : `${message(error)} Your ${kind} draft is kept.`, 'destructive');
+    const outcome = await submitDraftCreate({
+      drafts: app.drafts, key: draftKey, submitted,
+      request: confirmed => app.request<T>(contentPath(path), {workspace_id: workspaceId, ...body}, confirmed),
+      confirmedText: data => creationConfirmedText(kind, data as T),
+    });
+    if (!outcome.ok) {
+      reportCreateFailure({locked: app.locked, outcome, kind, message, outcomeUnknown, notify: notice});
       return false;
     }
+    const item = outcome.result as T;
     created = new Set([...created, item.id]);
     const failure = await reveal(item);
     if (failure) notice(`${kind === 'shelf' ? 'Shelf' : 'Book'} “${item.name}” created and selected. The list refresh failed: ${failure} Use refresh to try again.`, 'warning');
     else notice(`${kind === 'shelf' ? 'Shelf' : 'Book'} “${item.name}” created.`, 'success');
-    void focusRow(`${kind}:${item.id}`);
+    void focusRow(app, `${kind}:${item.id}`);
     return true;
   }
 
@@ -172,17 +204,19 @@
     return failure;
   };
 
-  const createShelf = (name: string, description: string) => create<Shelf>('shelf', 'shelves/create', {name, description}, item => {
+  const createShelf = (submitted: Record<string, string>) => create<Shelf>('shelf', 'shelves/create',
+    {name: submitted.name ?? '', description: submitted.description ?? ''}, shelfDraftKey(workspaceId), submitted, item => {
     shelf = item; book = null; entry = null; archivedEntries = false;
     books.clear(); entries.clear(); closeDetail();
     stage = 'shelves';
     return refreshed(() => shelves.reload(), () => books.first());
   });
 
-  const createBook = (name: string, description: string) => {
+  const createBook = (submitted: Record<string, string>) => {
     const parent = shelf;
     if (!parent) return Promise.resolve(false);
-    return create<Book>('book', 'books/create', {shelf_id: parent.id, name, description}, item => {
+    return create<Book>('book', 'books/create', {shelf_id: parent.id, name: submitted.name ?? '', description: submitted.description ?? ''},
+      bookDraftKey(workspaceId, parent.id), submitted, item => {
       book = item; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'books';
@@ -261,6 +295,35 @@
     await shelves.reload();
   }
 
+  const selectionRead = new ReadTask(app);
+  async function reload() {
+    await selectionRead.run(readApp => reloadContextSelection({
+      selection: {shelf, book, entry}, pages: {shelf: shelves, book: books, entry: entries},
+      read: async (kind: string, id: string) => kind === 'entry'
+        ? (await readApp.read<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null})).entry
+        : readApp.read(contentPath(`${kind === 'shelf' ? 'shelves' : 'books'}/get`), {workspace_id: workspaceId, node_id: id}),
+    }), {
+      receive: result => {
+        shelf = result.shelf; book = result.book; entry = result.entry;
+        if (result.missing) {
+          const hadFocus = Boolean(detailElement?.contains(document.activeElement));
+          captureContextRecovery(app, recoveryPrefix + crypto.randomUUID(), entry?.name ?? '');
+          const label = result.missing.charAt(0).toUpperCase() + result.missing.slice(1);
+          inactiveNotice = `${label} is no longer active (archived or removed).`;
+          void announceContextRecovery(app, inactiveNotice, tick, (text: string) => { recoveryAnnouncement = text; });
+          if (result.missing === 'shelf') { shelf = null; books.clear(); }
+          if (result.missing !== 'entry') { book = null; entries.clear(); }
+          entry = null;
+          // The closed editor is now held by its own recovery record.
+          closeDetail(); stage = result.missing === 'shelf' ? 'shelves' : result.missing === 'book' ? 'books' : 'entries';
+          void focusRetiredContext(app, hadFocus, tick, document);
+        }
+        if (!result.missing && !recoveries.length) inactiveNotice = '';
+        if (entry && detail.kind === 'archived-entry') detail = {...detail, entry};
+      }, rethrow: true,
+    });
+  }
+  reloadView(app, reload);
   onMount(() => { shelves.first().catch(() => {}); });
 </script>
 
@@ -281,9 +344,35 @@
     {#if entry}<span aria-hidden="true">/</span><span class="max-w-48 truncate px-1 text-foreground" aria-current="location">{entry.name}</span>{/if}
   </nav>
 
+  <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{recoveryAnnouncement}</div>
+  {#if inactiveNotice || recoveries.length}
+    <div id="context-inactive-notice" role="region" aria-label={recoveries.length ? 'Recovered local work' : 'Selection no longer active'} tabindex="-1" class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <Alert title={recoveries.length ? 'Recovered local work' : 'Selection no longer active'}>
+        {#if inactiveNotice}<p>{inactiveNotice}</p>{/if}
+        {#if recoveries.length}<p>Text from closed editors stays here until you explicitly discard it. Copying does not remove it.</p>{/if}
+      </Alert>
+    </div>
+  {/if}
+  {#each recoveries as [key, record] (key)}
+    <section id={key} data-context-recovery tabindex="-1" aria-label={record.label || 'Recovered context text'} class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <Alert title={record.label || 'Recovered context text'}>
+        <div class="space-y-3">
+          <p>Text kept from the closed editor. Copy it before explicitly discarding it.</p>
+          <Textarea aria-label="Recoverable local work" value={record.text} readonly rows={6} />
+          <div class="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onclick={() => app.copyText(record.text ?? '')}>Copy local work</Button>
+            <Button variant="outline" size="sm" onclick={async () => {
+              if (await app.confirmAction({title: 'Discard recovered local work?', body: 'This clears only the text captured from the closed editor. Copy it first if you need it.', confirm: 'Discard local work', destructive: true})) { const nextKey = nextContextRecovery(app, recoveryPrefix, key); if (discardContextRecovery(app, key, record)) await focusAfterContextDiscard(app, tick, document, {nextKey, headingId: stage === 'detail' ? 'context-detail-title' : `${stage}-title`}); }
+            }}>Discard local work</Button>
+          </div>
+        </div>
+      </Alert>
+    </section>
+  {/each}
+
   <div class="grid gap-4 md:grid-cols-3">
     <ListPane id="shelves" kind="shelf" title="Shelves" pager={shelves} selectedId={shelf?.id ?? null} pinned={shelf}
-      label={item => item.name} detail={item => item.description} badge={isNew} onselect={selectShelf}
+      label={item => item.name} detail={item => item.description} badge={shelfBadge} onselect={selectShelf}
       emptyText="No active shelves on this page." class={paneClass('shelves')}
       onretry={() => app.run(() => shelves.first(), 'shelves-retry')}>
       {#snippet actions()}
@@ -291,7 +380,7 @@
       {/snippet}
       {#snippet footer()}
         {#if writable}
-          <CreateNodeForm kind="shelf" draftKey={`context.shelf.${workspaceId}`} oncreate={createShelf} />
+          <CreateNodeForm kind="shelf" draftKey={shelfDraftKey(workspaceId)} oncreate={createShelf} />
         {:else}<p class="text-xs text-muted-foreground">Read-only with this key or workspace state.</p>{/if}
       {/snippet}
     </ListPane>
@@ -307,7 +396,7 @@
         {/snippet}
         {#snippet footer()}
           {#if writable}
-            {#key shelf?.id}<CreateNodeForm kind="book" draftKey={`context.book.${workspaceId}.${shelf?.id}`} oncreate={createBook} />{/key}
+            {#key shelf?.id}<CreateNodeForm kind="book" draftKey={bookDraftKey(workspaceId, shelf?.id ?? '')} oncreate={createBook} />{/key}
           {/if}
         {/snippet}
       </ListPane>
@@ -348,7 +437,7 @@
     {/if}
   </div>
 
-  <section aria-label="Details" class={['rounded-xl border bg-card p-5 text-card-foreground shadow-xs', stage === 'detail' ? 'block' : 'hidden md:block']}>
+  <section bind:this={detailElement} aria-label="Details" class={['rounded-xl border bg-card p-5 text-card-foreground shadow-xs', stage === 'detail' ? 'block' : 'hidden md:block']}>
     <Button variant="ghost" size="sm" class="-mt-1 mb-3 -ml-2 md:hidden" onclick={() => back(detailFrom)}>
       <ChevronLeft /> {{shelves: 'Shelves', books: 'Books', entries: 'Entries', detail: 'Back'}[detailFrom]}
     </Button>

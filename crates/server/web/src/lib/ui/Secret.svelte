@@ -4,7 +4,10 @@
   import {onMount, tick} from 'svelte';
   import {Copy, Eye, EyeOff, KeyRound} from '@lucide/svelte';
   import Button from './Button.svelte';
-  import {copyText} from '../notify.svelte';
+  import {app as panelApp} from '../app.svelte';
+  import {mountedView} from '../viewLifecycle.js';
+  const app = mountedView(panelApp);
+  const {copyText} = app;
   let {title, value, ondismiss}: {title: string; value: string; ondismiss?: () => void} = $props();
   let shown = $state(false);
   let root = $state<HTMLElement | null>(null);
@@ -15,12 +18,14 @@
     if (await copyText(value)) return;
     shown = true;
     await tick();
-    if (!code) return;
-    code.focus();
-    const range = document.createRange();
-    range.selectNodeContents(code);
-    getSelection()?.removeAllRanges();
-    getSelection()?.addRange(range);
+    app.effect(() => {
+      if (!code) return;
+      code.focus();
+      const range = document.createRange();
+      range.selectNodeContents(code);
+      getSelection()?.removeAllRanges();
+      getSelection()?.addRange(range);
+    });
   }
 </script>
 <section bind:this={root} tabindex="-1" class="space-y-3 rounded-lg border bg-card p-4 outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={title}>
