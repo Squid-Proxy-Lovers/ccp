@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // No secret persistence, automatic claim retry, or server-controlled error text.
+import {isStrictUuid} from './model.js';
 export function takeSetupCode(location, history) {
   const hash = location.hash;
   if (hash) history.replaceState(null, '', '/admin/setup');
@@ -47,7 +48,8 @@ export function validSetupName(value) {
   const name = value.trim();
   return name.length > 0 && new TextEncoder().encode(name).length <= 256 && !/\p{Cc}/u.test(name);
 }
-function validUuid(value) { return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value); }
+// Setup receipts historically accept nil UUIDs; keep that contract here.
+function validUuid(value) { return isStrictUuid(value) || value === '00000000-0000-0000-0000-000000000000'; }
 export function setupKeys(value) {
   if (!value || !['instance_id', 'workspace_id', 'principal_id'].every(k => validUuid(value[k]))
     || !['instance_admin_key', 'workspace_owner_key'].every(k => /^ccp_admin_[0-9a-f]{64}$/.test(value[k]?.secret ?? ''))) {

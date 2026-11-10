@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Pure link handling only. Never send a browser invitation to any endpoint.
+import {isStrictUuid} from './model.js';
 const fields = ['v', 'i', 'm', 'ca', 't', 'w', 'n'];
 const messages = {
   size: 'Enrollment link exceeds the size limit.',
@@ -18,8 +19,7 @@ export class EnrollmentLinkError extends Error {
 function refuse(kind) { throw new EnrollmentLinkError(kind); }
 function utf8(value) { return new TextEncoder().encode(value); }
 function id(value) {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-    || value.replaceAll('-', '') === '0'.repeat(32)) refuse('identity');
+  if (!isStrictUuid(value)) refuse('identity');
   return value;
 }
 function origin(value) {

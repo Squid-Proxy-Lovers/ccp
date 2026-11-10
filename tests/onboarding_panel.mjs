@@ -2,6 +2,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {takeSetupCode, setupRequest, setupKeys, validSetupName, SetupError} from '../crates/server/web/src/lib/setup.js';
+import {isStrictUuid} from '../crates/server/web/src/lib/model.js';
+import {parseEnrollmentLink} from '../crates/server/web/src/lib/enrollment_link.js';
+import {LinkAttempt} from '../crates/server/web/src/lib/link_issuance.js';
+import {readFile} from 'node:fs/promises';
 const instance = '11111111-1111-4111-8111-111111111111';
 const code = 'ccp_setup_' + 'a'.repeat(64);
 
@@ -52,4 +56,66 @@ test('setup names use UTF8 byte limits and malformed key receipts cannot open th
   const receipt={instance_id:instance,workspace_id:instance,principal_id:instance,instance_admin_key:{secret:'ccp_admin_'+'a'.repeat(64)},workspace_owner_key:{secret:'ccp_admin_'+'b'.repeat(64)}};
   assert.equal(setupKeys(receipt),receipt);
   for (const value of [null,{}, {...receipt,workspace_id:'not-an-id'}, {...receipt,workspace_owner_key:{secret:'foreign'}}]) assert.throws(()=>setupKeys(value),error=>error.uncertain);
+});
+
+// Oracle tests for the refactor, deliberately retaining the old predicates.
+// This finite corpus covers every UUID position, valid generated identifiers,
+// malformed strings and JS type coercion boundaries without node_modules.
+function uuidInputs() {
+  const format = hex => `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+  const seed = 'abcdef01-2345-6789-abcd-ef0123456789';
+  const strings = new Set(['', '00000000-0000-0000-0000-000000000000', seed, seed.toUpperCase(),
+    `{${seed}}`, `urn:uuid:${seed}`, seed.replaceAll('-', ''), 'é'.repeat(36), '０'.repeat(36)]);
+  const characters = ['0', 'f', 'A', 'F', 'g', 'G', '-', '_', ' ', '\t', '\n', '\r', '\0', '\u200b', '\ufeff', '\ud800', 'é', '０'];
+  for (let index = 0; index < seed.length; index++) {
+    for (const char of characters) strings.add(seed.slice(0,index) + char + seed.slice(index+1));
+    strings.add(seed.slice(0,index) + seed.slice(index+1));
+  }
+  for (const char of characters) { strings.add(char + seed); strings.add(seed + char); }
+  for (let index = 0; index < 512; index++) {
+    strings.add(format(index.toString(16).padStart(32, '0')));
+    strings.add(format(index.toString(16).padEnd(32, 'f')));
+  }
+  return [...strings, null, undefined, false, true, 0, 1, NaN, Infinity, 1n, Symbol('uuid'),
+    [], [seed], {}, new String(seed), {toString: () => seed}];
+}
+
+test('shared UUID checks preserve setup, link parsing and receipt acceptance across varied inputs', async t => {
+  const oldSetup = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+  const oldLink = value => oldSetup(value) && value.replaceAll('-', '') !== '0'.repeat(32);
+  const accepts = fn => { try { fn(); return true; } catch { return false; } };
+  const vectors = JSON.parse(await readFile(new URL('../crates/protocol/testdata/enrollment_links.json', import.meta.url)));
+  const uri = vectors.cases[0].uri.replaceAll('{invitation}', 'ccp_join_' + vectors.invitation_suffix);
+  const link = parseEnrollmentLink(uri);
+  const session = {instance_id: link.instance_id, csrf_token: 'proof', identity: {key_id: 'key', principal_id: 'owner',
+    scope: {kind: 'workspace', workspace_id: link.workspace_id, role: 'owner'}}};
+  const attempt = new LinkAttempt(session, {id: link.workspace_id, archived: false}, 'read', {});
+  const receipt = {enrollment_link: uri, workspace_id: link.workspace_id, workspace_name: link.workspace_name,
+    expires_at: Math.floor(Date.now()/1000)+1800, max_uses: 1};
+  const keys = {instance_id: instance, workspace_id: instance, principal_id: instance,
+    instance_admin_key: {secret: 'ccp_admin_'+'a'.repeat(64)}, workspace_owner_key: {secret: 'ccp_admin_'+'b'.repeat(64)}};
+  const original = globalThis.fetch;
+  const inputs = uuidInputs(); let setupAccepted = 0, linkAccepted = 0;
+  try {
+    for (const value of inputs) {
+      const label = typeof value === 'string' ? JSON.stringify(value) : typeof value;
+      assert.equal(isStrictUuid(value), oldLink(value), `strict predicate: ${label}`);
+      for (const field of ['instance_id', 'workspace_id', 'principal_id']) {
+        assert.equal(accepts(() => setupKeys({...keys, [field]: value})), oldSetup(value), `setup ${field}: ${label}`);
+      }
+      globalThis.fetch = async () => ({ok: true, status: 200, json: async () => ({api_version: 1, data: {verified: true, instance_id: value}})});
+      const verified = await setupRequest('verify', {}).then(() => true, () => false);
+      assert.equal(verified, oldSetup(value), `setup verify: ${label}`);
+      assert.equal(accepts(() => attempt.receipt({...receipt, invitation_id: value})), oldLink(value), `issuance: ${label}`);
+      if (typeof value === 'string') for (const field of ['i', 'w']) {
+        const url = new URL(uri), params = new URLSearchParams(url.hash.slice(1));
+        params.set(field, value); url.hash = params.toString();
+        assert.equal(accepts(() => parseEnrollmentLink(url.href)), oldLink(value), `link ${field}: ${label}`);
+      }
+      setupAccepted += Number(oldSetup(value)); linkAccepted += Number(oldLink(value));
+    }
+  } finally { globalThis.fetch = original; }
+  assert.ok(inputs.length > 1600); assert.ok(linkAccepted > 1000);
+  assert.equal(setupAccepted, linkAccepted + 1, 'only setup retains its nil UUID acceptance');
+  t.diagnostic(`${inputs.length} inputs: ${setupAccepted} accepted by setup, ${linkAccepted} accepted by links and issuance`);
 });
