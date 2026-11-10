@@ -1441,6 +1441,8 @@ function browserSessionServer() {
       const current = sessions.get(token);
       if (!current) throw fail(401, 'Expired browser session');
       if (body !== undefined && csrf !== current.csrf_token) throw fail(403, 'Invalid CSRF');
+      if (path === '/api/v1/admin/workspaces/inspect') return {workspace: {id: JSON.parse(body).workspace_id, name: 'Example', archived: false}, owner_id: 'owner'};
+      if (path.startsWith('/api/v1/content/') && path.endsWith('/create')) return {id: 'created-node', name: JSON.parse(body).name};
       if (path.startsWith('/api/v1/admin/workspaces?')) return {workspaces: [], next_cursor: null};
       if (path === '/denied') throw fail(403, 'Permission revoked');
       if (path.endsWith('/create')) return created;
@@ -1924,12 +1926,12 @@ for (const status of [200, 401, 403]) test(`round 6: an old Guidance-style callb
   assert.equal(appRuntime.toasts.at(-1).text, 'Fresh notification');
 });
 
-test('round 6: navigation retires global side effects even within the same session', async t => {
+test('round 6: unmount retires global side effects even within the same session', async t => {
   const {app} = realAppHarness(t);
   const visit = app.forView?.() ?? app;
   const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
   const pending = {body: 'keep'}; app.pending = pending;
-  app.generation++;
+  app.generation++; visit.dispose?.();
   notice('Old view', 'destructive'); visit.pending = null; visit.clean();
   assert.deepEqual(appRuntime.toasts, []); assert.equal(app.pending, pending);
 });
@@ -1991,11 +1993,11 @@ for (const method of ['login', 'hashKeySwitch']) test(`round 6: a retired ${meth
   fresh.resolve(); await current; assert.equal(app.busy, false);
 });
 
-test('round 6: a view cannot renew its own scope by navigating before a late callback', async t => {
+test('round 6: an unmounted view cannot affect its navigation destination', async t => {
   const {app} = realAppHarness(t);
   const visit = app.forView?.() ?? app;
   const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
-  await visit.navigate('workspaces');
+  await visit.navigate('workspaces'); visit.dispose?.();
   notice('Old view after its own navigation', 'destructive');
   assert.deepEqual(appRuntime.toasts, []);
 });
@@ -2009,7 +2011,7 @@ for (const fail of [false, true]) test(`round 6: a late clipboard completion can
   t.after(() => { if (previous) Object.defineProperty(globalThis, 'navigator', previous); else delete globalThis.navigator; });
   const visit = app.forView?.() ?? app;
   notifications.bindNoticeScope?.(() => visit.notice ?? notifications.notice);
-  const copying = notifications.copyText('private test value'); app.generation++;
+  const copying = notifications.copyText('private test value'); app.sessionEpoch++;
   if (fail) clipboard.reject(new Error('denied')); else clipboard.resolve();
   assert.equal(await copying, !fail);
   assert.equal(notifications.toasts.length, 0); assert.equal(appRuntime.toasts.length, 0);
@@ -2022,6 +2024,224 @@ test('round 6: the admitted login action keeps its own slot until initial loadin
   assert.equal(app.activating, true); assert.equal(app.busy, true); assert.equal(app.busyKey, 'login');
   loading.resolve(); await signingIn;
   assert.equal(app.activating, false); assert.equal(app.busy, false); assert.equal(app.busyKey, '');
+});
+
+
+// The read generation may change while a view is still mounted. Session and
+// component lifetime, rather than read invalidation, own its actions/effects.
+import {viewScope} from '../crates/server/web/src/lib/viewScope.js';
+
+for (const failure of [503, 'deadline']) for (const view of ['workspaces', 'guidance']) test(`round 7: failed ${failure} Refresh leaves ${view} actions and new drafts live`, async t => {
+  const {app, server} = realAppHarness(t);
+  app.view = view;
+  if (view === 'guidance') app.workspace = {id: 'workspace', name: 'Example', archived: false};
+  const visit = app.forView();
+  const submitted = view === 'workspaces' ? visit.formDraft(WORKSPACE_DRAFT_KEY) : null;
+  const mount = app.refreshTick, epoch = app.sessionEpoch;
+  const path = view === 'workspaces' ? '/api/v1/admin/workspaces?limit=32' : '/api/v1/admin/workspaces/inspect';
+  const held = server.hold(path, failure === 503 ? {status: 503} : {});
+  const nativeTimeout = AbortSignal.timeout;
+  if (failure === 'deadline') AbortSignal.timeout = () => nativeTimeout(5);
+  t.after(() => { AbortSignal.timeout = nativeTimeout; held.release(); });
+  // The fallback is the original header Refresh body, before extraction.
+  const refresh = () => app.refreshView ? app.refreshView() : (async () => {
+    if (!app.mayLeave()) return;
+    app.generation++;
+    if (app.view === 'workspaces' || !app.workspace) await app.loadWorkspaces(app.workspacesAfter);
+    else await app.inspectWorkspace();
+    app.refreshTick++;
+  })();
+  const refreshing = app.run(refresh, 'refresh'); await held.started;
+  if (failure === 503) held.release();
+  const settled = await Promise.race([refreshing.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]);
+  if (!settled) { held.release(); await refreshing; }
+  assert.equal(settled, true); AbortSignal.timeout = nativeTimeout;
+  assert.equal(app.locked, false); assert.equal(app.refreshTick, mount); assert.equal(app.sessionEpoch, epoch);
+  if (view === 'workspaces') {
+    submitted.name = 'After refresh'; submitted.owner = 'Owner';
+    await visit.run(() => visit.createWorkspace(submitted.name, submitted.owner, WORKSPACE_DRAFT_KEY, submitted), WORKSPACE_DRAFT_KEY);
+    assert.equal(server.requests.filter(r => r.path.endsWith('/workspaces/create')).length, 1);
+    assert.equal(app.createdWorkspace, server.created);
+  } else {
+    visit.setDraft('Guidance typed after refresh');
+    assert.equal(app.dirty, true); assert.equal(app.draft, 'Guidance typed after refresh');
+    await visit.navigate('workspaces');
+    assert.equal(app.view, 'guidance'); assert.match(app.recoveryText(), /Guidance typed after refresh/);
+  }
+});
+
+for (const view of ['context', 'guidance']) test(`round 7: selecting the current workspace leaves ${view} actions and new drafts live`, async t => {
+  const {app, server} = realAppHarness(t);
+  app.workspace = {id: 'workspace', name: 'Example', archived: false}; app.view = view;
+  const visit = app.forView(); const epoch = app.sessionEpoch, mount = app.refreshTick;
+  const key = shelfDraftKey('workspace'), submitted = view === 'context' ? visit.formDraft(key) : null;
+  await app.openWorkspace({...app.workspace}, view);
+  assert.equal(app.sessionEpoch, epoch); assert.equal(app.refreshTick, mount);
+  if (view === 'guidance') {
+    visit.setDraft('Guidance after reselect');
+    assert.equal(app.dirty, true); assert.equal(app.draft, 'Guidance after reselect');
+    await visit.navigate('workspaces'); assert.equal(app.view, 'guidance');
+    assert.match(app.recoveryText(), /Guidance after reselect/);
+  } else {
+    submitted.name = 'Shelf after reselect';
+    let result;
+    await visit.run(async () => {
+      result = await submitDraftCreate({drafts: visit.drafts, key, submitted,
+        request: confirmed => visit.request('/api/v1/content/shelves/create', {name: submitted.name}, confirmed),
+        confirmedText: data => creationConfirmedText('shelf', data)});
+    }, 'create-shelf');
+    assert.equal(server.requests.filter(r => r.path.endsWith('/shelves/create')).length, 1);
+    assert.equal(result.ok, true); assert.equal(key in app.drafts, false);
+  }
+});
+
+test('round 7: successful Refresh preserves the mounted view and its local state', async t => {
+  const {app} = realAppHarness(t); app.view = 'workspaces';
+  const visit = app.forView(), mount = app.refreshTick;
+  const local = {text: 'local form state'};
+  const focus = () => focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view, app.sessionEpoch);
+  const focusBefore = focus();
+  await app.run(() => app.refreshView ? app.refreshView() : (async () => { app.generation++; await app.loadWorkspaces(); app.refreshTick++; })(), 'refresh');
+  assert.equal(app.refreshTick, mount, 'Refresh must not remount local state or focus');
+  visit.setDraft(local.text); assert.equal(app.draft, local.text);
+  assert.equal(focus(), focusBefore, 'Refresh must not request a root focus handoff');
+});
+
+test('round 7: an unmounted view retires without changing its session or read generation', async t => {
+  const {app} = realAppHarness(t); const visit = app.forView();
+  const session = app.session, generation = app.generation;
+  visit.dispose?.(); visit.notice('Old mounted view', 'destructive'); visit.setDraft('old edit');
+  assert.equal(app.session, session); assert.equal(app.generation, generation);
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.dirty, false);
+});
+
+test('round 7: reset retires a scope even if its null session is reused', async t => {
+  const {app} = realAppHarness(t); app.reset(); const visit = app.forView();
+  app.reset(); visit.notice('Old login visit', 'destructive'); visit.setDraft('stale');
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.dirty, false);
+});
+
+test('round 7: a retired action catch cannot post into the replacement session', async t => {
+  const {app} = realAppHarness(t); const old = defer();
+  const oldAction = app.run(() => old.promise, 'old-read');
+  app.reset(); await app.run(() => app.login('accepted-test-key'), 'login');
+  const fresh = defer(), current = app.run(() => fresh.promise, 'current');
+  const before = [...appRuntime.toasts];
+  old.reject(new Error('Retired request failed')); await oldAction;
+  assert.deepEqual(appRuntime.toasts, before); assert.equal(app.busyKey, 'current'); assert.equal(app.busy, true);
+  fresh.resolve(); await current;
+});
+
+for (const operation of ['confirmAction', 'wire']) test(`round 7: a retired ${operation} completion is not delivered`, async () => {
+  const state = {session: {}, generation: 0, sessionEpoch: 0}; const pending = defer();
+  const visit = viewScope(state, {[operation]: () => pending.promise});
+  const started = visit[operation]('/fixture');
+  const result = operation === 'wire' ? assert.rejects(started, /superseded/) : started;
+  state.session = {};
+  pending.resolve(operation === 'wire' ? {receipt: 'old data'} : true);
+  if (operation === 'confirmAction') assert.equal(await result, false); else await result;
+});
+
+for (const failure of [false, true]) test(`round 7: the scoped clipboard wrapper drops a retired completion, failure=${failure}`, async () => {
+  const state = {session: {}, generation: 0, sessionEpoch: 0}; const pending = defer(), notices = [];
+  const visit = viewScope(state, {
+    notice: (...args) => notices.push(args),
+    copyText: async (_value, notify) => {
+      try { await pending.promise; notify('Copied', 'success'); return true; }
+      catch { notify('Clipboard failed', 'warning'); return false; }
+    },
+  });
+  const copying = visit.copyText('private fixture'); state.session = {};
+  if (failure) pending.reject(new Error('denied')); else pending.resolve();
+  assert.equal(await copying, !failure); assert.deepEqual(notices, []);
+});
+
+test('round 7: boot retains its slot while loading and refuses a concurrent focus verify', async t => {
+  const {app, server} = realAppHarness(t); const listeners = {};
+  const originals = Object.fromEntries(['window', 'location', 'history'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  for (const [key, value] of Object.entries({window: {addEventListener: (name, fn) => { listeners[name] = fn; }}, location: {hash: ''}, history: {replaceState: () => {}}})) {
+    Object.defineProperty(globalThis, key, {configurable: true, value});
+  }
+  t.after(() => { for (const [key, descriptor] of Object.entries(originals)) { if (descriptor) Object.defineProperty(globalThis, key, descriptor); else delete globalThis[key]; } });
+  const held = server.hold('/api/v1/admin/workspaces?limit=32');
+  const booting = app.boot(); await held.started; t.after(async () => { held.release(); await booting; });
+  const checks = server.requests.filter(r => r.path === '/api/v1/admin/session').length;
+  listeners.focus(); await Promise.resolve();
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'boot');
+  assert.equal(server.requests.filter(r => r.path === '/api/v1/admin/session').length, checks);
+  held.release(); await booting; assert.equal(app.busy, false);
+});
+
+test('round 7: Already signed in is not announced after a later replacement', async t => {
+  const {app, server} = realAppHarness(t); let current = app.session, armed = true;
+  const replacement = {...server.current(), identity: {...server.current().identity, principal_name: 'Replacement'}};
+  Object.defineProperty(app, 'session', {configurable: true, get: () => current, set: value => {
+    current = value;
+    if (armed && value) { armed = false; queueMicrotask(() => { app.reset(); app.session = replacement; }); }
+  }});
+  await app.run(() => app.hashKeySwitch('accepted-test-key'), 'login');
+  assert.equal(app.session, replacement);
+  assert.equal(appRuntime.toasts.some(item => item.text === 'Already signed in with this key.'), false);
+});
+
+test('round 7: a component lifetime retires every operation scope without changing session state', async t => {
+  const {app} = realAppHarness(t); let mounted = true;
+  const first = app.forView(() => mounted), second = app.forView(() => mounted);
+  first.notice('Current', 'success'); assert.equal(appRuntime.toasts.length, 1);
+  mounted = false; first.notice('Old first', 'destructive'); second.notice('Old second', 'destructive'); second.setDraft('old');
+  assert.equal(appRuntime.toasts.length, 1); assert.equal(app.dirty, false);
+});
+
+test('round 7: an unmounted action catch cannot notify another view in the same session', async t => {
+  const {app} = realAppHarness(t); const visit = app.forView(), work = defer();
+  const running = visit.run(() => work.promise, 'old-child');
+  visit.dispose?.(); work.reject(new Error('Old child failed')); await running;
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.busy, false);
+});
+
+test('round 7: same-identity adoption releases its old action before the next action starts', async t => {
+  const {app} = realAppHarness(t); const old = defer(), fresh = defer();
+  const running = app.run(() => old.promise, 'old');
+  t.after(async () => { old.resolve(); await running; });
+  adoptSession(app, {...app.session});
+  assert.equal(app.busy, false); assert.equal(app.busyKey, ''); assert.equal(app.actionOwner, null);
+  const current = app.run(() => fresh.promise, 'current');
+  t.after(async () => { fresh.resolve(); await current; });
+  old.resolve(); await running; assert.equal(app.busy, true); assert.equal(app.busyKey, 'current');
+  fresh.resolve(); await current; assert.equal(app.busy, false);
+});
+
+test('round 7: current confirmation, wire and clipboard effects still complete normally', async () => {
+  const state = {session: {}, sessionEpoch: 0, generation: 0}, notices = [];
+  const current = viewScope(state, {
+    notice: text => notices.push(text), confirmAction: async () => true,
+    wire: async () => ({fresh: true}),
+    copyText: async (_value, notify) => { notify('Copied current'); return true; },
+  });
+  state.generation++;
+  assert.equal(await current.confirmAction({}), true);
+  assert.deepEqual(await current.wire('/fixture'), {fresh: true});
+  assert.equal(await current.copyText('fixture'), true); assert.deepEqual(notices, ['Copied current']);
+});
+
+for (const transition of ['activate', 'adopt']) test(`round 7: ${transition} advances session lifetime even with the same session object`, async t => {
+  const {app} = realAppHarness(t); const old = app.forView(), session = app.session, epoch = app.sessionEpoch;
+  app.loadWorkspaces = async () => {};
+  if (transition === 'activate') await app.activate(session); else adoptSession(app, session);
+  assert.equal(app.session, session); assert.equal(app.sessionEpoch, epoch + 1);
+  old.setDraft('Retired'); assert.equal(app.dirty, false);
+  app.forView().setDraft('Current'); assert.equal(app.draft, 'Current');
+});
+
+test('round 7: persistent draft cleanup outlives its form but cannot reach a replacement session', async t => {
+  const {app} = realAppHarness(t); const model = app.forSession?.() ?? app.forView(), view = app.forView();
+  model.formDraft('access-model').name = 'Submitted';
+  view.dispose?.(); model.dropFormDraft('access-model');
+  assert.equal('access-model' in app.drafts, false, 'acknowledged cleanup must survive outcome UI replacement');
+  app.reset(); const replacement = app.forSession?.() ?? app.forView();
+  const current = replacement.formDraft('access-model'); current.name = 'New session draft';
+  model.dropFormDraft('access-model');
+  assert.equal(app.drafts['access-model'], current); assert.equal(current.name, 'New session draft');
 });
 
 import './workspace_panel_wiring.mjs';

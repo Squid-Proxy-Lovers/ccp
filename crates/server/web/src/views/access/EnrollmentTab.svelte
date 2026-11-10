@@ -9,10 +9,11 @@
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {changeEnrollment, type Enrollment, type Report} from './actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {confirmAction} = app;
 
   let {enrollment, error, onread, onconfigure, onoutcome}: {

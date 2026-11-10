@@ -14,6 +14,7 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {invitationPage} from '../../lib/model.js';
   import InviteForm from './InviteForm.svelte';
@@ -21,7 +22,7 @@
   import ReadmitCard from './ReadmitCard.svelte';
   import {changeAdmission, FormDraft, roleLabel, type Enrollment, type Grant, type Invitation, type Report} from './actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {confirmAction} = app;
 
   let {enrollment, grants, configuring = $bindable(false), onoutcome}: {

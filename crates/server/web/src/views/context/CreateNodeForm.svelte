@@ -8,11 +8,12 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {hasDraftContent} from '../../lib/drafts.js';
   import {discardDraft} from '../../lib/draftDiscard.js';
   import {formFrozen} from '../../lib/identitySwitch.js';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {kind, draftKey, oncreate}: {

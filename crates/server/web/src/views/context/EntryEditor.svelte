@@ -12,6 +12,7 @@
   import Textarea from '../../lib/ui/Textarea.svelte';
   import Separator from '../../lib/ui/Separator.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {exactRevision} from '../../lib/model.js';
   import PendingWrite from './PendingWrite.svelte';
   import EntryMeta from './EntryMeta.svelte';
@@ -20,7 +21,7 @@
   import {focusId, type EntryReceipt, type HeldIntent, type Snapshot} from './content';
   import {actionOf, sendEntryWrite, startEntryWrite, type EntryChange} from './entryWrite';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {snapshot, bookId, onwritten, onreload}: {

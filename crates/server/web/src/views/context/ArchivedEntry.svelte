@@ -5,6 +5,7 @@
   import Badge from '../../lib/ui/Badge.svelte';
   import Button from '../../lib/ui/Button.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {canManageInvitations, exactRevision} from '../../lib/model.js';
   import EntryMeta from './EntryMeta.svelte';
   import PendingWrite from './PendingWrite.svelte';
@@ -13,7 +14,7 @@
   import {actionOf, sendEntryWrite, startEntryWrite, type EntryChange} from './entryWrite';
   import type {AdminIntent, ArchiveOutcome} from './archiveWrite';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {entry, onwritten, onarchive}: {

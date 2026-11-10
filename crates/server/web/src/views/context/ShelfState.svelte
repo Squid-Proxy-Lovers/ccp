@@ -8,11 +8,12 @@
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {ContentAdminIntent, canManageInvitations, shelfState} from '../../lib/model.js';
   import {contentPath, message, type ShelfStateValue} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {confirmAction} = app;
 
   let {shelfId, onarchive, onbrowse}: {

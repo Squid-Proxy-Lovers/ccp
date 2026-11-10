@@ -32,7 +32,7 @@
   // that entered the activating state.
   let previous = '';
   $effect(() => {
-    const key = focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view, app.refreshTick);
+    const key = focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view, app.sessionEpoch);
     if (key === previous || !app.booted) return;
     const first = previous === '';
     previous = key;
@@ -50,14 +50,9 @@
   });
 
   function refresh() {
-    void app.run(async () => {
-      if (!app.mayLeave()) return;
-      app.generation += 1;
-      if (app.view === 'workspaces' || !app.workspace) await app.loadWorkspaces(app.workspacesAfter);
-      else await app.inspectWorkspace();
-      app.refreshTick += 1;
-    }, 'refresh');
+    void app.run(() => app.refreshView(), 'refresh');
   }
+
 </script>
 
 {#if app.locked}

@@ -14,12 +14,13 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {canManageInvitations, clientRecoveryScope} from '../../lib/model.js';
   import ClientAccessForm from './ClientAccessForm.svelte';
   import {changeClientAccess, readRecovery, readmissionBlocked, scopeLabel, type Grant, type RecoveryItem, type RecoveryScope, type Report} from './actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {client, onback, onoutcome}: {client: Grant; onback: () => Promise<void>; onoutcome: Report} = $props();

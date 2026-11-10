@@ -9,10 +9,11 @@
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {invitationDeadline} from '../../lib/model.js';
   import {changeAdmission, FormDraft, roles, type Report} from './actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {unused, onoutcome}: {unused: boolean; onoutcome: Report} = $props();
@@ -21,11 +22,12 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
     void app.run(async () => {
+      const submitted = form;
       if (app.pending) throw new Error('Resolve the original invitation action first.');
       const workspace = app.workspace!;
       await changeAdmission(app, onoutcome, workspace, 'individual',
-        {workspace_id: workspace.id, role: form.get('role'), expires_at: invitationDeadline(form.get('hours'))});
-      form.drop();
+        {workspace_id: workspace.id, role: submitted.get('role'), expires_at: invitationDeadline(submitted.get('hours'))});
+      submitted.drop();
     }, 'invite-submit');
   }
 

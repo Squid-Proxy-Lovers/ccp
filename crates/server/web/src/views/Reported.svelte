@@ -19,11 +19,12 @@
   import Textarea from '../lib/ui/Textarea.svelte';
   import {table} from '../lib/ui/table';
   import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import {stamp} from '../lib/notify.svelte';
   import {reportedWorkPage, reportedWorkStatus, StatusClearIntent, wire, canManageInvitations} from '../lib/model.js';
   import type {Session, Workspace} from '../lib/types';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, copyText, confirmAction} = app;
 
   interface Report {

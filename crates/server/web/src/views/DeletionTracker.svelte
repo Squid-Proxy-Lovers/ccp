@@ -11,13 +11,15 @@
   import Field from '../lib/ui/Field.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
   import {app} from '../lib/app.svelte';
+  import {viewLifetime} from '../lib/viewLifecycle.js';
+  const scoped = viewLifetime(app);
   import {copyText, stamp} from '../lib/notify.svelte';
   import {deletionTracking} from '../lib/model.js';
   import {inspectDeletion, tracked as current} from './settings/deletion';
 
   let {class: className = ''}: {class?: string} = $props();
 
-  const tracked = $derived(current(app.forView()));
+  const tracked = $derived(current(scoped()));
   const receipt = $derived(tracked?.receipt ?? null);
   const details = $derived(tracked ? deletionTracking(tracked.reference, receipt) as string : '');
   const canInspect = $derived(Boolean(tracked && app.session && !app.locked && app.session.identity.scope.kind === 'instance'
@@ -31,13 +33,14 @@
   $effect(() => {
     if (!heading) return;
     void title;
-    void tick().then(() => {
+    const visit = scoped();
+    void tick().then(() => visit.effect(() => {
       if (!document.activeElement || document.activeElement === document.body) heading?.focus();
-    });
+    }));
   });
 
   async function forget() {
-    const visit = app.forView();
+    const visit = scoped();
     const {confirmAction, notice} = visit;
     const value = tracked;
     if (!value) return;
@@ -88,7 +91,7 @@
         <Button variant="outline" onclick={() => copyText(details)}><Copy /> Copy deletion tracking</Button>
         {#if canInspect}
           <Button variant="outline" busy={app.working('deletion-status')}
-            onclick={() => app.run(() => tracked && inspectDeletion(app.forView(), tracked), 'deletion-status')}><RefreshCw /> Check deletion completion</Button>
+            onclick={() => app.run(() => tracked && inspectDeletion(scoped(), tracked), 'deletion-status')}><RefreshCw /> Check deletion completion</Button>
         {:else if app.session && !app.locked}
           <Button variant="outline" onclick={changeKey}><KeyRound /> Change key to inspect deletion</Button>
         {/if}

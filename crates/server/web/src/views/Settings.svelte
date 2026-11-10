@@ -5,6 +5,7 @@
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
   import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import {canChangeLifecycle} from '../lib/model.js';
   import DangerZone from './settings/DangerZone.svelte';
   import Details from './settings/Details.svelte';
@@ -14,7 +15,7 @@
   import Transfer from './settings/Transfer.svelte';
   import {SettingsState} from './settings/state.svelte';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
 
   const ctl = new SettingsState();
   void ctl.init();

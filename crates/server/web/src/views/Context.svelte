@@ -12,6 +12,7 @@
   import Button from '../lib/ui/Button.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import {shelfBadgeLabel} from '../lib/drafts.js';
   import {submitDraftCreate, reportCreateFailure} from '../lib/draftCreate.js';
   import {shelfDraftKey, bookDraftKey} from '../lib/draftKeys.js';
@@ -29,7 +30,7 @@
   import type {EntryChange} from './context/entryWrite';
   import type {AdminIntent, ArchiveOutcome} from './context/archiveWrite';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice} = app;
 
   type Stage = 'shelves' | 'books' | 'entries' | 'detail';

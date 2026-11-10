@@ -1,20 +1,24 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // One ownership boundary for view callbacks, notifications and global mutations.
-// A retired view may finish its local promises, but cannot affect a new visit.
+// Read generations do not own views. Only session replacement or component
+// destruction retires their effects; local promises still settle normally.
 /**
- * @template {{session: unknown, generation: number}} T
+ * @template {{session: unknown, sessionEpoch?: number}} T
  * @template {Record<string, Function>} E
  * @param {T} state
  * @param {E} effects
- * @returns {T & E}
+ * @param {() => boolean} [isMounted]
+ * @returns {T & E & {dispose: () => void}}
  */
-export function viewScope(state, effects) {
+export function viewScope(state, effects, isMounted = () => true) {
   const session = state.session;
-  const generation = state.generation;
-  const current = () => state.session === session && state.generation === generation;
+  const epoch = state.sessionEpoch ?? 0;
+  let active = true;
+  const current = () => active && isMounted() && state.session === session && (state.sessionEpoch ?? 0) === epoch;
   const retired = () => new Error('This view has been superseded.');
   return new Proxy(state, {
     get(target, key) {
+      if (key === 'dispose') return () => { active = false; };
       if (key in effects) {
         return (...args) => {
           if (!current()) {
@@ -38,6 +42,13 @@ export function viewScope(state, effects) {
           if (key === 'request' || key === 'verify') return Promise.reject(retired());
           if (key === 'clearWorkspace') throw retired();
           return undefined;
+        }
+        if (key === 'run') {
+          const [action, ...rest] = args;
+          return value.call(target, async () => {
+            try { return await action(); }
+            catch (error) { if (current()) throw error; }
+          }, ...rest);
         }
         const result = value.apply(target, args);
         return result;

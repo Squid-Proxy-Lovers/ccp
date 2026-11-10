@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
+import {mountedView} from '../../lib/viewLifecycle.js';
 // Per-visit state for workspace settings. Writes follow the original panel:
 // lifecycle and ownership transfer have no operation ID and are never resent;
 // retention changes carry an operation ID and the loaded base revision. After
@@ -33,7 +34,7 @@ export function duration(seconds: number): string {
 export const describePolicy = (seconds: number | null): string => seconds === null ? 'Manual retention' : duration(seconds);
 
 export class SettingsState {
-  #app = panelApp.forView();
+  #app = mountedView(panelApp);
   policy = $state.raw<Policy | null>(null);
   policyError = $state('');
   loading = $state(true);

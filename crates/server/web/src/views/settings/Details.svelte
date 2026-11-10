@@ -7,11 +7,12 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import WorkspaceAvatar from '../../components/WorkspaceAvatar.svelte';
   import type {Session, Workspace} from '../../lib/types';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {copyText} = app;
 
   let {workspace, session}: {workspace: Workspace; session: Session} = $props();

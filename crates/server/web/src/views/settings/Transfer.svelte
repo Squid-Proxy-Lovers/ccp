@@ -15,11 +15,12 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {canTransferOwnership} from '../../lib/model.js';
   import type {Session, Workspace} from '../../lib/types';
   import type {SettingsState} from './state.svelte';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
 
   let {ctl, workspace, session}: {ctl: SettingsState; workspace: Workspace; session: Session} = $props();
 

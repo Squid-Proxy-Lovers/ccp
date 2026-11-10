@@ -17,13 +17,14 @@
   import {table} from '../lib/ui/table';
   import DeletionLookup from './settings/DeletionLookup.svelte';
   import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import {hasDraftContent} from '../lib/drafts.js';
   import {discardDraft} from '../lib/draftDiscard.js';
   import {formFrozen} from '../lib/identitySwitch.js';
   import {WORKSPACE_DRAFT_KEY} from '../lib/draftKeys.js';
   import type {Workspace} from '../lib/types';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   const FORM = WORKSPACE_DRAFT_KEY;

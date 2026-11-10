@@ -61,6 +61,7 @@ export function adoptSession(state, session) {
   state.activationOwner = null;
   state.activating = false;
   state.generation += 1;
+  state.sessionEpoch = (state.sessionEpoch ?? 0) + 1;
   state.session = session;
   state.locked = false;
   state.lockMessage = '';

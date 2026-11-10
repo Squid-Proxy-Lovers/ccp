@@ -9,7 +9,9 @@
   import Logo from './Logo.svelte';
   import DeletionTracker from '../views/DeletionTracker.svelte';
   import {app} from '../lib/app.svelte';
-  import {copyText} from '../lib/notify.svelte';
+  import {viewLifetime} from '../lib/viewLifecycle.js';
+  const scoped = viewLifetime(app);
+  const copyText = (value: string) => scoped().copyText(value);
   const recovery = $derived(app.recoveryText());
   // A create acknowledged right before the session check failed still
   // surfaces its one-time owner key here; "Sign in again" must not drop it

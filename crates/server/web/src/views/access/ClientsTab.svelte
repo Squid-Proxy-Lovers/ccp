@@ -14,11 +14,12 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {canManageInvitations} from '../../lib/model.js';
   import ClientAccess from './ClientAccess.svelte';
   import {roleLabel, type Grant, type GrantPage, type Report} from './actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {page, after, error, onpage, onoutcome}: {

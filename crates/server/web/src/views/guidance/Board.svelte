@@ -12,12 +12,13 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {GuidanceIntent, wire} from '../../lib/model.js';
   import type {Session} from '../../lib/types';
   import {MAX_BYTES, bytes, readGuidance, type Board, type Bundle} from './guidance';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, copyText, confirmAction} = app;
 
   const SAVE = '/api/v1/admin/guidance/save';

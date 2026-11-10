@@ -12,10 +12,11 @@
   import SkeletonCard from '../lib/ui/skeleton/SkeletonCard.svelte';
   import Board from './guidance/Board.svelte';
   import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import {canPublish} from '../lib/model.js';
   import {readGuidance, type Board as BoardData, type Bundle} from './guidance/guidance';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice} = app;
 
   let {global = false}: {global?: boolean} = $props();

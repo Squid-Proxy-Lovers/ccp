@@ -36,6 +36,8 @@ export class App {
   workspacesAfter = $state<string | null>(null);
   view = $state<View>('overview');
   generation = $state(0);
+  /** Session replacement/reset, separate from stale-read generations. */
+  sessionEpoch = $state(0);
   dirty = $state(false);
   draft = $state('');
   pending = $state.raw<PendingWork | null>(null);
@@ -50,7 +52,7 @@ export class App {
   activating = $state(false);
   /** Requests in flight, for the header progress bar. */
   inflight = $state(0);
-  /** Bumped by the header refresh to remount the current view. */
+  /** Bumped only when session adoption must remount the current view. */
   refreshTick = $state(0);
   /** Workspace deletion tracking survives sign-out until explicitly cleared. */
   deletion = $state.raw<{reference: PendingWork; [key: string]: unknown} | null>(null);
@@ -64,9 +66,12 @@ export class App {
 
   get waitingForWorkspaceCreate(): boolean { return lockedSignInBlocked(this); }
 
-  forView(): App & {notice: typeof notice; copyText: typeof copyText; confirmAction: typeof confirmAction; wire: typeof wire; effect: (callback: () => void) => void} {
-    return viewScope(this, {notice, copyText, confirmAction, wire, effect: (callback: () => void) => callback()});
+  forView(isMounted: () => boolean = () => true): App & {notice: typeof notice; copyText: typeof copyText; confirmAction: typeof confirmAction; wire: typeof wire; effect: (callback: () => void) => void; dispose: () => void} {
+    return viewScope(this, {notice, copyText, confirmAction, wire, effect: (callback: () => void) => callback()}, isMounted);
   }
+
+  /** Persistent models and operation facts outlive a component, not a session. */
+  forSession(): ViewApp { return this.forView(); }
 
   get instanceScope(): boolean { return this.session?.identity.scope.kind === 'instance'; }
   writable = (): boolean => Boolean(this.session && this.workspace && canWrite(this.session, this.workspace));
@@ -120,6 +125,7 @@ export class App {
     releaseAction(this);
     this.activationOwner = null;
     this.activating = false;
+    this.sessionEpoch += 1;
     clearToasts();
   }
 
@@ -165,6 +171,7 @@ export class App {
     // An unrelated previous action must never lend it a serialization slot.
     if (!['login', 'boot'].includes(this.busyKey)) releaseAction(this);
     this.generation += 1;
+    this.sessionEpoch += 1;
     this.session = session;
     this.locked = false;
     this.lockMessage = '';
@@ -244,13 +251,21 @@ export class App {
     this.inspection = info;
   }
 
-  /** A deliberate view transition returns a fresh scope; the old one retires. */
+  /** A fresh operation scope for the destination; unmount retires the old view. */
   clearWorkspace(): ViewApp {
     this.workspace = null;
     this.inspection = null;
     this.view = this.instanceScope ? 'workspaces' : 'overview';
     this.generation += 1;
-    return this.forView();
+    return this.forSession();
+  }
+
+  /** Refresh metadata without replacing mounted form state or focus. */
+  async refreshView(): Promise<void> {
+    if (!this.mayLeave()) return;
+    this.generation += 1;
+    if (this.view === 'workspaces' || !this.workspace) await this.loadWorkspaces(this.workspacesAfter);
+    else await this.inspectWorkspace();
   }
 
   /** Switch view inside the current workspace (or a global view). */
@@ -394,4 +409,4 @@ export class App {
 
 export type ViewApp = ReturnType<App['forView']>;
 export const app = new App();
-bindNoticeScope(() => app.forView().notice);
+bindNoticeScope(() => app.forSession().notice);

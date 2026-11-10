@@ -15,11 +15,12 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import KeyForm from './KeyForm.svelte';
   import {changeSecurity, type Admin, type Report, type WorkspaceKey} from './actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   let {onoutcome}: {onoutcome: Report} = $props();

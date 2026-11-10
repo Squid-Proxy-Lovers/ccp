@@ -6,11 +6,12 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {ContentAdminIntent} from '../../lib/model.js';
   import {focusId, type EntrySummary} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {confirmAction} = app;
 
   let {entry, onarchive}: {entry: EntrySummary; onarchive: (intent: AdminIntent, outcome: ArchiveOutcome) => void} = $props();

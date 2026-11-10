@@ -323,7 +323,9 @@ export async function changeSecurity(app: ViewApp, report: Report, action: Secur
  * untouched form from counting as unsaved work.
  */
 export class FormDraft {
-  #app = panelApp.forView();
+  // Drafts survive form replacement. A submitted model may finish its cleanup
+  // after the outcome replaces the form, but never in a replacement session.
+  #app = panelApp.forSession();
   constructor(readonly key: string, readonly defaults: Record<string, string> = {}) {}
   get(name: string): string { return this.#app.drafts[this.key]?.[name] ?? this.defaults[name] ?? ''; }
   set(name: string, value: unknown): void {

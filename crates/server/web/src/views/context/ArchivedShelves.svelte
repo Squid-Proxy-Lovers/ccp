@@ -7,11 +7,12 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {archivedShelfPage} from '../../lib/model.js';
   import {contentPath, type ArchivedShelf, type ContentPage} from './content';
   import {Pager} from './pager.svelte';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
 
   let {oninspect, onreturn}: {oninspect: (shelfId: string) => void; onreturn: () => void} = $props();
 

@@ -10,10 +10,11 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {RetentionIntent} from '../../lib/model.js';
   import type {SettingsState, Uncertain} from './state.svelte';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {copyText} = app;
 
   let {ctl, uncertain}: {ctl: SettingsState; uncertain: Uncertain} = $props();
@@ -33,10 +34,10 @@
   let heading: HTMLHeadingElement | null = $state(null);
   $effect(() => {
     void uncertain.stage;
-    void tick().then(() => {
+    void tick().then(() => app.effect(() => {
       const box = heading?.closest('[data-pending-request]');
       if (!box?.contains(document.activeElement)) heading?.focus();
-    });
+    }));
   });
 
   function retry() {

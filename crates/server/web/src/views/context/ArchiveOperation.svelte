@@ -9,11 +9,12 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {shelfState} from '../../lib/model.js';
   import {PAGE_SIZE, contentPath, focusId, message} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, copyText, confirmAction} = app;
 
   let {intent, outcome: initial, onconfirmed, onread, onreturn}: {

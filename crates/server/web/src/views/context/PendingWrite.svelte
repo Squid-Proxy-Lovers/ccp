@@ -7,9 +7,10 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import type {HeldIntent} from './content';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {copyText} = app;
 
   let {intent, error, onretry, onforget, id}: {

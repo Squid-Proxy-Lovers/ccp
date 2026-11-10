@@ -9,6 +9,7 @@
   import Badge from '../lib/ui/Badge.svelte';
   import Tabs from '../lib/ui/Tabs.svelte';
   import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import {canManageInvitations, canManageTeam} from '../lib/model.js';
   import ClientsTab from './access/ClientsTab.svelte';
   import InvitationsTab from './access/InvitationsTab.svelte';
@@ -17,7 +18,7 @@
   import Outcome from './access/Outcome.svelte';
   import {readEnrollment, type Enrollment, type GrantPage, type Outcome as Result} from './access/actions';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
 
   type Section = 'clients' | 'invitations' | 'enrollment' | 'team';

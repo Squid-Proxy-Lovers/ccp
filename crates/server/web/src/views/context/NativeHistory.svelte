@@ -10,11 +10,12 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {nativeHistoryPage, nativeScalarText} from '../../lib/native_values.js';
   import {focusId} from './content';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
   const {copyText} = app;
 
   interface Scalar { type: string; value?: unknown }
@@ -61,8 +62,7 @@
     if (await copyText(json)) return;
     fallback = json;
     await tick();
-    exportField?.focus();
-    exportField?.select();
+    app.effect(() => { exportField?.focus(); exportField?.select(); });
   }
 
   onMount(() => { void load(null); });

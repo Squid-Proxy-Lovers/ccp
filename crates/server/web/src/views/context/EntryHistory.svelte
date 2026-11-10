@@ -9,11 +9,12 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {exactRevision} from '../../lib/model.js';
   import {PAGE_SIZE, actorText, contentPath, focusId, message, type HistoryPage, type Snapshot} from './content';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
 
   let {entryId}: {entryId: string} = $props();
   let page = $state.raw<HistoryPage | null>(null);

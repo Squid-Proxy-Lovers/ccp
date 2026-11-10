@@ -6,9 +6,10 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {lookupDeletion} from './deletion';
 
-  const app = panelApp.forView();
+  const app = mountedView(panelApp);
 
   const fields = app.formDraft('deletion-lookup');
   fields.workspace ??= '';

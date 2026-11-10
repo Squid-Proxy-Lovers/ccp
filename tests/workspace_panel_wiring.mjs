@@ -324,7 +324,7 @@ test('[source] async view effects use the shared scope API instead of global not
       const source = await readFile(path, 'utf8');
       assert.doesNotMatch(source, /import \{[^}]*\bnotice\b[^}]*\} from '[^']*notify\.svelte'/, path.pathname);
       if (/const \{[^}]*\bnotice\b/.test(source) && item.name !== 'DeletionTracker.svelte') {
-        assert.match(source, /const app = panelApp\.forView\(\);/, path.pathname);
+        assert.match(source, /const app = mountedView\(panelApp\);/, path.pathname);
       }
     }
   }
@@ -333,5 +333,60 @@ test('[source] async view effects use the shared scope API instead of global not
 });
 
 test('[source] the focus effect observes same-identity remounts', () => {
-  assert.match(appSvelte, /focusHandoffKey\(app\.session, app\.locked, app\.activating, app\.workspace\?\.id, app\.view, app\.refreshTick\)/);
+  assert.match(appSvelte, /focusHandoffKey\(app\.session, app\.locked, app\.activating, app\.workspace\?\.id, app\.view, app\.sessionEpoch\)/);
+});
+
+
+test('[source] every per-view scope and private helper scope registers component destruction', async () => {
+  const lifecycle = await read('lib/viewLifecycle.js');
+  assert.match(lifecycle, /onDestroy\(\(\) => \{ mounted = false; \}\)/);
+  assert.match(lifecycle, /return \(\) => app\.forView\(\(\) => mounted\)/);
+  assert.match(lifecycle, /const scope = app\.forView\(\);\s*onDestroy\(scope\.dispose\);\s*return scope;/);
+  const root = new URL('../crates/server/web/src/views/', import.meta.url);
+  async function inspect(directory) {
+    for (const item of await readdir(directory, {withFileTypes: true})) {
+      const path = new URL(item.name + (item.isDirectory() ? '/' : ''), directory);
+      if (item.isDirectory()) { await inspect(path); continue; }
+      if (!/\.(svelte|ts)$/.test(item.name)) continue;
+      const source = await readFile(path, 'utf8');
+      assert.doesNotMatch(source, /panelApp\.forView\(/, path.pathname);
+      if (source.includes('mountedView(panelApp)')) assert.match(source, /import \{mountedView\} from '[^']*viewLifecycle\.js'/, path.pathname);
+    }
+  }
+  await inspect(root);
+  assert.match(lockedView, /viewLifetime\(app\)/);
+});
+
+test('[source] header Refresh delegates a metadata read without remounting or changing the focus epoch', () => {
+  const refresh = slice(appSvelte, 'function refresh()', '\n</script>');
+  assert.match(refresh, /app\.run\(\(\) => app\.refreshView\(\), 'refresh'\)/);
+  assert.doesNotMatch(refresh, /refreshTick|sessionEpoch/);
+  const action = slice(app, 'async refreshView(', '\n  /** Switch view');
+  assert.match(action, /this\.generation \+= 1/);
+  assert.doesNotMatch(action, /refreshTick|sessionEpoch/);
+});
+
+test('[source] Retention and list paging focus run through the mounted view guard', async () => {
+  const retention = await read('views/settings/Retention.svelte');
+  const change = slice(retention, 'async function change(', '\n  function enable');
+  assert.match(change, /await write\(\);\s*await tick\(\);\s*app\.effect\(\(\) => \{/);
+  assert.match(change, /document\.getElementById\('retention-card'\)\?\.focus\(\)/);
+  const pane = await read('views/context/ListPane.svelte');
+  const turn = slice(pane, 'async function turn(', '\n</script>');
+  assert.match(turn, /await app\.run\(action, key\);\s*await tick\(\);\s*app\.effect\(\(\) => \{/);
+});
+
+
+test('[source] persistent access draft models keep the submitted instance across awaits', async () => {
+  const actions = await read('views/access/actions.ts');
+  const model = slice(actions, 'export class FormDraft {');
+  assert.match(model, /#app = panelApp\.forSession\(\)/);
+  assert.doesNotMatch(model, /mountedView/);
+  for (const name of ['InviteForm', 'KeyForm', 'InitialGroupForm', 'ClientAccessForm']) {
+    const source = await read(`views/access/${name}.svelte`);
+    const submit = slice(source, 'void app.run(async () => {', '\n  async function discard()');
+    assert.match(submit, /const submitted = form;/, name);
+    assert.match(submit, /submitted\.drop\(\)/, name);
+    assert.doesNotMatch(submit, /\bform\.(get|drop)\(/, name);
+  }
 });
