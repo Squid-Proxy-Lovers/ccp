@@ -15,8 +15,8 @@ import {dropDraftIfCurrent, isCurrentDraft} from './drafts.js';
  * @param {Record<string,string>} deps.submitted
  * @param {(confirmed: (data: unknown) => string) => Promise<unknown>} deps.request
  *   performs the network write, forwarding `confirmed` through to it. Called
- *   only when the post-write session check fails (the write is already known
- *   to have happened), it drops the draft here before returning its text.
+ *   on acknowledgement, before the post-write session check, it drops the
+ *   draft here before returning its text.
  * @param {(data: unknown) => string} deps.confirmedText
  * @returns {Promise<{ok: true, result: unknown} | {ok: false, error: unknown, keptCurrent: boolean}>}
  *   `keptCurrent` is only meaningful on failure: whether the submitted draft

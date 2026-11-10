@@ -26,6 +26,7 @@ import {readFile} from 'node:fs/promises';
 const read = path => readFile(new URL(`../crates/server/web/src/${path}`, import.meta.url), 'utf8');
 
 const app = await read('lib/app.svelte.ts');
+const lockedSignIn = await read('lib/lockedSignIn.js');
 const appSvelte = await read('App.svelte');
 const pageHeader = await read('components/PageHeader.svelte');
 const lockedView = await read('components/LockedView.svelte');
@@ -105,7 +106,7 @@ test('[source] hashKeySwitch delegates to runIdentitySwitch, comparing by identi
   assert.match(hashKeySwitch, /runIdentitySwitch\(\{/);
   assert.match(hashKeySwitch, /sameIdentity:\s*session\s*=>\s*Boolean\(this\.session\)\s*&&\s*identityKey\(session as Session\)\s*===\s*identityKey\(this\.session as Session\)/);
   assert.doesNotMatch(hashKeySwitch, /sameIdentity:[^,]*\bsignature\(/, 'identity comparison must never use signature() (it includes the CSRF token, which always differs)');
-  assert.match(hashKeySwitch, /adoptSession:\s*session\s*=>\s*\{\s*this\.session\s*=\s*session as Session;\s*\}/);
+  assert.match(hashKeySwitch, /adoptSession:\s*session\s*=>\s*adoptSession\(this, session\)/);
   assert.match(hashKeySwitch, /clearForNewIdentity:\s*\(\)\s*=>\s*\{\s*this\.drafts\s*=\s*\{\};\s*this\.createdWorkspace\s*=\s*null;\s*\}/);
 });
 
@@ -130,20 +131,28 @@ test('[source] createWorkspace delegates to createWorkspaceFlow and surfaces the
 
 test('[source] createWorkspace\'s "Creating workspace…" notice is inside the request closure, not fired for a blocked create', () => {
   const createWorkspace = slice(app, 'async createWorkspace(', '\n\n  workspaceAcknowledged(');
-  const requestClosure = slice(createWorkspace, 'request: confirmed => {', '},\n      // Runs whether');
+  const requestClosure = slice(createWorkspace, 'request: confirmed => {', '},\n      // Runs on acknowledgement');
   assert.match(requestClosure, /notice\('Creating workspace\./);
   assert.doesNotMatch(createWorkspace, /notice\('Creating workspace\.[\s\S]*createWorkspaceFlow/, 'must not be fired before/outside the request path');
 });
 
 test('[source] discardAndSignIn treats an undismissed owner key as something to decide about', () => {
   const fn = slice(app, 'async discardAndSignIn(', '\n  }\n}');
-  assert.match(fn, /const ownerKey = this\.createdWorkspace !== null;/);
-  assert.match(fn, /if \(!recovery && !ownerKey && !this\.deletion\)/);
+  assert.match(fn, /await discardAndSignIn\(this, confirmAction, \(\) => this\.reset\(\)\)/);
+  assert.match(lockedSignIn, /const ownerKey = snapshot\.ownerWorkspaceId !== null;/);
+  assert.match(lockedSignIn, /if \(!recovery && !ownerKey && !state\.deletion\)/);
   // An owner key must also rule out the deletion-only dialog wording: that
   // dialog never mentions the owner key, so showing it while one is pending
   // would discard the key with no warning at all.
-  assert.match(fn, /deletionOnly = Boolean\(this\.deletion && \(!this\.pending \|\| this\.pending === this\.deletion\.reference\)\) && !recovery && !ownerKey;/);
-  assert.match(fn, /\$\{ownerKey \? ' This also discards the workspace owner key shown below\.' : ''\}/);
+  assert.match(lockedSignIn, /deletionOnly = Boolean\(state\.deletion && \(!state\.pending \|\| state\.pending === state\.deletion\.reference\)\) && !recovery && !ownerKey;/);
+  assert.match(lockedSignIn, /\$\{ownerKey \? ' This also discards the workspace owner key shown below\.' : ''\}/);
+});
+
+test('[source] request and verify delegate their complete ordering with the live state', () => {
+  const verify = slice(app, 'async verify(', '\n  /** Session/write ordering');
+  assert.match(verify, /return verifySession\(this, \{wire, lock: \(message: string\) => this\.lock\(message\)\}\)/);
+  const request = slice(app, 'async request<', '\n  /** Serialises');
+  assert.match(request, /return sessionRequest\(this, \{wire, lock: \(message: string\) => this\.lock\(message\)\}, path, body, confirmed\)/);
 });
 
 // ---- App.svelte: the focus-handoff reactive effect (DOM focus + a local `drawer` write) ----

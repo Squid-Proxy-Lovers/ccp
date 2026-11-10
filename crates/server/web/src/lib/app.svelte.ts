@@ -4,10 +4,12 @@
 // Invariants carried over from the original panel:
 // - every request first re-reads the browser session and locks the page if its
 //   signature (instance, key, principal, scope, CSRF token) changed;
-// - a navigation bumps `generation`, so responses for an older view are dropped;
+// - navigation and session adoption bump `generation`; stale responses are dropped;
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
-import {identityKey, takeFragment, wire, canWrite, signature} from './model.js';
+import {verifySession, sessionRequest, adoptSession, creationRecovery} from './sessionRequests.js';
+import {discardAndSignIn} from './lockedSignIn.js';
+import {identityKey, takeFragment, wire, canWrite} from './model.js';
 import {acquireDraft, dropDraft, peekDraft, hasAnyDraftContent, draftLabels, recoveryText as draftsRecoveryText} from './drafts.js';
 import {createWorkspaceFlow} from './workspaceCreate.js';
 import {runSignOut, runLogin, runIdentitySwitch, hashSwitchBlocked, unsavedWorkSummary} from './identitySwitch.js';
@@ -107,44 +109,12 @@ class App {
   }
 
   async verify(): Promise<Session> {
-    if (!this.session || this.locked) throw new Error('Sign in again before continuing.');
-    const generation = this.generation;
-    let current: Session;
-    try { current = await wire('/api/v1/admin/session'); }
-    catch (error) { if (generation === this.generation) this.lock((error as Error).message); throw error; }
-    if (generation !== this.generation) throw new Error('The view changed.');
-    if (signature(current) !== signature(this.session)) {
-      this.lock('Another tab changed this browser session. Existing edits will not be sent under that key.');
-      throw new Error('The browser session changed.');
-    }
-    return current;
+    return verifySession(this, {wire, lock: (message: string) => this.lock(message)});
   }
 
-  /**
-   * `confirmed` describes an acknowledged write. If the session check after the
-   * response fails, the page locks with that text instead of treating the
-   * write as unconfirmed.
-   */
+  /** Session/write ordering lives in the plain, behaviourally tested flow. */
   async request<T = any>(path: string, body?: unknown, confirmed?: (data: T) => string): Promise<T> {
-    await this.verify();
-    const generation = this.generation;
-    const session = this.session as Session;
-    this.inflight += 1;
-    try {
-      const data = await wire(path, body === undefined ? undefined : JSON.stringify(body), session.csrf_token);
-      try { await this.verify(); }
-      catch (error) {
-        const recovery = confirmed?.(data as T) || creationRecovery(path, data);
-        if (recovery) { this.pending = null; this.lock(recovery); throw new Error(recovery); }
-        throw error;
-      }
-      if (this.locked || generation !== this.generation) throw new Error('The view changed. Refresh before continuing.');
-      return data as T;
-    } catch (error) {
-      const status = (error as {status?: number}).status;
-      if (status === 401 || status === 403) this.lock((error as Error).message);
-      throw error;
-    } finally { this.inflight -= 1; }
+    return sessionRequest(this, {wire, lock: (message: string) => this.lock(message)}, path, body, confirmed);
   }
 
   /** Serialises user actions. Controls stay focusable; `busyKey` marks which one is working. */
@@ -247,8 +217,8 @@ class App {
   /**
    * `submitted` is the exact draft object the caller read `name`/`owner`
    * from; it is only dropped if it is still the live draft for `draftKey`
-   * once this resolves (or, if the session check right after a confirmed
-   * create fails, from inside that confirmed callback) -- never a
+   * on acknowledgement, before the session check right after the create
+   * (or on a normal request completion) -- never a
    * replacement draft typed while this was in flight. Blocked (returns
    * `null`) while the previous create's one-time owner key is still on
    * screen: creating a second workspace would otherwise silently overwrite
@@ -266,9 +236,8 @@ class App {
           name, owner: {kind: 'new_principal', name: owner}, key_expires_at: null,
         }, confirmed);
       },
-      // Runs whether the create finishes normally or the session check right
-      // after it fails: an acknowledged create's owner key must surface
-      // either way, never only on the happy path.
+      // Runs on acknowledgement, before another await or view/lock check:
+      // the owner key must surface even if the post-write check cannot finish.
       confirmedText: data => {
         this.createdWorkspace = data as CreatedWorkspace;
         return creationRecovery('/api/v1/admin/workspaces/create', data as {workspace_id?: string});
@@ -353,7 +322,7 @@ class App {
       }),
       request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
       sameIdentity: session => Boolean(this.session) && identityKey(session as Session) === identityKey(this.session as Session),
-      adoptSession: session => { this.session = session as Session; },
+      adoptSession: session => adoptSession(this, session),
       clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; },
       activate: session => this.activate(session as Session),
     });
@@ -362,26 +331,8 @@ class App {
   }
 
   async discardAndSignIn(): Promise<void> {
-    const recovery = this.recoveryText();
-    const ownerKey = this.createdWorkspace !== null;
-    if (!recovery && !ownerKey && !this.deletion) { this.reset(); return; }
-    const deletionOnly = Boolean(this.deletion && (!this.pending || this.pending === this.deletion.reference)) && !recovery && !ownerKey;
-    const ok = await confirmAction(deletionOnly
-      ? {title: 'Return to sign in?', body: 'Deletion tracking stays on this page. Any server request remains uncancelled.', confirm: 'Return to sign in'}
-      : {
-        title: 'Discard local work?',
-        body: `Any uncertain server write remains uncertain.${ownerKey ? ' This also discards the workspace owner key shown below.' : ''} Copy your work first if you need it.`,
-        confirm: 'Discard and sign in', destructive: true,
-      });
-    if (ok) this.reset();
+    await discardAndSignIn(this, confirmAction, () => this.reset());
   }
-}
-
-function creationRecovery(path: string, result: {workspace_id?: string} | undefined): string {
-  if (path === '/api/v1/admin/workspaces/create' && result?.workspace_id) {
-    return `Workspace creation confirmed: ${result.workspace_id}. The owner key is no longer displayed because this session could not be checked. Ask the CCP host operator to recover this workspace's owner key using the local reset-owner-key command. This requires host access; an instance key cannot reset it remotely. Do not create a duplicate workspace.`;
-  }
-  return '';
 }
 
 export const app = new App();
