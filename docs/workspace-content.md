@@ -211,8 +211,10 @@ SQLite free pages, journals or separate backups. No existing data is purged by
 the upgrade itself. The
 [HTTPS admin adapter](workspace-content-http.md#permanently-purge-an-archived-entry)
 now exposes this operation, and the desktop panel provides the matching human
-confirmation screen. CLI/MCP purge commands and whole-shelf/book/workspace
-purge remain subsequent work.
+confirmation screen. CLI/MCP entry-purge commands and whole-shelf/book purge
+remain subsequent work. [Confirmed permanent workspace deletion](workspace-deletion.md)
+ships; `retention_worker::cycle()` calls `advance_workspace_deletion()` to
+complete its cleanup.
 [Optional timed entry retention](workspace-retention.md) is available through
 explicit scoped HTTPS policy changes, the desktop panel and the workspace-mode
 worker. The verified legacy-content conversion gate remains in force.
