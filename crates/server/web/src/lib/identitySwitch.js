@@ -31,9 +31,10 @@ export function hashSwitchBlocked(busy, locked, mayLeave) {
 }
 
 /** Plain-text summary of what a decline would keep and a confirm would lose. */
-export function unsavedWorkSummary(draftLabelList, hasOwnerKey) {
+export function unsavedWorkSummary(draftLabelList, hasOwnerKey, hasAccessSecret = false, hasEnrollmentLink = false) {
   const parts = [...draftLabelList];
   if (hasOwnerKey) parts.push('the workspace owner key shown on screen');
+  if (hasAccessSecret) parts.push(hasEnrollmentLink ? 'the enrollment link shown on screen' : 'the one-time access secret shown on screen');
   return parts.join(', ');
 }
 

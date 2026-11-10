@@ -1380,7 +1380,7 @@ test('clearedSessionState clears the session, every draft, the owner key, and re
   const cleared = clearedSessionState();
   assert.deepEqual(cleared, {
     session: null, workspace: null, inspection: null, workspaces: [], workspacesNext: null, workspacesAfter: null,
-    dirty: false, pending: null, draft: '', drafts: {}, locked: false, lockMessage: '', createdWorkspace: null, view: 'overview',
+    dirty: false, pending: null, draft: '', drafts: {}, locked: false, lockMessage: '', createdWorkspace: null, accessSecret: null, view: 'overview',
   });
 });
 
@@ -2802,3 +2802,5 @@ test('round 11: Refresh of another selection never expires copied recovery', asy
 
 import './workspace_panel_wiring.mjs';
 import './helpers/accessLink.mjs';
+import './helpers/accessSettlement.mjs';
+import './helpers/retainedLink.mjs';

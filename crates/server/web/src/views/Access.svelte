@@ -69,6 +69,7 @@
       notice('Read the current metadata in the pending action, then explicitly forget it before reloading.', 'warning');
       return;
     }
+    if (!await app.approveAccessNavigation('Read current access')) return;
     if (app.dirty && !await confirmAction({title: 'Discard local work?', confirm: 'Discard and read', destructive: true,
       body: 'Discard local security work and read current administrator and key metadata? Forgotten server requests are not cancelled.'})) return;
     await app.inspectWorkspace();
@@ -82,7 +83,7 @@
     app.effect(() => document.getElementById('page-title')?.focus());
   }
 
-  const report = (next: Result) => { outcome = next; };
+  const report = (next: Result) => app.effect(() => { outcome = next; });
 </script>
 
 <div class="space-y-6">

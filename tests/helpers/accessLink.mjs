@@ -33,7 +33,7 @@ function harness(group = false) {
     session: {instance_id: link.instance_id, csrf_token: 'original-proof', identity: {
       key_id: 'key', principal_id: 'owner', scope: {kind: 'workspace', workspace_id: workspace.id, role: 'owner'},
     }},
-    sessionEpoch: 0, workspace, pending: null, dirty: false, drafts: {}, locked: false,
+    sessionEpoch: 0, accessWrites: 0, accessSecret: null, workspace, pending: null, dirty: false, drafts: {}, locked: false,
     verify: async () => state.session,
     clean() { this.dirty = false; },
     lock(message) { this.locked = true; this.lockMessage = message; },
@@ -53,8 +53,26 @@ function harness(group = false) {
   const enrollment = group ? {workspace_id: workspace.id, phase: 'unused', closed_at: null,
     has_admission_history: false, workspace_archived: false, can_open: true, invitation: null} : null;
   const attempt = new LinkAttempt(state.session, workspace, 'read', {capacity: '2'}, enrollment, group);
-  const run = ask => changeLink(app, value => reports.push(value), attempt, () => form.drop(), ask);
-  return {app, state, form, attempt, transport, reply, notices, reports, writes, run};
+  const parent = viewScope(state, effects);
+  const run = ask => changeLink(app, value => parent.effect(() => reports.push(value)), attempt, () => form.drop(), ask);
+  return {app, parent, state, form, attempt, transport, reply, notices, reports, writes, run};
+}
+
+for (const group of [false, true]) for (const transition of ['unmount', 'lock']) {
+  test(`${group ? 'group' : 'individual'} link receipt survives ${transition} during the dispatched write`, async () => {
+    const h = harness(group), gate = deferred();
+    h.transport.write = async () => gate.promise;
+    const running = h.run(); await new Promise(resolve => setImmediate(resolve));
+    assert.ok(h.state.pending); const outstanding = h.state.accessWrites;
+    h.app.dispose();
+    if (transition === 'lock') { h.parent.dispose(); h.state.lock('Concurrent lock'); }
+    gate.resolve(h.reply); await running;
+    assert.equal(h.state.pending, null); assert.equal(h.form.touched, false); assert.equal(h.state.accessWrites, 0);
+    assert.equal(outstanding, 1);
+    assert.equal(h.state.accessSecret.value, uri); assert.equal(h.state.accessSecret.kind, 'enrollment_link');
+    if (transition === 'lock') { assert.match(h.state.lockMessage, /creation confirmed/); assert.deepEqual(h.reports, []); }
+    else assert.equal(h.reports[0].phase, 'done');
+  });
 }
 
 for (const group of [false, true]) test(`merged ${group ? 'group' : 'individual'} issuance cleans its draft before postflight and shows the link once`, async () => {
@@ -66,7 +84,7 @@ for (const group of [false, true]) test(`merged ${group ? 'group' : 'individual'
   assert.equal(verifies, 2); assert.equal(h.form.touched, false); assert.equal(h.state.pending, null);
   assert.deepEqual(h.reports, []); assert.equal(h.writes.length, 1);
   postflight.resolve(h.state.session); await running;
-  assert.equal(h.reports.length, 1); assert.equal(h.reports[0].link, uri);
+  assert.equal(h.reports.length, 1); assert.equal(h.reports[0].phase, 'done'); assert.equal(h.state.accessSecret.value, uri);
   assert.equal(h.notices.length, 1); assert.throws(() => h.attempt.request(h.state.session), /Do not retry/);
 });
 
@@ -98,7 +116,7 @@ test('declined confirmation and preflight denial retain the unsent fields', asyn
 });
 
 for (const stage of ['preflight', 'write', 'postflight']) for (const replacement of ['view', 'session']) {
-  test(`retiring the ${replacement} during ${stage} suppresses late link effects and preserves current drafts`, async () => {
+  test(`retiring the ${replacement} during ${stage} keeps operation facts session-bound while preserving independent drafts`, async () => {
     const h = harness(), gate = deferred(); let verifies = 0;
     h.state.verify = async () => {
       verifies++;
@@ -110,19 +128,25 @@ for (const stage of ['preflight', 'write', 'postflight']) for (const replacement
     await new Promise(resolve => setImmediate(resolve));
     if (replacement === 'view') h.app.dispose();
     else { h.state.session = structuredClone(h.state.session); h.state.sessionEpoch++; }
-    h.state.formDraft('link').https = 'replacement draft';
+    const key = replacement === 'view' && stage !== 'preflight' ? 'other' : 'link';
+    h.state.formDraft(key).https = 'replacement draft';
     gate.resolve(stage === 'write' ? h.reply : h.state.session);
     const failure = await running;
     if (stage === 'preflight') assert.match(failure.message, /superseded/i);
     else assert.equal(failure, null);
-    assert.equal(h.state.drafts.link.https, 'replacement draft');
-    assert.deepEqual(h.reports, []); assert.deepEqual(h.notices, []); assert.equal(h.state.locked, false);
+    assert.equal(h.state.drafts[key].https, 'replacement draft');
+    assert.equal(h.state.locked, false);
+    if (replacement === 'view' && stage !== 'preflight') {
+      assert.equal(h.state.pending, null); assert.equal(h.state.accessSecret.value, uri);
+      assert.equal(h.reports[0].phase, 'done'); assert.equal(h.notices.length, 1);
+      assert.equal('link' in h.state.drafts, false);
+    } else { assert.deepEqual(h.reports, []); assert.deepEqual(h.notices, []); }
     if (stage === 'preflight') assert.equal(h.writes.length, 0);
   });
 }
 
 for (const stage of ['preflight', 'postflight']) for (const replacement of ['view', 'session']) {
-  test(`a failed ${stage} check cannot lock a replacement ${replacement}`, async () => {
+  test(`a failed ${stage} check respects the ${replacement} boundary after acknowledgement`, async () => {
     const h = harness(), gate = deferred(); let verifies = 0;
     h.state.verify = async () => {
       if (++verifies === (stage === 'preflight' ? 1 : 2)) return gate.promise;
@@ -135,7 +159,12 @@ for (const stage of ['preflight', 'postflight']) for (const replacement of ['vie
     h.state.formDraft('link').https = 'replacement draft';
     gate.reject(new Error('Retired session check failed'));
     await running;
-    assert.equal(h.state.locked, false); assert.deepEqual(h.notices, []); assert.deepEqual(h.reports, []);
+    assert.equal(h.state.locked, replacement === 'view' && stage === 'postflight');
+    if (h.state.locked) {
+      assert.match(h.state.lockMessage, /Enrollment link creation confirmed/);
+      assert.equal(h.state.accessSecret.value, uri); assert.equal(h.state.pending, null);
+    }
+    assert.deepEqual(h.notices, []); assert.deepEqual(h.reports, []);
     assert.equal(h.state.drafts.link.https, 'replacement draft');
   });
 }

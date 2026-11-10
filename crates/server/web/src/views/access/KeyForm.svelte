@@ -10,6 +10,7 @@
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {formFrozen} from '../../lib/identitySwitch.js';
   import {mountedView} from '../../lib/viewLifecycle.js';
   import {keyExpiry, principalIdentity} from '../../lib/model.js';
   import {changeSecurity, FormDraft, type Admin, type Report} from './actions';
@@ -40,12 +41,14 @@
         : {title: 'Appoint workspace administrator?', confirm: 'Appoint and create key',
           body: 'Appoint this principal as a workspace administrator and create its first key? This permits client admission and data management in this workspace.'});
       if (!ok) return;
-      await changeSecurity(app, onoutcome, admin ? 'keys/issue' : 'team/appoint', body);
-      submitted.drop();
+      await changeSecurity(app, onoutcome, admin ? 'keys/issue' : 'team/appoint', body, () => submitted.drop());
     }, 'key-form-submit');
   }
 
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, 'key-form-submit'));
+
   async function discard() {
+    if (frozen) return;
     if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local security draft?', confirm: 'Discard draft', destructive: true})) return;
     form.drop();
     onclose();
@@ -58,6 +61,7 @@
     description={admin ? `${admin.name} · ${admin.id}. Issuing does not revoke existing keys.` : undefined} />
   <CardContent>
     <form class="grid max-w-xl gap-5" onsubmit={submit}>
+      <fieldset disabled={frozen} class="contents">
       {#if admin}
         <Field id="key-name" label="New key label">
           <Input id="key-name" required bind:ref={first} bind:value={() => form.get('name'), value => form.set('name', value)} />
@@ -82,6 +86,7 @@
         <Button type="submit" busy={app.working('key-form-submit')}>{admin ? 'Create workspace key' : 'Appoint and create key'}</Button>
         <Button variant="ghost" onclick={discard}>Discard security draft</Button>
       </div>
+      </fieldset>
     </form>
   </CardContent>
 </Card>

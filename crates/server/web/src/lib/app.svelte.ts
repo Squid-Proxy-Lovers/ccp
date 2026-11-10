@@ -17,11 +17,12 @@ import {identityKey, takeFragment, wire, canWrite} from './model.js';
 import {acquireDraft, dropDraft, peekDraft, hasAnyDraftContent, draftLabels, recoveryText as draftsRecoveryText} from './drafts.js';
 import {createWorkspaceFlow} from './workspaceCreate.js';
 import {runSignOut, runLogin, runIdentitySwitch, hashSwitchBlocked, unsavedWorkSummary} from './identitySwitch.js';
+import {approveRetainedLink} from './retainedLink.js';
 import {hasUnsavedWork} from './unsavedWork.js';
 import {clearedSessionState} from './sessionReset.js';
 import {notice, clearToasts, copyText, bindNoticeScope} from './notify.svelte';
 import {confirmAction} from './ui/confirm.svelte';
-import type {Session, Workspace, PendingWork, View} from './types';
+import type {Session, Workspace, PendingWork, View, AccessSecret} from './types';
 
 interface WorkspacePage { workspaces: Workspace[]; next_cursor: string | null }
 interface Inspection { workspace: Workspace; owner_id: string | null; [key: string]: unknown }
@@ -64,6 +65,9 @@ export class App {
   drafts = $state<Record<string, Record<string, string>>>({});
   /** Includes acknowledgement and verification; independent of the action busy slot. */
   workspaceCreates = $state(0);
+  /** Access writes settle even after their originating component is destroyed. */
+  accessWrites = $state(0);
+  accessSecret = $state.raw<AccessSecret | null>(null);
   #fragmentKey = '';
   #reloads = new ViewReloads();
 
@@ -93,7 +97,7 @@ export class App {
    * or signing in as a different key): a kept draft, or an undismissed
    * one-time owner key. See lib/unsavedWork.js -- shared with beforeunload
    * and LockedView's own discard decision. */
-  get hasUnsavedIdentityWork(): boolean { return hasUnsavedWork({drafts: this.drafts, createdWorkspace: this.createdWorkspace}); }
+  get hasUnsavedIdentityWork(): boolean { return hasUnsavedWork({drafts: this.drafts, createdWorkspace: this.createdWorkspace}) || this.accessSecret !== null; }
   /** Unsaved local work as plain text: the pending or edited body, then each form draft by name. */
   recoveryText(): string { return draftsRecoveryText(this.pending, this.draft, this.drafts); }
 
@@ -214,7 +218,7 @@ export class App {
     await runLogin({
       isCurrent: () => this.actionOwner === owner && this.session === previous,
       request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
-      clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; },
+      clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; this.accessSecret = null; },
       activate: session => this.activate(session as Session),
     });
   }
@@ -227,7 +231,7 @@ export class App {
       hasUnsavedWork: () => this.hasUnsavedIdentityWork,
       confirm: () => confirmAction({
         title: 'Discard local work?',
-        body: `Signing out discards ${unsavedWorkSummary(draftLabels(this.drafts), this.createdWorkspace !== null)}. Copy anything you need first.`,
+        body: `Signing out discards ${unsavedWorkSummary(draftLabels(this.drafts), this.createdWorkspace !== null, this.accessSecret !== null, this.accessSecret?.kind === 'enrollment_link')}. Copy anything you need first.`,
         confirm: 'Discard and sign out', destructive: true,
       }),
       verify: () => this.verify(),
@@ -251,7 +255,12 @@ export class App {
     this.workspacesAfter = after;
   }
 
+  async approveAccessNavigation(action: string): Promise<boolean> {
+    return approveRetainedLink(this, confirmAction, action);
+  }
+
   async openWorkspace(workspace: Workspace, view: View = this.view === 'workspaces' || this.view === 'global-guidance' ? 'overview' : this.view): Promise<void> {
+    if (!await this.approveAccessNavigation('Open workspace')) return;
     const retained = workspace.id === this.workspace?.id && view === this.view;
     if (retained) { await this.refreshView(); return; }
     this.generation += 1;
@@ -281,7 +290,7 @@ export class App {
 
   /** Refresh metadata without replacing mounted form state or focus. */
   async refreshView(): Promise<void> {
-    if (!this.mayLeave()) return;
+    if (!this.mayLeave() || !await this.approveAccessNavigation('Refresh')) return;
     this.generation += 1;
     const generation = this.generation, session = this.session;
     let metadataError: unknown;
@@ -302,7 +311,7 @@ export class App {
   /** Switch view inside the current workspace (or a global view). */
   async navigate(view: View): Promise<void> {
     if (view === this.view) return;
-    if (!this.mayLeave()) return;
+    if (!this.mayLeave() || !await this.approveAccessNavigation('Navigate')) return;
     this.generation += 1;
     this.view = view;
     if (view === 'global-guidance' || view === 'workspaces') return;
@@ -420,13 +429,13 @@ export class App {
       hasUnsavedWork: () => this.hasUnsavedIdentityWork,
       confirm: () => confirmAction({
         title: 'Replace the current session?',
-        body: `Signing in with this link replaces your current session and discards ${unsavedWorkSummary(draftLabels(this.drafts), this.createdWorkspace !== null)}. Copy anything you need first.`,
+        body: `Signing in with this link replaces your current session and discards ${unsavedWorkSummary(draftLabels(this.drafts), this.createdWorkspace !== null, this.accessSecret !== null, this.accessSecret?.kind === 'enrollment_link')}. Copy anything you need first.`,
         confirm: 'Sign in and discard', destructive: true,
       }),
       request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
       sameIdentity: session => Boolean(this.session) && identityKey(session as Session) === identityKey(this.session as Session),
       adoptSession: session => { adopted = session as Session; adoptSession(this, session); },
-      clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; },
+      clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; this.accessSecret = null; },
       activate: session => this.activate(session as Session),
     });
     if (outcome === 'same' && this.session === adopted) notice('Already signed in with this key.');

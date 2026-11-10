@@ -8,6 +8,7 @@
   import Field from '../../lib/ui/Field.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {formFrozen} from '../../lib/identitySwitch.js';
   import {mountedView} from '../../lib/viewLifecycle.js';
   import {LinkAttempt} from '../../lib/link_issuance.js';
   import LinkOptions from './LinkOptions.svelte';
@@ -29,7 +30,10 @@
     }, 'invite-submit');
   }
 
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, 'invite-submit'));
+
   async function discard() {
+    if (frozen) return;
     if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local invitation draft?', confirm: 'Discard draft', destructive: true})) return;
     form.drop();
     notice('Local invitation draft discarded.');
@@ -41,6 +45,7 @@
     description="One invitation for this workspace. An existing registered client reuses its identity when redeeming it. This does not select the workspace for that client." />
   <CardContent>
     <form class="grid max-w-xl gap-5" onsubmit={submit}>
+      <fieldset disabled={frozen} class="contents">
       {#if unused}
         <Alert tone="warning" title="This closes the unused initial group phase">
           <p>Issuing an individual invitation permanently closes the unused initial group phase, even before any client redeems it. Choose group enrollment first if you need this phase.</p>
@@ -54,6 +59,7 @@
         <Button type="submit" busy={app.working('invite-submit')}>Create enrollment link</Button>
         {#if form.touched}<Button variant="ghost" onclick={discard}>Discard draft</Button>{/if}
       </div>
+      </fieldset>
     </form>
   </CardContent>
 </Card>
