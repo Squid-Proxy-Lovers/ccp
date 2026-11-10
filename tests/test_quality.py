@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import dependency_compat
@@ -161,6 +162,41 @@ class CompatSummaryTests(unittest.TestCase):
         )
         self.assertIn("old/new TLS clients", message)
         self.assertIn("server upgrade/downgrade", message)
+
+    def test_check_prints_the_exercised_compatibility_summary(self):
+        for old_client, old_server in (
+            (None, None),
+            (Path("old-client"), None),
+            (None, Path("old-server")),
+            (Path("old-client"), Path("old-server")),
+        ):
+            args = SimpleNamespace(
+                client=Path("client"),
+                server=Path("server"),
+                old_client=old_client,
+                old_server=old_server,
+            )
+            output = io.StringIO()
+            with (
+                self.subTest(old_client=old_client, old_server=old_server),
+                patch.object(dependency_compat, "free_port", side_effect=[10001, 10002]),
+                patch.object(dependency_compat, "Server") as server,
+                patch.object(dependency_compat, "run") as run,
+                contextlib.redirect_stdout(output),
+            ):
+                server.session = "test-session"
+                run.return_value = json.dumps(
+                    {
+                        "context": "baseline content new client append old client append",
+                        "total_entries": 1,
+                        "frequent_labels": ["dependency"],
+                    }
+                )
+                dependency_compat.check(args)
+                self.assertEqual(
+                    output.getvalue(),
+                    dependency_compat.summary(old_client=old_client, old_server=old_server) + "\n",
+                )
 
 
 class TestIntegrityGateTests(unittest.TestCase):
