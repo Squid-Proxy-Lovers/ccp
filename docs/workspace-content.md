@@ -117,8 +117,9 @@ in an active workspace. Ordinary writers and global admin keys cannot do this.
 The [HTTPS adapter](workspace-content-http.md#archive-or-restore-a-shelf) exposes
 this operation to scoped admins, plus state/summary reads for current readers.
 The normal client and MCP bridge can read shelf state and archive summaries.
-The desktop panel can also issue shelf archive/restore commands; CLI/MCP
-shelf-management write commands remain subsequent work.
+The MCP bridge supports shelf creation through `workspace_create_shelf`. The
+desktop panel can also issue shelf archive/restore commands; CLI/MCP shelf
+archive/restore commands remain subsequent work.
 
 Archive changes the parent shelf's visibility in one transaction. Its books,
 entries, ownership, metadata, versions and entry-operation receipts stay intact.

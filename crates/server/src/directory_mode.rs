@@ -86,7 +86,8 @@ impl DirectoryLease {
 
     /// Exclusive local operator boundary for the local provisioning/reset
     /// commands (`workspace-init`, `admin-info`, `reset-instance-key`,
-    /// `reset-owner-key`). It preserves the persisted mode and grants no
+    /// `reset-owner-key`, `workspace-tls-init`, `workspace-tls-info`,
+    /// `workspace-tls-renew`). It preserves the persisted mode and grants no
     /// remote administrative role.
     pub fn maintenance(directory: &Path) -> anyhow::Result<Self> {
         Self::acquire(directory, LeaseKind::Maintenance)
