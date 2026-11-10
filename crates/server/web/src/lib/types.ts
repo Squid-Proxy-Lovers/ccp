@@ -11,3 +11,6 @@ export interface Workspace { id: string; name: string; archived: boolean; [key: 
 export interface PendingWork { readonly kind?: string; readonly body: string }
 export type View = 'overview' | 'context' | 'access' | 'reported' | 'guidance' | 'settings' | 'global-guidance' | 'workspaces';
 export interface Page<T> { items: T[]; next_cursor: string | null }
+
+/** Acknowledged access secret, held only in this identity’s memory until dismissed. */
+export interface AccessSecret { kind?: 'enrollment_link'; title: string; value: string; workspace_id: string }

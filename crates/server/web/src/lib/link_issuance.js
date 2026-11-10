@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Browser issuance has no replay receipt: freeze the original session and send once.
-import {signature, canManageInvitations, enrollmentStatus} from './model.js';
+import {signature, canManageInvitations, enrollmentStatus, isStrictUuid} from './model.js';
 import {parseEnrollmentLink, enrollmentOrigin} from './enrollment_link.js';
 const WEEK = 7 * 86400;
 // Ask early for confirmation/cap when client and server clocks may differ.
@@ -73,8 +73,7 @@ export class LinkAttempt {
     const original = JSON.parse(this.requestBody);
     const link = parseEnrollmentLink(value?.enrollment_link);
     const expiry = value.expires_at, max = original.admission.kind === 'individual' ? 1 : original.admission.max_clients;
-    if (typeof value.invitation_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value.invitation_id)
-      || value.invitation_id.replaceAll('-', '') === '0'.repeat(32)
+    if (!isStrictUuid(value.invitation_id)
       || value.workspace_id !== this.workspace_id || link.workspace_id !== this.workspace_id
       || link.instance_id !== this.instance_id || link.workspace_name !== value.workspace_name
       || value.max_uses !== max

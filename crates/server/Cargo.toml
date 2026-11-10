@@ -18,7 +18,7 @@ hyper-util = { version = "0.1.21", features = ["tokio"] }
 protocol = { version = "0.2.0", path = "../protocol" }
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 rustls = { version = "0.23.46", features = ["ring"] }
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled", "fallible_uint"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"

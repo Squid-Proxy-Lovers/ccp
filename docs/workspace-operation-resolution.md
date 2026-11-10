@@ -30,8 +30,11 @@ registered client share this control, just as they share entry ownership.
 Admin keys cannot use this client self-service endpoint. It does not impersonate
 another client, restore revoked membership or bypass a global disable. Loss of
 current read access refuses resolution too. A fresh recovery credential needs
-its explicit current workspace grant. Normal client/CLI/MCP resolution and
-mutation adapters remain subsequent work; raw HTTP callers manage these fields.
+its explicit current workspace grant. The normal client/CLI already wraps this
+as [`resume`/`resolve`](workspace-content-mutations.md#resume-or-resolve-an-uncertain-result),
+and the workspace MCP bridge exposes the same as
+[`workspace_entry_resume`/`workspace_entry_resolve`](workspace-mcp.md); raw HTTP
+callers manage these fields directly.
 
 ## Keep the original binding
 

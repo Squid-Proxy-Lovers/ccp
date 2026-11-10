@@ -18,11 +18,15 @@
   import SkeletonTable from '../lib/ui/skeleton/SkeletonTable.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
   import {table} from '../lib/ui/table';
-  import {confirmAction} from '../lib/ui/confirm.svelte';
-  import {app} from '../lib/app.svelte';
-  import {copyText, notice, stamp} from '../lib/notify.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
+  import {ReadTask} from '../lib/readTask.js';
+  import {stamp} from '../lib/notify.svelte';
   import {reportedWorkPage, reportedWorkStatus, StatusClearIntent, wire, canManageInvitations} from '../lib/model.js';
   import type {Session, Workspace} from '../lib/types';
+
+  const app = mountedView(panelApp);
+  const {notice, copyText, confirmAction} = app;
 
   interface Report {
     workspace_id: string; status_id: string; client_id: string; client_name: string; client_disabled: boolean;
@@ -56,22 +60,22 @@
     void load(null, '', false);
   });
 
+  const reader = new ReadTask(app);
   async function load(cursor: string | null, carried: string, announce = true): Promise<void> {
     if (!app.mayLeave()) return;
-    try {
-      const data = await app.request('/api/v1/work/status/list', {workspace_id: workspace.id, after: cursor, limit: 32});
-      page = reportedWorkPage(data, workspace.id) as ReportPage;
-      after = cursor;
-      confirmed = carried;
-      mode = 'list';
-      if (announce) notice('Loaded a bounded page of reported work. No contact tracking or task completion was inferred.');
-    } catch (error) {
-      if (app.locked) { if (carried) app.lock(`${carried} Current status messages could not be read.`); return; }
-      confirmed = carried;
-      loadError = (error as Error).message;
-      mode = 'unavailable';
-    }
+    await reader.run(async readApp => reportedWorkPage(await readApp.read('/api/v1/work/status/list',
+      {workspace_id: workspace.id, after: cursor, limit: 32}), workspace.id) as ReportPage, {
+      receive: data => {
+        page = data; after = cursor; confirmed = carried; mode = 'list'; loadError = '';
+        if (announce) notice('Loaded a bounded page of reported work. No contact tracking or task completion was inferred.');
+      },
+      error: error => {
+        if (app.locked) { if (carried) app.lock(`${carried} Current status messages could not be read.`); return; }
+        confirmed = carried; loadError = (error as Error).message; mode = 'unavailable';
+      },
+    });
   }
+  reloadView(app, () => load(after, confirmed, false));
 
   /** A failed read keeps showing an earlier clear confirmation; paging and fresh reads drop it. */
   function read(cursor: string | null = null, key = 'reported-read') {
@@ -126,7 +130,7 @@
 
   function observe(original: StatusClearIntent) {
     void app.run(async () => {
-      const data = await app.request('/api/v1/work/status/get', {workspace_id: original.workspace_id, status_id: original.status_id});
+      const data = await app.read('/api/v1/work/status/get', {workspace_id: original.workspace_id, status_id: original.status_id});
       reportedWorkStatus(data, original.workspace_id);
       if (data.workspace_id !== original.workspace_id || data.status_id !== original.status_id || data.client_id !== original.client_id) {
         throw new Error('The separate status observation did not match this slot.');

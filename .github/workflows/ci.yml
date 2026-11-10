@@ -157,10 +157,10 @@ jobs:
           printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.89.0"
           build-warnings: ""
           cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      - run: cargo +1.88.0 check --workspace --locked
+      - run: cargo +1.89.0 check --workspace --locked
 
   source-lint:
     runs-on: ubuntu-latest

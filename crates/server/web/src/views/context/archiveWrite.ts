@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Shelf archive/restore and archived-entry purge. Each carries an operation ID
 // and exact revision; the original stays in app.pending until a verified receipt.
-import {app} from '../../lib/app.svelte';
-import {notice} from '../../lib/notify.svelte';
+import type {ViewApp} from '../../lib/app.svelte';
 import {message, type HeldIntent} from './content';
 
 export interface AdminIntent extends HeldIntent {
@@ -12,7 +11,7 @@ export interface AdminIntent extends HeldIntent {
 export type ArchiveOutcome = {state: 'confirmed'; text: string; receipt: string} | {state: 'unconfirmed'; error: string};
 
 /** Sends (or exactly re-sends) the operation. `null` means the session locked. */
-export async function sendArchive(intent: AdminIntent): Promise<ArchiveOutcome | null> {
+export async function sendArchive(app: ViewApp, intent: AdminIntent): Promise<ArchiveOutcome | null> {
   await app.verify();
   app.pending = intent;
   let receipt: unknown;
@@ -23,7 +22,7 @@ export async function sendArchive(intent: AdminIntent): Promise<ArchiveOutcome |
       data => `${label} confirmed. Historical receipt: ${JSON.stringify(data)}. Sign in again to inspect current metadata; do not create a replacement operation.`));
   } catch (error) {
     if (app.locked) return null;
-    notice('Archive action unconfirmed. The original operation is retained.', 'warning');
+    app.notice('Archive action unconfirmed. The original operation is retained.', 'warning');
     return {state: 'unconfirmed', error: message(error)};
   }
   app.pending = null;
@@ -34,6 +33,6 @@ export async function sendArchive(intent: AdminIntent): Promise<ArchiveOutcome |
     app.lock(`${text} Historical receipt: ${JSON.stringify(receipt)}. Sign in again to inspect current metadata; do not create a replacement operation.`);
     return null;
   }
-  notice(text, 'success');
+  app.notice(text, 'success');
   return {state: 'confirmed', text, receipt: historical};
 }

@@ -11,16 +11,19 @@
   import Input from '../../lib/ui/Input.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import Separator from '../../lib/ui/Separator.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
   import {exactRevision} from '../../lib/model.js';
   import PendingWrite from './PendingWrite.svelte';
   import EntryMeta from './EntryMeta.svelte';
   import EntryHistory from './EntryHistory.svelte';
   import NativeHistory from './NativeHistory.svelte';
-  import {focusId, type EntryReceipt, type HeldIntent, type Snapshot} from './content';
+  import {contentPath, focusId, type EntryReceipt, type HeldIntent, type Snapshot} from './content';
   import {actionOf, sendEntryWrite, startEntryWrite, type EntryChange} from './entryWrite';
+
+  const app = mountedView(panelApp);
+  const {notice, confirmAction} = app;
 
   let {snapshot, bookId, onwritten, onreload}: {
     snapshot: Snapshot | null; bookId: string;
@@ -29,24 +32,41 @@
   } = $props();
 
   const initial = untrack(() => snapshot);
-  const entry = initial?.entry ?? null;
-  const original = {
+  let entry = $state.raw(initial?.entry ?? null);
+  let original = $state({
     description: initial?.content.description ?? '',
     labels: (initial?.content.labels ?? []).join('\n'),
     text: initial?.content.text ?? '',
-  };
-  const writable = app.writable();
+  });
+  const writable = $derived(app.writable());
 
   let name = $state('');
-  let description = $state(original.description);
-  let labels = $state(original.labels);
-  let text = $state(original.text);
+  let description = $state(untrack(() => original.description));
+  let labels = $state(untrack(() => original.labels));
+  let text = $state(untrack(() => original.text));
   let note = $state('');
   let noteOpen = $state(false);
   let unconfirmed = $state.raw<{intent: HeldIntent; error: string} | null>(null);
   let forgotten = $state(false);
   let historyShown = $state(0);
   let sourceShown = $state(0);
+
+  const reader = new ReadTask(app);
+  async function reloadMounted() {
+    const current = entry;
+    if (!current) return;
+    await reader.run(readApp => readApp.read<Snapshot>(contentPath('entries/get'),
+      {workspace_id: app.workspace?.id, entry_id: current.id, revision: null}), {
+      receive: value => {
+        if (app.dirty || app.pending) return;
+        entry = value.entry;
+        original = {description: value.content.description, labels: value.content.labels.join('\n'), text: value.content.text};
+        description = original.description; labels = original.labels; text = original.text;
+      },
+      rethrow: true,
+    });
+  }
+  reloadView(app, reloadMounted);
 
   const frozen = $derived(!writable || app.pending !== null);
   const entryChanged = $derived(entry
@@ -64,12 +84,12 @@
   }
 
   async function write(change: EntryChange) {
-    const intent = await startEntryWrite(change);
+    const intent = await startEntryWrite(app, change);
     await send(intent);
   }
 
   async function send(intent: HeldIntent) {
-    const outcome = await sendEntryWrite(intent);
+    const outcome = await sendEntryWrite(app, intent);
     if (!outcome) return;
     if (!outcome.ok) {
       unconfirmed = {intent, error: outcome.message};
@@ -96,20 +116,22 @@
 
   function append(event: SubmitEvent) {
     event.preventDefault();
-    if (!entry) return;
+    const target = entry;
+    if (!target) return;
     void app.run(async () => {
       // A full edit and a separate append must not silently discard each other.
       if (entryChanged) throw new Error('Save or discard entry edits before appending.');
-      await write({action: 'append', entry_id: entry.id, expected_revision: exactRevision(entry.revision), text: note});
+      await write({action: 'append', entry_id: target.id, expected_revision: exactRevision(target.revision), text: note});
     }, 'entry-append');
   }
 
   function archive() {
-    if (!entry) return;
+    const target = entry;
+    if (!target) return;
     void app.run(async () => {
       if (!app.mayLeave()) return;
       const ok = await confirmAction({title: 'Archive this entry?', body: 'Its body and history become unavailable until it is restored.', confirm: 'Archive entry', destructive: true});
-      if (ok) await write({action: 'archive', entry_id: entry.id, expected_revision: exactRevision(entry.revision)});
+      if (ok) await write({action: 'archive', entry_id: target.id, expected_revision: exactRevision(target.revision)});
     }, 'entry-archive');
   }
 
@@ -136,7 +158,7 @@
     note = '';
     noteOpen = false;
     sync();
-    void focusId('entry-note-summary');
+    void focusId(app, 'entry-note-summary');
   }
 
   function retry() {
@@ -155,7 +177,7 @@
     // Keep local text until an explicit discard or reload.
     sync();
     if (!app.dirty) app.setDraft(held.intent.body);
-    void focusId('entry-forgotten');
+    void focusId(app, 'entry-forgotten');
   }
 </script>
 

@@ -8,10 +8,13 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
   import {changeEnrollment, type Enrollment, type Report} from './actions';
+
+  const app = mountedView(panelApp);
+  const {confirmAction} = app;
 
   let {enrollment, error, onread, onconfigure, onoutcome}: {
     enrollment: Enrollment | null; error: string; onread: () => Promise<void>; onconfigure: () => void; onoutcome: Report;
@@ -23,7 +26,7 @@
     void app.run(async () => {
       if (!app.mayLeave()) return;
       const name = app.workspace!.name;
-      await changeEnrollment(onoutcome, current, 'close', {workspace_id: current.workspace_id}, true, () => confirmAction({
+      await changeEnrollment(app, onoutcome, current, 'close', {workspace_id: current.workspace_id}, true, () => confirmAction({
         title: 'Close initial enrollment permanently?', confirm: 'Close permanently', destructive: true,
         body: `Permanently close initial enrollment in ${name}? It cannot reopen. Existing client grants and individual invitations are preserved.`,
       }));

@@ -100,6 +100,71 @@ fn empty_foreign_and_concurrently_changed_formats_are_never_initialized_or_used(
 }
 
 #[test]
+fn opener_retries_through_busy_while_another_connection_holds_the_lease() {
+    let path = database();
+    let holder = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE).unwrap();
+    holder
+        .pragma_update(None, "locking_mode", "EXCLUSIVE")
+        .unwrap();
+    holder.execute_batch("BEGIN EXCLUSIVE; COMMIT;").unwrap();
+    let mut holder = Some(holder);
+    let mut retries = 0;
+    let result = acquire_with_retry(
+        &path,
+        || {
+            // Reached only after an attempt returned BUSY. Permit one retry.
+            retries += 1;
+            retries == 1
+        },
+        // Runs after the BUSY attempt is dropped: release the lease only now.
+        || drop(holder.take()),
+    );
+    assert!(
+        result.is_ok(),
+        "opener must retry through contention instead of failing on the first attempt: {:?}",
+        result.as_ref().err()
+    );
+    assert_eq!(
+        retries, 1,
+        "opener must encounter contention and retry after the held lease is released"
+    );
+    drop(result);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn opener_keeps_retrying_a_held_lease_until_its_policy_stops_then_returns_busy() {
+    let path = database();
+    let holder = acquire(&path).unwrap();
+    let mut asked = 0;
+    let mut waits = 0;
+    let error = acquire_with_retry(
+        &path,
+        || {
+            asked += 1;
+            asked <= 3
+        },
+        || waits += 1,
+    )
+    .unwrap_err();
+    assert_eq!(error.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+    // Every attempt reached the BUSY handling: three retries, then the stop.
+    assert_eq!((asked, waits), (4, 3));
+    drop(holder);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn opener_returns_busy_when_the_lease_stays_held_until_the_deadline() {
+    let path = database();
+    let holder = acquire(&path).unwrap();
+    let error = acquire(&path).unwrap_err();
+    assert_eq!(error.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+    drop(holder);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn a_crash_left_hot_journal_is_recovered_before_validation_and_exclusive_use() {
     let directory = std::env::temp_dir().join(format!("ccp-hot-lease-{}", uuid::Uuid::new_v4()));
     fs::create_dir(&directory).unwrap();

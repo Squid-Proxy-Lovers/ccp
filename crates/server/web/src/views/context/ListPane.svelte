@@ -6,8 +6,11 @@
   import Badge from '../../lib/ui/Badge.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import type {Pager} from './pager.svelte';
+
+  const app = mountedView(panelApp);
 
   let {id, kind, title, description, pager, selectedId, pinned = null, label, detail, badge, onselect, emptyText,
     onretry, back, actions, footer, class: className = 'flex'}: {
@@ -25,9 +28,11 @@
   async function turn(action: () => Promise<void>, key: string) {
     await app.run(action, key);
     await tick();
-    if (document.activeElement === document.body || !document.activeElement?.isConnected) {
-      (list?.querySelector<HTMLElement>('[data-row]') ?? document.getElementById(`${id}-title`))?.focus();
-    }
+    app.effect(() => {
+      if (document.activeElement === document.body || !document.activeElement?.isConnected) {
+        (list?.querySelector<HTMLElement>('[data-row]') ?? document.getElementById(`${id}-title`))?.focus();
+      }
+    });
   }
 </script>
 
