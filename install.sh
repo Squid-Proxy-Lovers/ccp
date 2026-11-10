@@ -147,15 +147,35 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
-publish_binary() {
-    local source="$1" dest="$2"
+resolve_destination() {
+    local dest="$1" link hops=0 parent
+    while [ -L "$dest" ]; do
+        if [ "$hops" -ge 40 ] || [ ! -f "$dest" ]; then
+            err "$dest is not a symlink to a regular file." >&2
+            return 1
+        fi
+        link="$(readlink "$dest")" || return 1
+        case "$link" in
+            /*) dest="$link" ;;
+            *) dest="${dest%/*}/$link" ;;
+        esac
+        hops=$((hops + 1))
+    done
     if [ -e "$dest" ] && [ ! -f "$dest" ]; then
-        err "$dest exists and is not a regular file; refusing to overwrite it."
+        err "$dest exists and is not a regular file; refusing to overwrite it." >&2
         return 1
     fi
-    PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
-    if ! cp "$source" "$PUBLISH_STAGE" || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
+    parent="$(cd "${dest%/*}" && pwd -P)" || return 1
+    printf '%s/%s\n' "$parent" "${dest##*/}"
+}
+
+finish_publish() {
+    local dest="$1"
+    # mv can succeed by moving the stage *inside* a concurrently created
+    # directory. Verify the postcondition before claiming publication.
+    if ! mv -f "$PUBLISH_STAGE" "$dest" || [ ! -f "$dest" ] || [ -e "$dest/${PUBLISH_STAGE##*/}" ]; then
         err "Could not publish $dest."
+        if [ -d "$dest" ]; then rm -f "$dest/${PUBLISH_STAGE##*/}"; fi
         rm -f "$PUBLISH_STAGE"
         PUBLISH_STAGE=""
         return 1
@@ -163,13 +183,25 @@ publish_binary() {
     PUBLISH_STAGE=""
 }
 
-download_binary() {
-    local name="$1" dest="$2"
-    local platform
-    if [ -e "$dest" ] && [ ! -f "$dest" ]; then
-        err "$dest exists and is not a regular file; refusing to overwrite it."
+publish_file() {
+    local source="$1" dest mode="$3"
+    dest="$(resolve_destination "$2")" || return 1
+    PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
+    if ! cp "$source" "$PUBLISH_STAGE" || ! chmod "$mode" "$PUBLISH_STAGE"; then
+        err "Could not stage $dest."
         return 1
     fi
+    finish_publish "$dest"
+}
+
+publish_binary() {
+    publish_file "$1" "$2" 0755
+}
+
+download_binary() {
+    local name="$1" dest
+    local platform
+    dest="$(resolve_destination "$2")" || return 1
     platform="$(detect_platform)"
     local url="https://github.com/${REPO}/releases/latest/download/${name}-${platform}"
 
@@ -194,11 +226,11 @@ download_binary() {
         echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
         return 1
     fi
-    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
+    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE"; then
         err "Could not publish $dest."
         return 1
     fi
-    PUBLISH_STAGE=""
+    finish_publish "$dest"
 }
 
 download_release_file() {
@@ -280,7 +312,7 @@ PY
         if [ "$asset" = "ccp-server" ] && [ "$MODE" = "client" ]; then continue; fi
         publish_binary "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset" || exit 1
     done
-    cp "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" || exit 1
+    publish_file "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" 0644 || exit 1
 }
 
 build_from_source() {
@@ -588,6 +620,14 @@ fi
 
 step "Installing CCP ${BOLD}($MODE)${RESET}"
 mkdir -p "$INSTALL_DIR" || exit 1
+
+# Validate every destination before publishing the first component, for all
+# channels and source builds. Publication rechecks each resolved destination.
+resolve_destination "$INSTALL_DIR/ccp-client" >/dev/null || exit 1
+if [ "$MODE" = "both" ]; then
+    resolve_destination "$INSTALL_DIR/ccp-server" >/dev/null || exit 1
+fi
+resolve_destination "$INSTALL_DIR/ccp-nightly.json" >/dev/null || exit 1
 
 if [ "$FROM_SOURCE" = true ]; then
     build_from_source || exit 1

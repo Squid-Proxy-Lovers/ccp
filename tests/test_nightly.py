@@ -507,12 +507,16 @@ elif name == 'mktemp':
 elif name in ('cp', 'chmod', 'mv', 'mkdir'):
     root = pathlib.Path(os.environ['NIGHTLY_TEST_FIXTURES']).parent.resolve()
     for value in args:
-        if not value.startswith('-') and value not in ('+x', '0755'):
+        if not value.startswith('-') and value not in ('+x', '0755', '0644'):
             target = pathlib.Path(value).resolve()
             assert target == root or root in target.parents
     if name == os.environ.get('NIGHTLY_TEST_FAILURE'):
         if name == 'cp': pathlib.Path(args[-1]).write_bytes(b'partial-copy')
         sys.exit(1)
+    if name == 'mv' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'race:' + pathlib.Path(args[-1]).name:
+        destination = pathlib.Path(args[-1])
+        if destination.is_file(): destination.unlink()
+        destination.mkdir()
     import subprocess
     subprocess.run([shutil.which(name, path='/usr/bin:/bin'), *args], check=True)
 elif name == 'pip' and os.environ.get('NIGHTLY_TEST_FAILURE') == 'pip':
@@ -588,6 +592,115 @@ elif name == 'cat':
         self.assertNotIn("Done.", result.stdout)
         self.assertTrue(target.is_dir())
         self.assertEqual(list(target.iterdir()), [marker])
+
+    def install_modes(self):
+        self.source_fixture()
+        return (
+            ("stable", ()),
+            ("nightly", ("--channel", "nightly", "--version", TAG)),
+            ("source", ("--from-source",)),
+        )
+
+    def clear_install_dir(self):
+        for path in self.install_dir.iterdir():
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+
+    def test_directory_created_during_publish_is_rejected_and_cleaned(self):
+        for mode, args in self.install_modes():
+            with self.subTest(mode=mode):
+                target = self.install_dir / "ccp-client"
+                target.write_bytes(b"working-client")
+                # The mv double replaces this file with a directory just
+                # before executing the real rename.
+                result, _ = self.install("--client", *args, failure="race:ccp-client")
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("Done.", result.stdout)
+                self.assertEqual(list(target.iterdir()), [])
+                self.assertEqual(list(self.install_dir.glob("*.stage.*")), [])
+                self.assertEqual(list(self.install_dir.glob("*.download.*")), [])
+            self.clear_install_dir()
+
+    def test_nightly_metadata_directory_is_rejected_before_binary_publish(self):
+        self.source_fixture()
+        target = self.install_dir / "ccp-nightly.json"
+        target.mkdir()
+        marker = target / "keep"
+        marker.write_text("untouched")
+        client = self.install_dir / "ccp-client"
+        client.write_bytes(b"working-client")
+        result, _ = self.install("--client", "--channel", "nightly", "--version", TAG)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Done.", result.stdout)
+        self.assertEqual(list(target.iterdir()), [marker])
+        self.assertEqual(client.read_bytes(), b"working-client")
+
+    def test_nightly_metadata_directory_race_is_rejected_and_cleaned(self):
+        self.source_fixture()
+        result, _ = self.install(
+            "--client", "--channel", "nightly", "--version", TAG, failure="race:ccp-nightly.json"
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Done.", result.stdout)
+        self.assertEqual(list((self.install_dir / "ccp-nightly.json").iterdir()), [])
+        self.assertEqual(list(self.install_dir.glob("*.stage.*")), [])
+
+    def test_both_mode_preflights_every_binary_destination(self):
+        for mode, args in self.install_modes():
+            for invalid in ("ccp-client", "ccp-server"):
+                with self.subTest(mode=mode, invalid=invalid):
+                    target = self.install_dir / invalid
+                    target.mkdir()
+                    other = self.install_dir / (
+                        "ccp-server" if invalid == "ccp-client" else "ccp-client"
+                    )
+                    other.write_bytes(b"working-binary")
+                    result, _ = self.install(*args)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("Done.", result.stdout)
+                    self.assertEqual(other.read_bytes(), b"working-binary")
+                    self.assertEqual(list(target.iterdir()), [])
+                self.clear_install_dir()
+
+    def test_symlinks_publish_to_resolved_targets_in_the_target_directory(self):
+        target_dir = self.root / "targets"
+        target_dir.mkdir()
+        target = target_dir / "client"
+        intermediate = self.install_dir / "client-link"
+        intermediate.symlink_to("../targets/client")
+        client = self.install_dir / "ccp-client"
+        client.symlink_to("client-link")
+        metadata = target_dir / "metadata.json"
+        metadata.write_text("old metadata")
+        metadata_link = self.install_dir / "ccp-nightly.json"
+        for mode, args in self.install_modes():
+            with self.subTest(mode=mode):
+                self.log.unlink(missing_ok=True)
+                client.unlink(missing_ok=True)
+                client.symlink_to("client-link")
+                target.write_bytes(b"working-client")
+                if mode == "nightly":
+                    metadata_link.symlink_to(metadata)
+                result, calls = self.install("--client", *args)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(client.is_symlink())
+                self.assertTrue(intermediate.is_symlink())
+                expected = b"replacement-client" if mode == "source" else b"ccp-client-linux-x86_64"
+                self.assertEqual(target.read_bytes(), expected)
+                self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+                stages = [call[1] for call in calls if call[0] == "mktemp" and call[1] != "-d"]
+                self.assertTrue(stages)
+                self.assertTrue(all(Path(stage).parent == target_dir.resolve() for stage in stages))
+                self.assertEqual(
+                    sorted(p.name for p in target_dir.iterdir()), ["client", "metadata.json"]
+                )
+                if mode == "nightly":
+                    self.assertTrue(metadata_link.is_symlink())
+                    self.assertEqual(json.loads(metadata.read_text()), {"source_sha": SHA})
+                    self.assertEqual(metadata.stat().st_mode & 0o777, 0o644)
+                self.log.unlink()
 
     def test_stable_failed_transfer_preserves_installed_bytes(self):
         target = self.install_dir / "ccp-client"
