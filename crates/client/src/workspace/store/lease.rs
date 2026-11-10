@@ -29,6 +29,22 @@ pub(in crate::workspace) fn exclusive_connection(
 
 fn acquire(path: &Path) -> rusqlite::Result<Connection> {
     let deadline = Instant::now() + Duration::from_secs(2);
+    acquire_with_retry(path, || {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(5).min(remaining));
+        true
+    })
+}
+
+// Keep the retry policy separate so tests can release a competing lease only
+// after an observed BUSY, without depending on scheduling or wall-clock time.
+fn acquire_with_retry(
+    path: &Path,
+    mut retry: impl FnMut() -> bool,
+) -> rusqlite::Result<Connection> {
     loop {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
         connection.busy_timeout(Duration::ZERO)?;
@@ -43,17 +59,13 @@ fn acquire(path: &Path) -> rusqlite::Result<Connection> {
                     error.sqlite_error_code(),
                     Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
                 );
-                if !busy || Instant::now() >= deadline {
-                    return Err(error);
-                }
                 // SQLite's busy wait can keep a contender's reader lock while
                 // another opener needs it released. Drop the entire attempt
                 // before waiting; no profile mutation has run at this point.
                 drop(connection);
-                std::thread::sleep(
-                    Duration::from_millis(5)
-                        .min(deadline.saturating_duration_since(Instant::now())),
-                );
+                if !busy || !retry() {
+                    return Err(error);
+                }
             }
         }
     }

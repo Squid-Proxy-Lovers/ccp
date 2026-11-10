@@ -107,21 +107,35 @@ fn opener_retries_through_busy_while_another_connection_holds_the_lease() {
         .pragma_update(None, "locking_mode", "EXCLUSIVE")
         .unwrap();
     holder.execute_batch("BEGIN EXCLUSIVE; COMMIT;").unwrap();
-    let opener_path = path.clone();
-    let start = Instant::now();
-    let opener = std::thread::spawn(move || acquire(&opener_path));
-    std::thread::sleep(Duration::from_millis(200));
-    drop(holder);
-    let result = opener.join().unwrap();
+    let mut holder = Some(holder);
+    let mut retries = 0;
+    let result = acquire_with_retry(&path, || {
+        // This runs only after a BUSY attempt has dropped its connection. Keep
+        // the lease until then, and permit exactly one retry after releasing it.
+        retries += 1;
+        drop(holder.take());
+        retries == 1
+    });
     assert!(
         result.is_ok(),
         "opener must retry through contention instead of failing on the first attempt: {:?}",
-        result.err()
+        result.as_ref().err()
     );
-    assert!(
-        start.elapsed() >= Duration::from_millis(150),
-        "opener returned before the held lease was released; it did not actually wait"
+    assert_eq!(
+        retries, 1,
+        "opener must encounter contention and retry after the held lease is released"
     );
+    drop(result);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn opener_returns_busy_when_the_lease_stays_held_until_the_deadline() {
+    let path = database();
+    let holder = acquire(&path).unwrap();
+    let error = acquire(&path).unwrap_err();
+    assert_eq!(error.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+    drop(holder);
     fs::remove_file(path).unwrap();
 }
 
