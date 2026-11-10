@@ -359,7 +359,7 @@ class TestIntegrityGateTests(unittest.TestCase):
         checker = load_script("check-test-integrity.py")
         samples = {
             "skip not first key": "test('a', {timeout: 100, skip: true}, () => {});\n",
-            "skip shorthand": "test('a', () => {}); const skip = true; f({a, skip, b});\n",
+            "skip shorthand": "const skip = true; test('a', {a, skip, b}, () => {});\n",
             "single-quoted key": "test('a', {'skip': true}, () => {});\n",
             "double-quoted key": "test('a', {\"skip\": true}, () => {});\n",
             "todo key": "test('a', {todo: true}, () => {});\n",
@@ -591,6 +591,159 @@ class TestIntegrityGateTests(unittest.TestCase):
                 (0, 1, 0),
             ),
         ]
+        probes += [
+            ("always false cfg any", ".rs", "#[cfg(any())]\n" + rust_test, (1, 1, 1)),
+            ("always false cfg not all", ".rs", "#[cfg(not(all()))]\n" + rust_test, (1, 1, 1)),
+            (
+                "always false cfg spaced",
+                ".rs",
+                "# [ cfg ( not ( all ( ) ) ) ]\n" + rust_test,
+                (1, 1, 1),
+            ),
+            ("platform cfg is not skip", ".rs", "#[cfg(unix)]\n" + rust_test, (1, 1, 0)),
+            (
+                "cfg on ordinary function",
+                ".rs",
+                "#[cfg(any())]\nfn hidden() {}\n" + rust_test,
+                (1, 1, 0),
+            ),
+            ("spaced Rust test attribute", ".rs", "# [ test ]\nfn test_live() {}", (1, 0, 0)),
+            ("spaced Rust assertion", ".rs", "fn test_live() { assert ! (true); }", (0, 1, 0)),
+            (
+                "unittest case skip",
+                ".py",
+                "@unittest.case.skip('reason')\ndef test_live(): pass",
+                (1, 0, 1),
+            ),
+            (
+                "unittest case skipIf",
+                ".py",
+                "@unittest.case.skipIf(True, 'reason')\ndef test_live(): pass",
+                (1, 0, 1),
+            ),
+            (
+                "unittest case skipUnless",
+                ".py",
+                "@unittest.case.skipUnless(False, 'reason')\ndef test_live(): pass",
+                (1, 0, 1),
+            ),
+            (
+                "unittest skip flag",
+                ".py",
+                "class Tests:\n __unittest_skip__ = True\n def test_live(self): pass",
+                (1, 0, 1),
+            ),
+            (
+                "unittest annotated skip flag",
+                ".py",
+                "class Tests:\n __unittest_skip__: bool = True\n def test_live(self): pass",
+                (1, 0, 1),
+            ),
+            (
+                "unittest skip flag false",
+                ".py",
+                "class Tests:\n __unittest_skip__ = False\n def test_live(self): pass",
+                (1, 0, 0),
+            ),
+            (
+                "simple module skip alias",
+                ".py",
+                "disabled = unittest.skip('reason')\n@disabled\ndef test_live(): pass",
+                (1, 0, 1),
+            ),
+            (
+                "module case skip alias",
+                ".py",
+                "disabled = unittest.case.skip('reason')\n@disabled\nclass Tests:\n def test_live(self): pass",
+                (1, 0, 1),
+            ),
+            (
+                "if False removes test",
+                ".py",
+                "if False:\n def test_hidden(): assert False",
+                (0, 0, 0),
+            ),
+            (
+                "if False keeps else",
+                ".py",
+                "if False:\n def test_hidden(): assert False\nelse:\n def test_live(): assert True",
+                (1, 1, 0),
+            ),
+            ("AST route", ".py", "def test_live(): assert True", (1, 1, 0)),
+            ("tokenizer route", ".py", "future syntax\ndef test_live(): assert True", (1, 1, 0)),
+            ("false skip option", ".mjs", "test('live', {skip: false}, () => {});", (1, 0, 0)),
+            ("zero skip option", ".mjs", "test('live', {skip: 0}, () => {});", (1, 0, 0)),
+            ("empty skip option", ".mjs", "test('live', {skip: ''}, () => {});", (1, 0, 0)),
+            (
+                "false computed skip option",
+                ".mjs",
+                "test('live', {['skip']: false}, () => {});",
+                (1, 0, 0),
+            ),
+            ("arbitrary todo array", ".mjs", "const states = ['todo'];", (0, 0, 0)),
+            ("arbitrary skip object", ".mjs", "const options = {skip: true};", (0, 0, 0)),
+            (
+                "arbitrary computed skip object",
+                ".mjs",
+                "const options = {['skip']: true};",
+                (0, 0, 0),
+            ),
+            (
+                "nested unrelated skip object",
+                ".mjs",
+                "test('live', {other: {skip: true}}, () => {});",
+                (1, 0, 0),
+            ),
+            ("escaped skip key", ".mjs", r"test('live', {'s\x6bip': true}, () => {});", (1, 0, 1)),
+            (
+                "unicode skip key",
+                ".mjs",
+                r"test('live', {['s\u006bip']: true}, () => {});",
+                (1, 0, 1),
+            ),
+            ("template skip key", ".mjs", "test('live', {[`skip`]: true}, () => {});", (1, 0, 1)),
+            (
+                "escaped template skip key",
+                ".mjs",
+                r"test('live', {[`s\u{6b}ip`]: true}, () => {});",
+                (1, 0, 1),
+            ),
+            ("it options", ".mjs", "it('live', {skip: true}, () => {});", (1, 0, 1)),
+            ("subtest options", ".mjs", "t.test('live', {todo: true}, () => {});", (1, 0, 1)),
+            ("regex named first argument", ".mjs", "r.test('x');", (0, 0, 0)),
+            ("increment then division", ".mjs", "x++ / 2; assert(true); / 3;", (0, 1, 0)),
+            ("decrement then division", ".mjs", "x-- / 2; assert(true); / 3;", (0, 1, 0)),
+            (
+                "single quote ends at newline",
+                ".mjs",
+                "const s = 'unterminated\nassert(true);\n'",
+                (0, 1, 0),
+            ),
+            (
+                "double quote ends at newline",
+                ".mjs",
+                'const s = "unterminated\nassert(true);\n"',
+                (0, 1, 0),
+            ),
+            (
+                "heredoc double quotes",
+                ".sh",
+                ': <<"END"\nexpect_success hidden\nskip hidden\nEND\nexpect_success live\n',
+                (0, 1, 0),
+            ),
+            (
+                "heredoc escaped delimiter",
+                ".sh",
+                ": <<\\END\nexpect_success hidden\nskip hidden\nEND\nexpect_success live\n",
+                (0, 1, 0),
+            ),
+            (
+                "heredoc tab stripping",
+                ".sh",
+                ": <<-END\n\texpect_success hidden\n\tskip hidden\n\tEND\nexpect_success live\n",
+                (0, 1, 0),
+            ),
+        ]
         for label, suffix, source, expected in probes:
             with self.subTest(probe=label):
                 counts = checker.count("probe" + suffix, source)
@@ -598,6 +751,15 @@ class TestIntegrityGateTests(unittest.TestCase):
                     tuple(counts[key] for key in ("tests", "assertions", "skips")), expected
                 )
         print(f"Lexer probes: {len(probes)} rows")
+
+    def test_python_uses_ast_before_falling_back_to_tokenize(self):
+        checker = load_script("check-test-integrity.py")
+        source = "def test_live(): assert True"  # AST route row in the probe table.
+        with patch.object(checker, "_python_tokens", wraps=checker._python_tokens) as fallback:
+            self.assertEqual(checker.count("probe.py", source)["tests"], 1)
+            fallback.assert_not_called()
+            self.assertEqual(checker.count("probe.py", "future syntax\n" + source)["tests"], 1)
+            fallback.assert_called_once()
 
     def test_commenting_counted_functions_reduces_repository_counts(self):
         checker = load_script("check-test-integrity.py")

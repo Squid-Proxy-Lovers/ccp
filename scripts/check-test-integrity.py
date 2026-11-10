@@ -16,21 +16,26 @@ richer grammars make a full parser too large for this script; the lexer's
 job is only to classify comments, strings, template literals and regex
 literals so the regexes never see one by mistake.
 
-Known limits:
-- This does not evaluate `cfg`/`cfg_attr` predicates; a Rust test behind
-  `#[cfg(target_os = "windows")]` still counts on every platform.
-- JS destructured or aliased imports (`const {equal} = assert`) are not
-  tracked; this repo's `.mjs` suites always call through `assert.*` or
-  `test.*` directly.
-- Python import aliases are not resolved; fallback counts syntax patterns, not
-  semantics, and cannot fully interpret unsupported or incomplete syntax.
+Known limits (this is a counter, not a language interpreter):
+- Rust only recognizes the literal false cfgs `any()` and `not(all())` in the
+  test's own attribute group; platform/feature predicates and enclosing module
+  cfgs are not evaluated. Macro-generated tests/assertions are not expanded.
+- Python handles literal `if False` bodies and simple module-level skip-factory
+  assignments, not general control flow, import aliases, reassignment/data flow,
+  deeply aliased or dynamic skips. Removing TestCase inheritance is not detected.
+  Tokenize fallback counts syntax patterns, not AST semantics; it cannot fully
+  interpret unsupported or incomplete syntax or resolve aliases/dead branches.
+- JS recognizes direct test/it calls and t.test with a literal first argument;
+  other subtest receiver names and aliased/destructured test/assert APIs are not
+  resolved. Options must be inline objects in the first two arguments; dynamic
+  keys, spreads, shared objects and computed truthiness are not evaluated.
+  Unknown option values and shorthand skip/todo keys conservatively count.
+- JS regex/division uses preceding tokens, not a full grammar: the closing-paren
+  ambiguity in `if (cond) /regex/` remains. Only static string/template keys
+  with ordinary escapes are decoded, not interpolated or computed expressions.
 - Shell only recognizes standalone colon heredocs, not arbitrary shell grammar.
-- Rust macro-generated tests and custom assertion macros are not expanded.
-- JS supports node:test call forms, not aliased test/assert APIs or it/describe.
-  Skip-shaped properties are conservatively counted even outside test options.
-- JS regex-vs-division disambiguation uses only the previous significant
-  token, not a full parse; this matches real engines closely enough for
-  the straight-line test code in this repo.
+- Equal counts do not prove assertions are meaningful or tests still run.
+
 """
 
 from __future__ import annotations
@@ -53,7 +58,9 @@ SOURCE_SUFFIXES = (".rs", ".py", ".sh", ".mjs")
 
 # ── Shell: strip heredoc-as-comment bodies (`: <<'EOF' ... EOF`) ────────────
 
-_SHELL_HEREDOC_START = re.compile(r"^[ \t]*:\s*<<-?\s*'?([A-Za-z_][A-Za-z0-9_]*)'?[ \t]*$")
+_SHELL_HEREDOC_START = re.compile(
+    r"""^[ \t]*:\s*<<(?P<tabs>-)?\s*(?P<quote>['"]?)\\?(?P<delimiter>[A-Za-z_][A-Za-z0-9_]*)(?P=quote)[ \t]*$"""
+)
 
 SHELL_PATTERNS = {
     "skips": re.compile(r"^\s*skip\s", re.MULTILINE),
@@ -71,10 +78,10 @@ def _strip_shell_heredoc_comments(text: str) -> str:
             out.append(lines[i])
             i += 1
             continue
-        delimiter = match.group(1)
+        delimiter = match.group("delimiter")
         out.append("")
         i += 1
-        while i < n and lines[i].lstrip("\t") != delimiter:
+        while i < n and (lines[i].lstrip("\t") if match.group("tabs") else lines[i]) != delimiter:
             out.append("")
             i += 1
         if i < n:
@@ -106,10 +113,10 @@ def _py_decorator_root_and_attrs(node: ast.expr) -> tuple[ast.expr, list[str]]:
     return node, attrs
 
 
-def _py_is_skip_decorator(decorator: ast.expr) -> bool:
+def _py_is_skip_decorator(decorator: ast.expr, aliases: frozenset[str] = frozenset()) -> bool:
     target = decorator.func if isinstance(decorator, ast.Call) else decorator
     if isinstance(target, ast.Name):
-        return target.id in _PY_SKIP_DECORATOR_NAMES
+        return target.id in _PY_SKIP_DECORATOR_NAMES or target.id in aliases
     if not isinstance(target, ast.Attribute):
         return False
     root, attrs = _py_decorator_root_and_attrs(target)
@@ -117,7 +124,8 @@ def _py_is_skip_decorator(decorator: ast.expr) -> bool:
         isinstance(root, ast.Name)
         and root.id == "unittest"
         and attrs
-        and attrs[0] in _PY_SKIP_DECORATOR_NAMES
+        and attrs[-1] in _PY_SKIP_DECORATOR_NAMES
+        and attrs[:-1] in ([], ["case"])
     ):
         return True
     if attrs and attrs[-1] in _PY_SKIP_MARK_NAMES:
@@ -157,12 +165,46 @@ def _py_is_assert_call(call: ast.Call) -> bool:
     return func.attr == "raises" and isinstance(func.value, ast.Name) and func.value.id == "pytest"
 
 
-def _py_node_counts(node: ast.AST) -> Counter[str]:
+def _py_skip_flag(node: ast.AST) -> bool:
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        return False
+    if not isinstance(node.value, ast.Constant) or node.value.value is not True:
+        return False
+    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+    return any(
+        (isinstance(t, ast.Name) and t.id == "__unittest_skip__")
+        or (isinstance(t, ast.Attribute) and t.attr == "__unittest_skip__")
+        for t in targets
+    )
+
+
+def _py_skip_aliases(tree: ast.Module) -> frozenset[str]:
+    aliases: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and _py_is_skip_decorator(node.value):
+            aliases.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return frozenset(aliases)
+
+
+def _py_live_nodes(node: ast.AST) -> Iterator[ast.AST]:
+    yield node
+    children = ast.iter_child_nodes(node)
+    if (
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Constant)
+        and node.test.value is False
+    ):
+        children = iter(node.orelse)
+    for child in children:
+        yield from _py_live_nodes(child)
+
+
+def _py_node_counts(node: ast.AST, aliases: frozenset[str]) -> Counter[str]:
     totals: Counter[str] = Counter()
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         if not isinstance(node, ast.ClassDef) and node.name.startswith("test_"):
             totals["tests"] += 1
-        totals["skips"] += sum(_py_is_skip_decorator(d) for d in node.decorator_list)
+        totals["skips"] += sum(_py_is_skip_decorator(d, aliases) for d in node.decorator_list)
     elif isinstance(node, ast.Assert):
         totals["assertions"] += 1
     elif isinstance(node, ast.Call):
@@ -170,6 +212,7 @@ def _py_node_counts(node: ast.AST) -> Counter[str]:
         totals["skips"] += _py_is_skip_call(node)
     elif isinstance(node, ast.Raise) and node.exc is not None:
         totals["skips"] += _py_is_skip_test_reference(node.exc)
+    totals["skips"] += _py_skip_flag(node)
     return totals
 
 
@@ -214,18 +257,25 @@ def count_python(text: str) -> Counter[str]:
             {key: len(pattern.findall(code)) for key, pattern in _PY_FALLBACK_PATTERNS.items()}
         )
     totals: Counter[str] = Counter()
-    for node in ast.walk(tree):
-        totals.update(_py_node_counts(node))
+    aliases = _py_skip_aliases(tree)
+    for node in _py_live_nodes(tree):
+        totals.update(_py_node_counts(node, aliases))
     return totals
 
 
 # ── Rust: hand-written lexer, then regex over the stripped result ──────────
 
 RUST_PATTERNS = {
-    "tests": re.compile(r"#\[(?:tokio::)?test\b"),
+    "tests": re.compile(r"#\s*\[\s*(?:tokio\s*::\s*)?test\b"),
     "skips": re.compile(r"#\s*\[\s*ignore\b|#\s*\[\s*cfg_attr\b[^\]]*\bignore\b"),
-    "assertions": re.compile(r"\b(?:debug_)?assert(?:_eq|_ne)?!"),
+    "assertions": re.compile(r"\b(?:debug_)?assert(?:_eq|_ne)?\s*!"),
 }
+
+_RUST_ATTRIBUTE_GROUP = re.compile(r"(?:#\s*\[[^\]]*\]\s*)+")
+_RUST_FALSE_CFG = re.compile(
+    r"#\s*\[\s*cfg\s*\(\s*(?:any\s*\(\s*\)|not\s*\(\s*all\s*\(\s*\)\s*\))\s*\)\s*\]"
+)
+
 
 _HEX_DIGITS = "0123456789abcdefABCDEF"
 
@@ -321,7 +371,7 @@ def _rust_prefixed_literal(text: str, i: int) -> int | None:
     return None
 
 
-def _rust_skip_line_comment(text: str, i: int) -> int:
+def _line_comment_end(text: str, i: int) -> int:
     n = len(text)
     while i < n and text[i] != "\n":
         i += 1
@@ -354,7 +404,7 @@ def _blank(text: str) -> str:
 def _rust_token_end(text: str, i: int) -> int | None:
     ch = text[i]
     if text.startswith("//", i):
-        return _rust_skip_line_comment(text, i)
+        return _line_comment_end(text, i)
     if text.startswith("/*", i):
         return _rust_skip_block_comment(text, i)
     if ch == '"':
@@ -382,35 +432,30 @@ def strip_rust(text: str) -> str:
 
 def count_rust(text: str) -> Counter[str]:
     code = strip_rust(text)
-    return Counter(
+    totals = Counter(
         {category: len(pattern.findall(code)) for category, pattern in RUST_PATTERNS.items()}
     )
+    totals["skips"] += sum(
+        bool(RUST_PATTERNS["tests"].search(group[0]) and _RUST_FALSE_CFG.search(group[0]))
+        for group in _RUST_ATTRIBUTE_GROUP.finditer(code)
+    )
+    return totals
 
 
 # ── JavaScript (.mjs): hand-written lexer, then regex ───────────────────────
 
+_JS_TEST_NAME = r"(?<![\w.])(?:t\s*\.\s*)?(?:test|it)"
+_JS_MEMBER = r"(?:\s*\.\s*\w+|\s*\[\s*['\"`](?:skip|todo)['\"`]\s*\])"
 MJS_PATTERNS = {
-    # Bare test(...)/test.skip(...)/test.todo(...); a subtest invoked
-    # through its context parameter (t.test(...)) only counts when its
-    # first argument is a string/template literal, so re.test(s) (the
-    # RegExp method) is not mistaken for a node:test subtest.
-    "tests": re.compile(
-        r"(?<![\w.])test(?:\s*\.\s*\w+|\[\s*[\'\"](?:skip|todo)[\'\"]\s*\])*\s*\("
-        r"|\b\w+\s*\.\s*test(?:\s*\.\s*\w+)*\s*\(\s*['\"`]"
-    ),
-    # .skip/.todo access (call, property read, or alias assignment such as
-    # `const s = test.skip;`), a skip/todo key anywhere in an options
-    # object (first position or not, quoted or bare, keyed or shorthand),
-    # and a computed/bracket key or access (`test['skip']`, `{['skip']: 1}`).
-    "skips": re.compile(
-        r"\.\s*(?:skip|todo)\b"
-        r"|[{,]\s*['\"]?(?:skip|todo)['\"]?\s*[:,}]"
-        r"|\[\s*['\"](?:skip|todo)['\"]\s*\]"
-    ),
-    # Bare assert(x), assert.ok(x), and any chain depth, e.g.
-    # assert.strict.equal(...), with optional whitespace around each dot.
+    "tests": re.compile(_JS_TEST_NAME + _JS_MEMBER + r"*\s*\("),
     "assertions": re.compile(r"\bassert(?:\s*\.\s*\w+)*\s*\("),
 }
+_JS_SKIP_ACCESS = re.compile(
+    _JS_TEST_NAME + r"(?:\s*\.\s*\w+)*?\s*"
+    r"(?:\.\s*(?:skip|todo)\b|\[\s*['\"`](?:skip|todo)['\"`]\s*\])"
+)
+_JS_TOKENS = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'|`[^`]*`|\w+|[^\s]", re.DOTALL)
+
 
 _JS_REGEX_PRECEDING_KEYWORDS = {
     "return",
@@ -429,35 +474,50 @@ _JS_REGEX_PRECEDING_KEYWORDS = {
 }
 
 
-def _js_skip_line_comment(text: str, i: int) -> int:
-    n = len(text)
-    while i < n and text[i] != "\n":
-        i += 1
-    return i
-
-
-def _js_skip_block_comment(text: str, i: int, out: list[str]) -> int:
+def _js_skip_block_comment(text: str, i: int) -> int:
     """JS block comments do not nest."""
     n = len(text)
     end = text.find("*/", i + 2)
     stop = end + 2 if end != -1 else n
-    out.append(_blank(text[i:stop]))
     return stop
 
 
+def _js_decode_key(content: str) -> str:
+    """Decode static key escapes; unknown escapes retain their escaped character."""
+
+    def decode(match: re.Match[str]) -> str:
+        escape = match[0][1:]
+        if escape.startswith("x"):
+            return chr(int(escape[1:], 16))
+        if escape.startswith("u"):
+            digits = escape[1:].strip("{}")
+            scalar = int(digits, 16)
+            return chr(scalar) if scalar <= 0x10FFFF else ""
+        return {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}.get(
+            escape, escape
+        )
+
+    return re.sub(r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\}|.)", decode, content)
+
+
+def _js_key_literal(text: str, i: int, end: int) -> str:
+    quote = text[i]
+    value = _js_decode_key(text[i + 1 : end - 1])
+    if value in ("skip", "todo"):
+        literal = quote + value + quote
+        return literal + " " * (end - i - len(literal))
+    return quote + _blank(text[i + 1 : end - 1]) + quote
+
+
 def _js_consume_quoted(text: str, i: int, quote: str, out: list[str]) -> int:
-    n = len(text)
     j = i + 1
-    while j < n and text[j] != quote:
+    while j < len(text) and text[j] not in (quote, "\n", "\r"):
         j += 2 if text[j] == "\\" else 1
-    end = min(j + 1, n)
-    content = text[i + 1 : j]
-    # Keep "skip"/"todo" verbatim: a bracket-indexed key (test['skip'],
-    # {['skip']: true}) must still be visible to the skip pattern. Every
-    # other string has its contents blanked, preserving quotes and offsets.
-    out.append(
-        text[i:end] if content in ("skip", "todo") else quote + _blank(text[i + 1 : j]) + quote
-    )
+    if j < len(text) and text[j] == quote:
+        out.append(_js_key_literal(text, i, j + 1))
+        return j + 1
+    end = min(j, len(text))
+    out.append(quote + _blank(text[i + 1 : end]))
     return end
 
 
@@ -515,6 +575,9 @@ def _js_consume_slash(text: str, i: int, out: list[str]) -> tuple[int, bool]:
 
 def _js_code_step(text: str, i: int, out: list[str], regex_ok: bool) -> tuple[int, bool, int]:
     ch = text[i]
+    if text[i : i + 2] in ("++", "--"):
+        out.append(text[i : i + 2])
+        return i + 2, False, 0
     if ch == "/" and regex_ok:
         new_i, ok = _js_consume_slash(text, i, out)
         return new_i, ok, 0
@@ -537,12 +600,14 @@ def _js_code_step(text: str, i: int, out: list[str], regex_ok: bool) -> tuple[in
 def _js_step(text: str, i: int, out: list[str], regex_ok: bool) -> tuple[int, bool, int]:
     """Consume one token; return (end, regex_allowed, brace_delta)."""
     ch = text[i]
+    end = None
     if text.startswith("//", i):
-        end = _js_skip_line_comment(text, i)
+        end = _line_comment_end(text, i)
+    elif text.startswith("/*", i):
+        end = _js_skip_block_comment(text, i)
+    if end is not None:
         out.append(_blank(text[i:end]))
         return end, regex_ok, 0
-    if text.startswith("/*", i):
-        return _js_skip_block_comment(text, i, out), regex_ok, 0
     if ch in "\"'":
         return _js_consume_quoted(text, i, ch, out), False, 0
     if ch == "`":
@@ -562,15 +627,20 @@ def _js_consume_interpolation(text: str, i: int, out: list[str]) -> int:
 
 
 def _js_consume_template(text: str, i: int, out: list[str]) -> int:
+    start = len(out)
+    dynamic = False
     out.append("`")
     j = i + 1
     while j < len(text):
         ch = text[j]
         if ch == "`":
             out.append("`")
+            if not dynamic:
+                out[start:] = [_js_key_literal(text, i, j + 1)]
             return j + 1
         if text.startswith("${", j):
-            out.append("  ")
+            dynamic = True
+            out.append("${")
             j = _js_consume_interpolation(text, j + 2, out)
             continue
         end = min(j + 2, len(text)) if ch == "\\" else j + 1
@@ -590,23 +660,68 @@ def strip_mjs(text: str) -> str:
 
 def mjs_test_matches(code: str) -> Iterator[re.Match[str]]:
     for match in MJS_PATTERNS["tests"].finditer(code):
-        # Do not retry a rejected receiver.test(variable) as a bare test call
-        # merely because there is whitespace between the dot and test.
-        if not code[: match.start()].rstrip().endswith("."):
-            yield match
+        if code[: match.start()].rstrip().endswith("."):
+            continue
+        # t is the supported TestContext receiver; no arbitrary regex.test calls.
+        if re.match(r"t\s*\.", match[0]) and not code[match.end() :].lstrip().startswith(
+            ("'", '"', "`")
+        ):
+            continue
+        yield match
+
+
+def _js_parts(tokens: Iterator[str], closing: str) -> Iterator[list[str]]:
+    """Split direct arguments/properties, leaving nested groups in their part."""
+    depth = 0
+    part: list[str] = []
+    for value in tokens:
+        if not depth and value == closing:
+            yield part
+            return
+        if not depth and value == ",":
+            yield part
+            part = []
+            continue
+        depth += (value in "([{") - (value in ")]}")
+        part.append(value)
+    yield part
+
+
+def _js_skip_property(part: list[str]) -> bool:
+    if not part:
+        return False
+    key_end = 1
+    key = part[0]
+    if key == "[" and len(part) >= 3 and part[2] == "]":
+        key, key_end = part[1], 3
+    if key.strip("'\"`") not in ("skip", "todo"):
+        return False
+    value = part[key_end:]
+    return value not in ([":", "false"], [":", "0"], [":", "''"], [":", '""'], [":", "``"])
+
+
+def _js_option_skips(code: str, match: re.Match[str]) -> int:
+    tokens = (token[0] for token in _JS_TOKENS.finditer(code, match.end()))
+    total = 0
+    for index, argument in enumerate(_js_parts(tokens, ")")):
+        if index > 1:
+            break
+        if argument and argument[0] == "{":
+            total += sum(_js_skip_property(part) for part in _js_parts(iter(argument[1:]), "}"))
+    return total
 
 
 def count_mjs(text: str) -> Counter[str]:
     code = strip_mjs(text)
-    totals = Counter(
+    tests = list(mjs_test_matches(code))
+    return Counter(
         {
-            category: len(pattern.findall(code))
-            for category, pattern in MJS_PATTERNS.items()
-            if category != "tests"
+            "tests": len(tests),
+            "assertions": len(MJS_PATTERNS["assertions"].findall(code)),
+            "skips": len(_JS_SKIP_ACCESS.findall(code))
+            + sum(_js_option_skips(code, match) for match in tests),
         }
     )
-    totals["tests"] = sum(1 for _ in mjs_test_matches(code))
-    return totals
 
 
 # ── Dispatch, snapshotting and comparison ───────────────────────────────────
