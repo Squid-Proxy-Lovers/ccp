@@ -109,13 +109,16 @@ fn opener_retries_through_busy_while_another_connection_holds_the_lease() {
     holder.execute_batch("BEGIN EXCLUSIVE; COMMIT;").unwrap();
     let mut holder = Some(holder);
     let mut retries = 0;
-    let result = acquire_with_retry(&path, || {
-        // This runs only after a BUSY attempt has dropped its connection. Keep
-        // the lease until then, and permit exactly one retry after releasing it.
-        retries += 1;
-        drop(holder.take());
-        retries == 1
-    });
+    let result = acquire_with_retry(
+        &path,
+        || {
+            // Reached only after an attempt returned BUSY. Permit one retry.
+            retries += 1;
+            retries == 1
+        },
+        // Runs after the BUSY attempt is dropped: release the lease only now.
+        || drop(holder.take()),
+    );
     assert!(
         result.is_ok(),
         "opener must retry through contention instead of failing on the first attempt: {:?}",
@@ -126,6 +129,28 @@ fn opener_retries_through_busy_while_another_connection_holds_the_lease() {
         "opener must encounter contention and retry after the held lease is released"
     );
     drop(result);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn opener_keeps_retrying_a_held_lease_until_its_policy_stops_then_returns_busy() {
+    let path = database();
+    let holder = acquire(&path).unwrap();
+    let mut asked = 0;
+    let mut waits = 0;
+    let error = acquire_with_retry(
+        &path,
+        || {
+            asked += 1;
+            asked <= 3
+        },
+        || waits += 1,
+    )
+    .unwrap_err();
+    assert_eq!(error.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
+    // Every attempt reached the BUSY handling: three retries, then the stop.
+    assert_eq!((asked, waits), (4, 3));
+    drop(holder);
     fs::remove_file(path).unwrap();
 }
 
