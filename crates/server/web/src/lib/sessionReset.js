@@ -19,6 +19,7 @@ export function clearedSessionState() {
     locked: false,
     lockMessage: '',
     createdWorkspace: null,
+    accessSecret: null,
     view: 'overview',
   };
 }

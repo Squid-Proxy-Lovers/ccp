@@ -9,6 +9,7 @@
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {formFrozen} from '../../lib/identitySwitch.js';
   import {mountedView} from '../../lib/viewLifecycle.js';
   import {invitationDeadline} from '../../lib/model.js';
   import {changeAdmission, FormDraft, roles, type Report} from './actions';
@@ -26,12 +27,14 @@
       if (app.pending) throw new Error('Resolve the original invitation action first.');
       const workspace = app.workspace!;
       await changeAdmission(app, onoutcome, workspace, 'individual',
-        {workspace_id: workspace.id, role: submitted.get('role'), expires_at: invitationDeadline(submitted.get('hours'))});
-      submitted.drop();
+        {workspace_id: workspace.id, role: submitted.get('role'), expires_at: invitationDeadline(submitted.get('hours'))}, () => submitted.drop());
     }, 'invite-submit');
   }
 
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, 'invite-submit'));
+
   async function discard() {
+    if (frozen) return;
     if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local invitation draft?', confirm: 'Discard draft', destructive: true})) return;
     form.drop();
     notice('Local invitation draft discarded.');
@@ -43,6 +46,7 @@
     description="One invitation for this workspace. An existing registered client reuses its identity when redeeming it. This does not select the workspace for that client." />
   <CardContent>
     <form class="grid max-w-xl gap-5" onsubmit={submit}>
+      <fieldset disabled={frozen} class="contents">
       {#if unused}
         <Alert tone="warning" title="This closes the unused initial group phase">
           <p>Issuing an individual invitation permanently closes the unused initial group phase, even before any client redeems it. Choose group enrollment first if you need this phase.</p>
@@ -61,6 +65,7 @@
         <Button type="submit" busy={app.working('invite-submit')}>Create invitation</Button>
         {#if form.touched}<Button variant="ghost" onclick={discard}>Discard draft</Button>{/if}
       </div>
+      </fieldset>
     </form>
   </CardContent>
 </Card>

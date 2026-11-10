@@ -4,6 +4,7 @@
   import SiteHeader from './components/SiteHeader.svelte';
   import Toaster from './components/Toaster.svelte';
   import LoginView from './components/LoginView.svelte';
+  import RetainedAccess from './components/RetainedAccess.svelte';
   import LockedView from './components/LockedView.svelte';
   import ShellSkeleton from './components/ShellSkeleton.svelte';
   import ConfirmHost from './lib/ui/ConfirmHost.svelte';
@@ -74,6 +75,7 @@
     <div class="flex min-w-0 flex-1 flex-col">
       <SiteHeader onmenu={() => (drawer = true)} onrefresh={refresh} />
       <main class="mx-auto w-full max-w-[1400px] flex-1 p-4 md:p-6 lg:p-8">
+        <RetainedAccess class="mb-6" />
         <DeletionTracker class="mb-6" />
         {#key `${app.workspace?.id ?? ''}:${app.view}:${app.refreshTick}`}
           {#if app.view === 'workspaces'}<Workspaces />

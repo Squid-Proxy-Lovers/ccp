@@ -7,7 +7,6 @@
   import Alert from '../../lib/ui/Alert.svelte';
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
-  import Secret from '../../lib/ui/Secret.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
   import {mountedView} from '../../lib/viewLifecycle.js';
@@ -94,10 +93,6 @@
   {:else if outcome.phase === 'done'}
     <h2 bind:this={heading} id="access-outcome-title" tabindex="-1" class="text-[15px] font-semibold tracking-tight outline-none">{outcome.title}</h2>
     <p class="text-sm">{outcome.message}</p>
-    {#if outcome.secret}
-      <Secret title={outcome.secret.title} value={outcome.secret.value}
-        ondismiss={() => { if (outcome.phase === 'done') outcome = {...outcome, secret: undefined}; }} />
-    {/if}
     {#if outcome.note}<p class="text-sm text-muted-foreground">{outcome.note}</p>{/if}
     <Button busy={app.working('access-reread')} onclick={reread}>{outcome.reread}</Button>
   {:else}

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The locked-screen discard decision, including the asynchronous confirmation.
 export function lockedSignInBlocked(state) {
-  return state.workspaceCreates > 0;
+  return state.workspaceCreates > 0 || state.accessWrites > 0;
 }
 
 function discardSnapshot(state) {
@@ -10,6 +10,7 @@ function discardSnapshot(state) {
   return {
     recovery: state.recoveryText(),
     ownerWorkspaceId: state.createdWorkspace?.workspace_id ?? null,
+    accessSecret: state.accessSecret,
     deletion: state.deletion,
     pending: state.pending,
     session: state.session,
@@ -20,14 +21,15 @@ export async function discardAndSignIn(state, confirmAction, reset) {
   if (lockedSignInBlocked(state)) return;
   const snapshot = discardSnapshot(state);
   const recovery = snapshot.recovery;
+  const accessSecret = Boolean(snapshot.accessSecret);
   const ownerKey = snapshot.ownerWorkspaceId !== null;
-  if (!recovery && !ownerKey && !state.deletion) { reset(); return; }
-  const deletionOnly = Boolean(state.deletion && (!state.pending || state.pending === state.deletion.reference)) && !recovery && !ownerKey;
+  if (!recovery && !ownerKey && !accessSecret && !state.deletion) { reset(); return; }
+  const deletionOnly = Boolean(state.deletion && (!state.pending || state.pending === state.deletion.reference)) && !recovery && !ownerKey && !accessSecret;
   const ok = await confirmAction(deletionOnly
     ? {title: 'Return to sign in?', body: 'Deletion tracking stays on this page. Any server request remains uncancelled.', confirm: 'Return to sign in'}
     : {
       title: 'Discard local work?',
-      body: `Any uncertain server write remains uncertain.${ownerKey ? ' This also discards the workspace owner key shown below.' : ''} Copy your work first if you need it.`,
+      body: `Any uncertain server write remains uncertain.${ownerKey ? ' This also discards the workspace owner key shown below.' : ''}${accessSecret ? ' This also discards the one-time access secret shown below.' : ''} Copy your work first if you need it.`,
       confirm: 'Discard and sign in', destructive: true,
     });
   if (!ok || lockedSignInBlocked(state)) return;

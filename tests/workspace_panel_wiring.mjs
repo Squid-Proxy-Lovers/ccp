@@ -48,7 +48,7 @@ test('[source] reset() delegates what it clears to clearedSessionState()', () =>
 
 test('[source] hasUnsavedIdentityWork and beforeunload both read the shared hasUnsavedWork()', () => {
   assert.match(app, /from '\.\/unsavedWork\.js'/);
-  assert.match(app, /get hasUnsavedIdentityWork\(\): boolean \{ return hasUnsavedWork\(\{drafts: this\.drafts, createdWorkspace: this\.createdWorkspace\}\); \}/);
+  assert.match(app, /get hasUnsavedIdentityWork\(\): boolean \{ return hasUnsavedWork\(\{drafts: this\.drafts, createdWorkspace: this\.createdWorkspace\}\) \|\| this\.accessSecret !== null; \}/);
   const beforeunload = slice(app, "addEventListener('beforeunload'", ');');
   assert.match(beforeunload, /this\.hasUnsavedIdentityWork/);
 });
@@ -63,13 +63,13 @@ test('[source] signOut delegates to runSignOut', () => {
   // too, not just in hasUnsavedIdentityWork() -- anchored so the real
   // `this.createdWorkspace !== null` expression can't be swapped for a
   // hardcoded `false`.
-  assert.match(signOut, /body: `Signing out discards \$\{unsavedWorkSummary\(draftLabels\(this\.drafts\), this\.createdWorkspace !== null\)\}/);
+  assert.match(signOut, /body: `Signing out discards \$\{unsavedWorkSummary\(draftLabels\(this\.drafts\), this\.createdWorkspace !== null, this\.accessSecret !== null\)\}/);
 });
 
 test('[source] login delegates to runLogin', () => {
   const login = slice(app, 'async login(', '\n\n  async signOut');
   assert.match(login, /runLogin\(\{/);
-  assert.match(login, /clearForNewIdentity:\s*\(\)\s*=>\s*\{\s*this\.drafts\s*=\s*\{\};\s*this\.createdWorkspace\s*=\s*null;\s*\}/);
+  assert.match(login, /clearForNewIdentity:\s*\(\)\s*=>\s*\{\s*this\.drafts\s*=\s*\{\};\s*this\.createdWorkspace\s*=\s*null;\s*this\.accessSecret\s*=\s*null;\s*\}/);
   // A failed login must still reach run()'s catch (which shows the error
   // notice): a `.catch(() => undefined)` tacked onto this call would swallow
   // it silently while every substring check above still passes.
@@ -90,7 +90,7 @@ test('[source] hashKeySwitch delegates to runIdentitySwitch, comparing by identi
   assert.match(hashKeySwitch, /sameIdentity:\s*session\s*=>\s*Boolean\(this\.session\)\s*&&\s*identityKey\(session as Session\)\s*===\s*identityKey\(this\.session as Session\)/);
   assert.doesNotMatch(hashKeySwitch, /sameIdentity:[^,]*\bsignature\(/, 'identity comparison must never use signature() (it includes the CSRF token, which always differs)');
   assert.match(hashKeySwitch, /adoptSession:\s*session\s*=>\s*\{ adopted = session as Session; adoptSession\(this, session\); \}/);
-  assert.match(hashKeySwitch, /clearForNewIdentity:\s*\(\)\s*=>\s*\{\s*this\.drafts\s*=\s*\{\};\s*this\.createdWorkspace\s*=\s*null;\s*\}/);
+  assert.match(hashKeySwitch, /clearForNewIdentity:\s*\(\)\s*=>\s*\{\s*this\.drafts\s*=\s*\{\};\s*this\.createdWorkspace\s*=\s*null;\s*this\.accessSecret\s*=\s*null;\s*\}/);
 });
 
 test('[source] hashKeySwitch\'s declined notice fires on the plain \'declined\' outcome, not a tautology-narrowed one', () => {
@@ -123,11 +123,11 @@ test('[source] discardAndSignIn treats an undismissed owner key as something to 
   const fn = slice(app, 'async discardAndSignIn(', '\n  }\n}');
   assert.match(fn, /await discardAndSignIn\(this, confirmAction, \(\) => this\.reset\(\)\)/);
   assert.match(lockedSignIn, /const ownerKey = snapshot\.ownerWorkspaceId !== null;/);
-  assert.match(lockedSignIn, /if \(!recovery && !ownerKey && !state\.deletion\)/);
+  assert.match(lockedSignIn, /if \(!recovery && !ownerKey && !accessSecret && !state\.deletion\)/);
   // An owner key must also rule out the deletion-only dialog wording: that
   // dialog never mentions the owner key, so showing it while one is pending
   // would discard the key with no warning at all.
-  assert.match(lockedSignIn, /deletionOnly = Boolean\(state\.deletion && \(!state\.pending \|\| state\.pending === state\.deletion\.reference\)\) && !recovery && !ownerKey;/);
+  assert.match(lockedSignIn, /deletionOnly = Boolean\(state\.deletion && \(!state\.pending \|\| state\.pending === state\.deletion\.reference\)\) && !recovery && !ownerKey && !accessSecret;/);
   assert.match(lockedSignIn, /\$\{ownerKey \? ' This also discards the workspace owner key shown below\.' : ''\}/);
 });
 
@@ -299,7 +299,7 @@ test('[source] CreateNodeForm.svelte offers Create before Discard, like Workspac
 
 test('[source] both locked-screen sign-in actions use the create-in-flight guard and neutral status note', () => {
   assert.equal((lockedView.match(/disabled=\{app\.waitingForWorkspaceCreate\} onclick=\{\(\) => app\.discardAndSignIn\(\)\}/g) ?? []).length, 2);
-  assert.match(lockedView, /\{#if app\.waitingForWorkspaceCreate\}\s*<p role="status" class="[^"]*text-muted-foreground">Waiting for the workspace create to finish\.<\/p>/);
+  assert.match(lockedView, /\{#if app\.waitingForWorkspaceCreate\}\s*<p role="status" class="[^"]*text-muted-foreground">\{app\.accessWrites > 0 \? 'Waiting for the access action to finish\.' : 'Waiting for the workspace create to finish\.'\}<\/p>/);
   assert.match(app, /get waitingForWorkspaceCreate\(\): boolean \{ return lockedSignInBlocked\(this\); \}/);
   const create = slice(app, 'async createWorkspace(', '\n\n  workspaceAcknowledged(');
   assert.match(create, /createWorkspaceFlow\(\{\s*activity: this,/);

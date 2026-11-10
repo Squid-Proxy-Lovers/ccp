@@ -82,7 +82,7 @@
     app.effect(() => document.getElementById('page-title')?.focus());
   }
 
-  const report = (next: Result) => { outcome = next; };
+  const report = (next: Result) => app.effect(() => { outcome = next; });
 </script>
 
 <div class="space-y-6">

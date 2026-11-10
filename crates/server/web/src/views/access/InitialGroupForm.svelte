@@ -11,6 +11,7 @@
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
+  import {formFrozen} from '../../lib/identitySwitch.js';
   import {mountedView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
   import {initialBounds} from '../../lib/model.js';
@@ -33,15 +34,17 @@
       const bounds = initialBounds(submitted.get('capacity'), submitted.get('hours'));
       const body = {workspace_id: enrollment.workspace_id, role: submitted.get('role'), ...bounds};
       const consent = submitted.get('consent') === 'yes';
-      const sent = await changeEnrollment(app, onoutcome, enrollment, 'initial', body, consent, () => confirmAction({
+      await changeEnrollment(app, onoutcome, enrollment, 'initial', body, consent, () => confirmAction({
         title: 'Open the single initial group?', confirm: 'Open initial group',
         body: `Open the single initial group in ${workspace.name}? Capacity: ${bounds.max_clients === null ? 'No count limit' : bounds.max_clients}. Deadline: ${bounds.expires_at === null ? 'None' : stamp(bounds.expires_at)}. It cannot reopen once closed.`,
-      }));
-      if (sent) submitted.drop();
+      }), () => submitted.drop());
     }, 'initial-group-submit');
   }
 
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, 'initial-group-submit'));
+
   async function discard() {
+    if (frozen) return;
     if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local group draft?', confirm: 'Discard draft', destructive: true})) return;
     form.drop();
     onclose();
@@ -53,6 +56,7 @@
   <CardHeader title="Configure initial group enrollment" description={`Workspace ${app.workspace?.name} · ${enrollment.workspace_id}`} />
   <CardContent>
     <form class="grid max-w-xl gap-5" onsubmit={submit}>
+      <fieldset disabled={frozen} class="contents">
       <Alert tone="warning" title="One initial group per workspace">
         <p>Choose a positive admission capacity, a positive lifetime, or both. There is no numeric default. This phase cannot reopen after closure.</p>
         <p>Copy the one-time group secret privately. A lost secret cannot be retrieved or replaced by reopening the group.</p>
@@ -79,6 +83,7 @@
         <Button type="submit" busy={app.working('initial-group-submit')}>Create initial group invitation</Button>
         <Button variant="ghost" onclick={discard}>Discard group draft</Button>
       </div>
+      </fieldset>
     </form>
   </CardContent>
 </Card>
