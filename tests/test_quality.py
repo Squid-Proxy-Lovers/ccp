@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import hashlib
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -44,6 +46,50 @@ def archive(member="tool", symlink=False):
             info.size = 3
             bundle.addfile(info, io.BytesIO(b"new"))
     return output.getvalue()
+
+
+def counted_function_spans(checker, name, source):
+    if name.endswith(".py"):
+        lines = source.splitlines(keepends=True)
+        offsets = [0]
+        for line in lines:
+            offsets.append(offsets[-1] + len(line))
+        return [
+            (
+                offsets[min([node.lineno, *(d.lineno for d in node.decorator_list)]) - 1],
+                offsets[node.end_lineno],
+            )
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+        ]
+    rust = name.endswith(".rs")
+    code = checker.strip_rust(source) if rust else checker.strip_mjs(source)
+    pattern = checker.RUST_PATTERNS["tests"] if rust else checker.MJS_PATTERNS["tests"]
+    spans = []
+    matches = pattern.finditer(code) if rust else checker.mjs_test_matches(code)
+    for match in matches:
+        opening, closing = ("{", "}") if rust else ("(", ")")
+        start = code.index(opening, match.start())
+        depth = 1
+        end = start + 1
+        while depth:
+            depth += (code[end] == opening) - (code[end] == closing)
+            end += 1
+        spans.append((match.start(), end))
+    return spans
+
+
+def comment_function(name, source, start, end):
+    fragment = source[start:end]
+    if name.endswith(".py"):
+        indent = fragment[: len(fragment) - len(fragment.lstrip())]
+        replacement = (
+            indent + "pass\n" + "".join("# " + line for line in fragment.splitlines(keepends=True))
+        )
+    else:
+        replacement = "\n".join("// " + line for line in fragment.split("\n")) + "\n"
+    return source[:start] + replacement + source[end:]
 
 
 class ToolIntegrityTests(unittest.TestCase):
@@ -379,6 +425,202 @@ class TestIntegrityGateTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.run_check(commented)
         self.run_check(commented, allow=True)
+
+    def test_language_lexer_probes(self):
+        checker = load_script("check-test-integrity.py")
+        rust_test = "#[test]\nfn test_live() { assert!(true); }\n"
+        js_test = "test('live', () => { assert(true); });\n"
+        # Each row checks all categories: tests, assertions, skips.
+        probes = [
+            (
+                "lifetime before commented test",
+                ".rs",
+                'const S: &\'static str = "s";\n// #[test]\n// fn test_hidden() {}\n' + rust_test,
+                (1, 1, 0),
+            ),
+            (
+                "nested block comment",
+                ".rs",
+                "/* outer /* inner */ #[test] fn test_hidden() {} */\n" + rust_test,
+                (1, 1, 0),
+            ),
+            ("raw slash quotes", ".rs", 'let s = r#"a"//"#;\n' + rust_test, (1, 1, 0)),
+            ("raw internal quote", ".rs", 'let s = r#"a " b"#;\n' + rust_test, (1, 1, 0)),
+            (
+                "raw many hashes",
+                ".rs",
+                'let s = br###"#[test] assert!(false);"###;\n' + rust_test,
+                (1, 1, 0),
+            ),
+            (
+                "raw no hashes",
+                ".rs",
+                'let s = r"#[test] assert!(false);";\n' + rust_test,
+                (1, 1, 0),
+            ),
+            (
+                "escaped bytes",
+                ".rs",
+                'let s = b"\\"// #[test] assert!(false)";\n' + rust_test,
+                (1, 1, 0),
+            ),
+            (
+                "chars versus lifetimes",
+                ".rs",
+                r"let chars = ('x', '\n', '\u{22}', '\''); fn f<'a>(s: &'a str) {}"
+                + "\n"
+                + rust_test,
+                (1, 1, 0),
+            ),
+            ("quote char", ".rs", "let c = '\"';\n" + rust_test, (1, 1, 0)),
+            ("slash char", ".rs", "let c = '/';\n" + rust_test, (1, 1, 0)),
+            (
+                "doc comments",
+                ".rs",
+                "/// #[test] assert!(false)\n/** #[test] assert!(false) */\n" + rust_test,
+                (1, 1, 0),
+            ),
+            (
+                "cfg_attr ignore",
+                ".rs",
+                '#[cfg_attr(all(unix, feature = "x"), ignore)]\n' + rust_test,
+                (1, 1, 1),
+            ),
+            ("regex slash class", ".mjs", "const r = /[//]/;\n// " + js_test + js_test, (1, 1, 0)),
+            ("regex quote", ".mjs", 'const r = /"/;\n// ' + js_test + js_test, (1, 1, 0)),
+            ("regex escaped slash star", ".mjs", r"const r = /a\/*b/;" + "\n" + js_test, (1, 1, 0)),
+            (
+                "regex literal block opener",
+                ".mjs",
+                r"const r = /[/*]/;" + "\n" + js_test,
+                (1, 1, 0),
+            ),
+            (
+                "regex return keyword",
+                ".mjs",
+                'function f() { return /"/; }\n// ' + js_test + js_test,
+                (1, 1, 0),
+            ),
+            ("regex after brace", ".mjs", '{} /"/.test(s);\n// ' + js_test + js_test, (1, 1, 0)),
+            (
+                "template comment",
+                ".mjs",
+                "const s = `${1 /* assert(true) */}`;\n" + js_test,
+                (1, 1, 0),
+            ),
+            (
+                "nested templates",
+                ".mjs",
+                "const s = `${{key: `${1 /* assert(false) */}`}}`;\n" + js_test,
+                (1, 1, 0),
+            ),
+            ("template live code", ".mjs", "const s = `${assert(true)}`;", (0, 1, 0)),
+            ("template contents", ".mjs", "const s = `test('hidden') assert(true)`;", (0, 0, 0)),
+            ("computed skip key", ".mjs", "test('live', {['skip']: true}, () => {});", (1, 0, 1)),
+            ("computed skip call", ".mjs", "test['skip']('live', () => {});", (1, 0, 1)),
+            ("computed todo call", ".mjs", 'test["todo"]("live", () => {});', (1, 0, 1)),
+            ("regex test method", ".mjs", "re.test(s);", (0, 0, 0)),
+            ("spaced regex test method", ".mjs", "re . test(s);", (0, 0, 0)),
+            ("subtest string", ".mjs", "t.test('live', () => {});", (1, 0, 0)),
+            ("subtest template", ".mjs", "t.test(`live`, () => {});", (1, 0, 0)),
+            ("spaced assert member", ".mjs", "assert . equal(1, 1);", (0, 1, 0)),
+            ("JS URL", ".mjs", 'const s = "https://example.com/*";\n' + js_test, (1, 1, 0)),
+            ("Rust URL", ".rs", 'let s = "https://example.com/*";\n' + rust_test, (1, 1, 0)),
+            (
+                "Python URL",
+                ".py",
+                's = "https://example.com/#"\ndef test_live(): assert True',
+                (1, 1, 0),
+            ),
+            (
+                "triple quoted tests",
+                ".py",
+                '"""\ndef test_hidden():\n    assert False\n"""\ndef test_live(): assert True',
+                (1, 1, 0),
+            ),
+            (
+                "f-string reused quotes",
+                ".py",
+                's = f"{"#"}"\ndef test_live(): assert True',
+                (1, 1, 0),
+            ),
+            ("assert parenthesized", ".py", "def test_live(): assert(True)", (1, 1, 0)),
+            ("unrelated assert member", ".py", "other.assertSomething()", (0, 0, 0)),
+            (
+                "Python assertion calls",
+                ".py",
+                "def test_live():\n self.assertEqual(1, 1)\n self.assertRaises(ValueError, f)\n with pytest.raises(ValueError): f()",
+                (1, 3, 0),
+            ),
+            ("pytest skip", ".py", "def test_live(): pytest.skip('reason')", (1, 0, 1)),
+            (
+                "unittest SkipTest",
+                ".py",
+                "def test_live(): raise unittest.SkipTest('reason')",
+                (1, 0, 1),
+            ),
+            ("imported SkipTest", ".py", "def test_live(): raise SkipTest", (1, 0, 1)),
+            ("self skipTest", ".py", "def test_live(self): self.skipTest('reason')", (1, 0, 1)),
+            ("mark skip", ".py", "@mark.skip\ndef test_live(): pass", (1, 0, 1)),
+            (
+                "pytest mark skipif",
+                ".py",
+                "@pytest.mark.skipif(True)\ndef test_live(): pass",
+                (1, 0, 1),
+            ),
+            ("unittest skip", ".py", "@unittest.skip('reason')\ndef test_live(): pass", (1, 0, 1)),
+            ("imported skip", ".py", "@skip('reason')\ndef test_live(): pass", (1, 0, 1)),
+            ("imported skipIf", ".py", "@skipIf(True, 'reason')\ndef test_live(): pass", (1, 0, 1)),
+            ("skip class", ".py", "@unittest.skip('reason')\nclass Tests: pass", (0, 0, 1)),
+            (
+                "fallback drops strings and fstrings",
+                ".py",
+                'future syntax\ns = f"{"#"}"\ns = "assert True"\n# assert False\ndef test_live(): assert(True)',
+                (1, 1, 0),
+            ),
+            (
+                "heredoc quoted",
+                ".sh",
+                ": <<'X'\nexpect_success hidden\nskip hidden\nX\nexpect_success live\n",
+                (0, 1, 0),
+            ),
+            (
+                "heredoc bare",
+                ".sh",
+                ": <<X\nexpect_success hidden\nskip hidden\nX\nexpect_success live\n",
+                (0, 1, 0),
+            ),
+        ]
+        for label, suffix, source, expected in probes:
+            with self.subTest(probe=label):
+                counts = checker.count("probe" + suffix, source)
+                self.assertEqual(
+                    tuple(counts[key] for key in ("tests", "assertions", "skips")), expected
+                )
+        print(f"Lexer probes: {len(probes)} rows")
+
+    def test_commenting_counted_functions_reduces_repository_counts(self):
+        checker = load_script("check-test-integrity.py")
+        checked = 0
+        failures = []
+        paths = checker.git("ls-files", "-z").decode().split("\0")
+        for name in paths:
+            if Path(name).suffix not in (".rs", ".py", ".mjs"):
+                continue
+            source = (ROOT / name).read_text()
+            before = checker.count(name, source)["tests"]
+            spans = counted_function_spans(checker, name, source)
+            self.assertEqual(len(spans), before, name)
+            if os.environ.get("CCP_FULL_INTEGRITY_SELF_CHECK") != "1":
+                spans = spans[:1]  # Sample each file; full scan is an explicit validation run.
+            for start, end in spans:
+                changed = comment_function(name, source, start, end)
+                checked += 1
+                if checker.count(name, changed)["tests"] >= before:
+                    failures.append(f"{name}:{source.count(chr(10), 0, start) + 1}")
+        print(f"Repository integrity self-check: {checked} tests checked, {len(failures)} failures")
+        self.assertGreater(checked, 0)
+        self.assertEqual(failures, [])
 
 
 class NativeResolverTests(unittest.TestCase):
