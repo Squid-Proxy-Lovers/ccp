@@ -8,10 +8,12 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {stamp} from '../../lib/notify.svelte';
   import {exactRevision} from '../../lib/model.js';
   import {PAGE_SIZE, actorText, contentPath, focusId, message, type HistoryPage, type Snapshot} from './content';
+
+  const app = panelApp.forView();
 
   let {entryId}: {entryId: string} = $props();
   let page = $state.raw<HistoryPage | null>(null);
@@ -28,7 +30,7 @@
       page = data;
       after = cursor;
       opened = {};
-      void focusId('entry-history-title');
+      void focusId(app, 'entry-history-title');
     } catch (failure) {
       if (!app.locked) error = message(failure);
     } finally { loading = false; }

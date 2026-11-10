@@ -195,21 +195,38 @@ export function takeFragment(location, history) {
   return params.get('key') || '';
 }
 
-export async function wire(path, body, proof) {
+export const REQUEST_TIMEOUT_MS = 60_000;
+
+async function beforeDeadline(signal, start) {
+  if (signal.aborted) throw signal.reason;
+  let abort;
+  const deadline = new Promise((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, {once: true});
+  });
+  try { return await Promise.race([start(), deadline]); }
+  finally { signal.removeEventListener('abort', abort); }
+}
+
+export async function wire(path, body, proof, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const signal = AbortSignal.timeout(timeoutMs);
   let response;
   try {
-    response = await fetch(path, {
+    response = await beforeDeadline(signal, () => fetch(path, {
       method: body === undefined ? 'GET' : 'POST',
-      credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal,
       headers: body === undefined ? {} : {'Content-Type': 'application/json', 'X-CCP-CSRF': proof},
       body,
-    });
+    }));
   } catch {
     throw new Error('No confirmed response. Check your connection; the request may have completed.');
   }
   let envelope;
-  try { envelope = await response.json(); }
-  catch { throw new Error('The server response could not be verified. The outcome may be unknown.'); }
+  try { envelope = await beforeDeadline(signal, () => response.json()); }
+  catch {
+    if (signal.aborted) throw new Error('No confirmed response. Check your connection; the request may have completed.');
+    throw new Error('The server response could not be verified. The outcome may be unknown.');
+  }
   if (!response.ok || envelope.api_version !== 1 || !('data' in envelope)) {
     const messages = {
       400: 'The request was refused. Check the fields and active session.',

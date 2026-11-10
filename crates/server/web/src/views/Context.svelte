@@ -11,8 +11,7 @@
   import Badge from '../lib/ui/Badge.svelte';
   import Button from '../lib/ui/Button.svelte';
   import Empty from '../lib/ui/Empty.svelte';
-  import {app} from '../lib/app.svelte';
-  import {notice} from '../lib/notify.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
   import {shelfBadgeLabel} from '../lib/drafts.js';
   import {submitDraftCreate, reportCreateFailure} from '../lib/draftCreate.js';
   import {shelfDraftKey, bookDraftKey} from '../lib/draftKeys.js';
@@ -29,6 +28,9 @@
     type Book, type EntryReceipt, type EntrySummary, type Shelf, type Snapshot} from './context/content';
   import type {EntryChange} from './context/entryWrite';
   import type {AdminIntent, ArchiveOutcome} from './context/archiveWrite';
+
+  const app = panelApp.forView();
+  const {notice} = app;
 
   type Stage = 'shelves' | 'books' | 'entries' | 'detail';
   type Detail =
@@ -74,7 +76,7 @@
     detailSerial += 1;
     detailFrom = from;
     stage = 'detail';
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 
   function closeDetail() {
@@ -95,7 +97,7 @@
       shelf = next; book = null; entry = null; archivedEntries = false;
       books.clear(); entries.clear(); closeDetail();
       stage = 'books';
-      if (!wide()) void focusId('books-title');
+      if (!wide()) void focusId(app, 'books-title');
       await books.first();
     }, 'select-shelf');
   }
@@ -106,7 +108,7 @@
       book = next; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'entries';
-      if (!wide()) void focusId('entries-title');
+      if (!wide()) void focusId(app, 'entries-title');
       await entries.first();
     }, 'select-book');
   }
@@ -146,7 +148,7 @@
   function back(to: Stage) {
     stage = to;
     const row = to === 'shelves' && shelf ? `shelf:${shelf.id}` : to === 'books' && book ? `book:${book.id}` : to === 'entries' && entry ? `entry:${entry.id}` : '';
-    void (row ? focusRow(row) : focusId(`${to}-title`));
+    void (row ? focusRow(app, row) : focusId(app, `${to}-title`));
   }
 
   // ---- creation (shelf and book) ---------------------------------------------
@@ -175,7 +177,7 @@
     const failure = await reveal(item);
     if (failure) notice(`${kind === 'shelf' ? 'Shelf' : 'Book'} “${item.name}” created and selected. The list refresh failed: ${failure} Use refresh to try again.`, 'warning');
     else notice(`${kind === 'shelf' ? 'Shelf' : 'Book'} “${item.name}” created.`, 'success');
-    void focusRow(`${kind}:${item.id}`);
+    void focusRow(app, `${kind}:${item.id}`);
     return true;
   }
 

@@ -7,6 +7,8 @@
 // - navigation and session adoption bump `generation`; stale responses are dropped;
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
+import {viewScope} from './viewScope.js';
+import {releaseAction} from './actionOwner.js';
 import {verifySession, sessionRequest, adoptSession, creationRecovery} from './sessionRequests.js';
 import {discardAndSignIn, lockedSignInBlocked} from './lockedSignIn.js';
 import {identityKey, takeFragment, wire, canWrite} from './model.js';
@@ -15,7 +17,7 @@ import {createWorkspaceFlow} from './workspaceCreate.js';
 import {runSignOut, runLogin, runIdentitySwitch, hashSwitchBlocked, unsavedWorkSummary} from './identitySwitch.js';
 import {hasUnsavedWork} from './unsavedWork.js';
 import {clearedSessionState} from './sessionReset.js';
-import {notice, clearToasts} from './notify.svelte';
+import {notice, clearToasts, copyText, bindNoticeScope} from './notify.svelte';
 import {confirmAction} from './ui/confirm.svelte';
 import type {Session, Workspace, PendingWork, View} from './types';
 
@@ -25,7 +27,7 @@ export interface CreatedWorkspace { workspace_id: string; owner_key: string }
 
 const NO_OPERATION_ID = ['lifecycle', 'security', 'transfer', 'admission', 'enrollment', 'client_access'];
 
-class App {
+export class App {
   session = $state.raw<Session | null>(null);
   workspace = $state.raw<Workspace | null>(null);
   inspection = $state.raw<Inspection | null>(null);
@@ -41,6 +43,8 @@ class App {
   lockMessage = $state('');
   busy = $state(false);
   busyKey = $state('');
+  actionOwner = $state.raw<object | null>(null);
+  activationOwner = $state.raw<object | null>(null);
   booted = $state(false);
   /** True while a new session loads its workspaces and opens the first view. */
   activating = $state(false);
@@ -59,6 +63,10 @@ class App {
   #fragmentKey = '';
 
   get waitingForWorkspaceCreate(): boolean { return lockedSignInBlocked(this); }
+
+  forView(): App & {notice: typeof notice; copyText: typeof copyText; confirmAction: typeof confirmAction; wire: typeof wire; effect: (callback: () => void) => void} {
+    return viewScope(this, {notice, copyText, confirmAction, wire, effect: (callback: () => void) => callback()});
+  }
 
   get instanceScope(): boolean { return this.session?.identity.scope.kind === 'instance'; }
   writable = (): boolean => Boolean(this.session && this.workspace && canWrite(this.session, this.workspace));
@@ -109,6 +117,9 @@ class App {
   reset(): void {
     Object.assign(this, clearedSessionState());
     this.generation += 1;
+    releaseAction(this);
+    this.activationOwner = null;
+    this.activating = false;
     clearToasts();
   }
 
@@ -124,20 +135,35 @@ class App {
   /** Serialises user actions. Controls stay focusable; `busyKey` marks which one is working. */
   async run(action: () => unknown, key = 'action'): Promise<void> {
     if (this.busy) return;
+    const owner = {};
+    this.actionOwner = owner;
     this.busy = true;
     this.busyKey = key;
     try { await action(); }
-    catch (error) { if (!this.locked) notice((error as Error).message, 'destructive'); }
-    finally { this.busy = false; this.busyKey = ''; }
+    catch (error) { if (this.actionOwner === owner && !this.locked) notice((error as Error).message, 'destructive'); }
+    finally {
+      if (this.actionOwner === owner) {
+        this.actionOwner = null;
+        this.busy = false; this.busyKey = '';
+      }
+    }
   }
   working(key: string): boolean { return this.busy && this.busyKey === key; }
 
   async activate(session: Session): Promise<void> {
+    const owner = {};
+    this.activationOwner = owner;
     this.activating = true;
-    try { await this.#activate(session); } finally { this.activating = false; }
+    try { await this.#activate(session); }
+    finally {
+      if (this.activationOwner === owner) { this.activationOwner = null; this.activating = false; }
+    }
   }
 
   async #activate(session: Session): Promise<void> {
+    // The admitted login/boot action owns initial loading in the new session.
+    // An unrelated previous action must never lend it a serialization slot.
+    if (!['login', 'boot'].includes(this.busyKey)) releaseAction(this);
     this.generation += 1;
     this.session = session;
     this.locked = false;
@@ -146,10 +172,12 @@ class App {
     this.inspection = null;
     this.view = session.identity.scope.kind === 'instance' ? 'workspaces' : 'overview';
     await this.loadWorkspaces();
+    if (session !== this.session) return;
     if (session.identity.scope.kind === 'workspace') {
       const scoped = this.workspaces.find(item => item.id === session.identity.scope.workspace_id) ?? this.workspaces[0];
       if (scoped) await this.openWorkspace(scoped, 'overview');
     }
+    if (session !== this.session) return;
     notice('Signed in. Each action checks your current key permissions.', 'success');
   }
 
@@ -158,7 +186,9 @@ class App {
    * (never before), so a rejected key leaves the current identity's forms
    * exactly as they were -- nothing orphaned, nothing silently lost. */
   async login(key: string): Promise<void> {
+    const owner = this.actionOwner, previous = this.session;
     await runLogin({
+      isCurrent: () => this.actionOwner === owner && this.session === previous,
       request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
       clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; },
       activate: session => this.activate(session as Session),
@@ -167,7 +197,9 @@ class App {
 
   async signOut(): Promise<void> {
     if (!this.mayLeave()) return;
+    const owner = this.actionOwner, previous = this.session;
     await runSignOut({
+      isCurrent: () => this.actionOwner === owner && this.session === previous,
       hasUnsavedWork: () => this.hasUnsavedIdentityWork,
       confirm: () => confirmAction({
         title: 'Discard local work?',
@@ -185,9 +217,11 @@ class App {
 
   // ---- workspaces and navigation -----------------------------------------
   async loadWorkspaces(after: string | null = null): Promise<void> {
+    const session = this.session;
     const query = new URLSearchParams({limit: '32'});
     if (after) query.set('after', after);
     const data = await this.request<WorkspacePage>(`/api/v1/admin/workspaces?${query}`);
+    if (session !== this.session) return;
     this.workspaces = data.workspaces;
     this.workspacesNext = data.next_cursor;
     this.workspacesAfter = after;
@@ -203,9 +237,20 @@ class App {
 
   async inspectWorkspace(): Promise<void> {
     if (!this.workspace) return;
+    const session = this.session;
     const info = await this.request<Inspection>('/api/v1/admin/workspaces/inspect', {workspace_id: this.workspace.id});
+    if (session !== this.session) return;
     this.workspace = info.workspace;
     this.inspection = info;
+  }
+
+  /** A deliberate view transition returns a fresh scope; the old one retires. */
+  clearWorkspace(): ViewApp {
+    this.workspace = null;
+    this.inspection = null;
+    this.view = this.instanceScope ? 'workspaces' : 'overview';
+    this.generation += 1;
+    return this.forView();
   }
 
   /** Switch view inside the current workspace (or a global view). */
@@ -229,6 +274,7 @@ class App {
    * and lose it, and there is no safe default to ask for instead.
    */
   async createWorkspace(name: string, owner: string, draftKey: string, submitted: Record<string, string>): Promise<CreatedWorkspace | null> {
+    const session = this.session;
     const outcome = await createWorkspaceFlow({
       activity: this,
       hasUndismissedOwnerKey: () => this.createdWorkspace !== null,
@@ -251,9 +297,11 @@ class App {
     if (outcome.blocked) return null;
     if (!outcome.ok) throw outcome.error;
     const result = outcome.result as CreatedWorkspace;
+    if (session !== this.session) return null;
     // Acknowledgement already surfaced the key; a dismissal must stay final.
     try { await this.loadWorkspaces(); }
     catch (error) {
+      if (session !== this.session) return null;
       if (this.locked) this.lock(creationRecovery('/api/v1/admin/workspaces/create', result));
       else notice(`Workspace created. Copy its owner key privately before navigating away. Workspace list refresh failed: ${(error as Error).message}`, 'warning');
     }
@@ -318,7 +366,11 @@ class App {
    * clears them, then activates. See lib/identitySwitch.js.
    */
   async hashKeySwitch(key: string): Promise<void> {
+    const owner = this.actionOwner, previous = this.session;
+    const current = () => this.actionOwner === owner && this.session === previous;
+    let adopted: Session | null = null;
     const outcome = await runIdentitySwitch({
+      isCurrent: current,
       hasUnsavedWork: () => this.hasUnsavedIdentityWork,
       confirm: () => confirmAction({
         title: 'Replace the current session?',
@@ -327,12 +379,12 @@ class App {
       }),
       request: () => wire('/api/v1/admin/session/login', JSON.stringify({key}), 'login'),
       sameIdentity: session => Boolean(this.session) && identityKey(session as Session) === identityKey(this.session as Session),
-      adoptSession: session => adoptSession(this, session),
+      adoptSession: session => { adopted = session as Session; adoptSession(this, session); },
       clearForNewIdentity: () => { this.drafts = {}; this.createdWorkspace = null; },
       activate: session => this.activate(session as Session),
     });
-    if (outcome === 'same') notice('Already signed in with this key.');
-    else if (outcome === 'declined') notice('The login link was removed from this URL. Finish or discard local work, then open your saved link again.', 'warning');
+    if (outcome === 'same' && this.session === adopted) notice('Already signed in with this key.');
+    else if (outcome === 'declined' && current()) notice('The login link was removed from this URL. Finish or discard local work, then open your saved link again.', 'warning');
   }
 
   async discardAndSignIn(): Promise<void> {
@@ -340,4 +392,6 @@ class App {
   }
 }
 
+export type ViewApp = ReturnType<App['forView']>;
 export const app = new App();
+bindNoticeScope(() => app.forView().notice);

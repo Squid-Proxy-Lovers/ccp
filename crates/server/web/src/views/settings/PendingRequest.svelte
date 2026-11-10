@@ -9,10 +9,12 @@
   import CardContent from '../../lib/ui/CardContent.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {RetentionIntent} from '../../lib/model.js';
   import type {SettingsState, Uncertain} from './state.svelte';
+
+  const app = panelApp.forView();
+  const {copyText} = app;
 
   let {ctl, uncertain}: {ctl: SettingsState; uncertain: Uncertain} = $props();
 

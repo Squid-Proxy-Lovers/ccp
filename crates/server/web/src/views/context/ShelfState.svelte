@@ -7,11 +7,13 @@
   import Button from '../../lib/ui/Button.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {ContentAdminIntent, canManageInvitations, shelfState} from '../../lib/model.js';
   import {contentPath, message, type ShelfStateValue} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
+
+  const app = panelApp.forView();
+  const {confirmAction} = app;
 
   let {shelfId, onarchive, onbrowse}: {
     shelfId: string; onarchive: (intent: AdminIntent, outcome: ArchiveOutcome) => void; onbrowse: () => void;
@@ -42,7 +44,7 @@
       });
       if (!ok) return;
       const intent = new ContentAdminIntent(app.session, workspace, current, 'shelf') as unknown as AdminIntent;
-      const outcome = await sendArchive(intent);
+      const outcome = await sendArchive(app, intent);
       if (outcome) onarchive(intent, outcome);
     }, 'shelf-transition');
   }

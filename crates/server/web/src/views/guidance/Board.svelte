@@ -11,12 +11,14 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, notice, stamp} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import {GuidanceIntent, wire} from '../../lib/model.js';
   import type {Session} from '../../lib/types';
   import {MAX_BYTES, bytes, readGuidance, type Board, type Bundle} from './guidance';
+
+  const app = panelApp.forView();
+  const {notice, copyText, confirmAction} = app;
 
   const SAVE = '/api/v1/admin/guidance/save';
 
@@ -90,7 +92,7 @@
     edited = false;
     confirmedRevision = revision;
     try {
-      const bundle = await readGuidance(workspaceId);
+      const bundle = await readGuidance(app, workspaceId);
       const latest = JSON.parse(next.body).scope.kind === 'global' ? bundle.global : bundle.workspace;
       onreplace(bundle);
       notice(`Guidance save confirmed at revision ${revision}. Showing current revision ${latest?.revision}.`, 'success');
@@ -109,7 +111,7 @@
         destructive: true,
       })) return;
       // Keep the draft until the read succeeds; a failed read can lock safely.
-      const bundle = await readGuidance(workspaceId);
+      const bundle = await readGuidance(app, workspaceId);
       app.clean();
       onreplace(bundle);
       notice('Loaded current guidance.');
@@ -118,7 +120,7 @@
 
   function compare(original: GuidanceIntent) {
     void app.run(async () => {
-      const bundle = await readGuidance(workspaceId);
+      const bundle = await readGuidance(app, workspaceId);
       comparison = JSON.parse(original.body).scope.kind === 'global' ? bundle.global : bundle.workspace;
       notice('Current guidance loaded for comparison. Your original draft and operation are unchanged.');
     }, `${busyKey}:compare`);

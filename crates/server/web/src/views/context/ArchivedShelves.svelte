@@ -6,10 +6,12 @@
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {archivedShelfPage} from '../../lib/model.js';
   import {contentPath, type ArchivedShelf, type ContentPage} from './content';
   import {Pager} from './pager.svelte';
+
+  const app = panelApp.forView();
 
   let {oninspect, onreturn}: {oninspect: (shelfId: string) => void; onreturn: () => void} = $props();
 

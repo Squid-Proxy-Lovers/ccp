@@ -9,10 +9,11 @@
   import Field from '../../lib/ui/Field.svelte';
   import Secret from '../../lib/ui/Secret.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import type {Outcome} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, copyText, confirmAction} = app;
 
   let {outcome = $bindable(), onreread}: {outcome: Outcome; onreread: () => Promise<void>} = $props();
   let heading: HTMLHeadingElement | undefined = $state();

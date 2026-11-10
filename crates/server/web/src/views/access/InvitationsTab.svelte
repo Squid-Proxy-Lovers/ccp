@@ -13,14 +13,16 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
   import {invitationPage} from '../../lib/model.js';
   import InviteForm from './InviteForm.svelte';
   import InitialGroupForm from './InitialGroupForm.svelte';
   import ReadmitCard from './ReadmitCard.svelte';
   import {changeAdmission, FormDraft, roleLabel, type Enrollment, type Grant, type Invitation, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {confirmAction} = app;
 
   let {enrollment, grants, configuring = $bindable(false), onoutcome}: {
     enrollment: Enrollment | null; grants: Grant[]; configuring?: boolean; onoutcome: Report;
@@ -55,7 +57,7 @@
       if (!app.mayLeave()) return;
       if (!await confirmAction({title: 'Revoke invitation?', confirm: 'Revoke invitation', destructive: true,
         body: `Revoke invitation ${id} in ${workspace.name}? Existing client grants and content are preserved. Revoking an initial-group invitation also closes its initial window.`})) return;
-      await changeAdmission(onoutcome, workspace, 'revoke', {workspace_id: workspace.id, invitation_id: id});
+      await changeAdmission(app, onoutcome, workspace, 'revoke', {workspace_id: workspace.id, invitation_id: id});
     }, `revoke-invitation:${id}`);
   }
 

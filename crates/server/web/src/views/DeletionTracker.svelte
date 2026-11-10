@@ -10,15 +10,14 @@
   import CardContent from '../lib/ui/CardContent.svelte';
   import Field from '../lib/ui/Field.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
-  import {confirmAction} from '../lib/ui/confirm.svelte';
   import {app} from '../lib/app.svelte';
-  import {copyText, notice, stamp} from '../lib/notify.svelte';
+  import {copyText, stamp} from '../lib/notify.svelte';
   import {deletionTracking} from '../lib/model.js';
   import {inspectDeletion, tracked as current} from './settings/deletion';
 
   let {class: className = ''}: {class?: string} = $props();
 
-  const tracked = $derived(current());
+  const tracked = $derived(current(app.forView()));
   const receipt = $derived(tracked?.receipt ?? null);
   const details = $derived(tracked ? deletionTracking(tracked.reference, receipt) as string : '');
   const canInspect = $derived(Boolean(tracked && app.session && !app.locked && app.session.identity.scope.kind === 'instance'
@@ -38,15 +37,17 @@
   });
 
   async function forget() {
+    const visit = app.forView();
+    const {confirmAction, notice} = visit;
     const value = tracked;
     if (!value) return;
     if (!await confirmAction({title: 'Forget local deletion tracking?', confirm: 'Forget tracking', destructive: true,
       body: 'This does not cancel deletion or a delayed request. Copy the details first.'})) return;
-    if (app.pending === value.reference) { app.pending = null; app.clean(); }
-    app.deletion = null;
+    if (visit.pending === value.reference) { visit.pending = null; visit.clean(); }
+    visit.deletion = null;
     notice('Local deletion tracking forgotten. Any server deletion continues. Read current state before another action.', 'warning');
     await tick();
-    document.getElementById('page-title')?.focus();
+    visit.effect(() => document.getElementById('page-title')?.focus());
   }
 
   function changeKey() {
@@ -87,7 +88,7 @@
         <Button variant="outline" onclick={() => copyText(details)}><Copy /> Copy deletion tracking</Button>
         {#if canInspect}
           <Button variant="outline" busy={app.working('deletion-status')}
-            onclick={() => app.run(() => tracked && inspectDeletion(tracked), 'deletion-status')}><RefreshCw /> Check deletion completion</Button>
+            onclick={() => app.run(() => tracked && inspectDeletion(app.forView(), tracked), 'deletion-status')}><RefreshCw /> Check deletion completion</Button>
         {:else if app.session && !app.locked}
           <Button variant="outline" onclick={changeKey}><KeyRound /> Change key to inspect deletion</Button>
         {/if}

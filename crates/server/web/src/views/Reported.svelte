@@ -18,11 +18,13 @@
   import SkeletonTable from '../lib/ui/skeleton/SkeletonTable.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
   import {table} from '../lib/ui/table';
-  import {confirmAction} from '../lib/ui/confirm.svelte';
-  import {app} from '../lib/app.svelte';
-  import {copyText, notice, stamp} from '../lib/notify.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
+  import {stamp} from '../lib/notify.svelte';
   import {reportedWorkPage, reportedWorkStatus, StatusClearIntent, wire, canManageInvitations} from '../lib/model.js';
   import type {Session, Workspace} from '../lib/types';
+
+  const app = panelApp.forView();
+  const {notice, copyText, confirmAction} = app;
 
   interface Report {
     workspace_id: string; status_id: string; client_id: string; client_name: string; client_disabled: boolean;

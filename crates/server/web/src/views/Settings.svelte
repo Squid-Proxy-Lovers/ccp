@@ -4,7 +4,7 @@
   // or an instance key. Each write keeps the original panel's safety rules.
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
-  import {app} from '../lib/app.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
   import {canChangeLifecycle} from '../lib/model.js';
   import DangerZone from './settings/DangerZone.svelte';
   import Details from './settings/Details.svelte';
@@ -13,6 +13,8 @@
   import Retention from './settings/Retention.svelte';
   import Transfer from './settings/Transfer.svelte';
   import {SettingsState} from './settings/state.svelte';
+
+  const app = panelApp.forView();
 
   const ctl = new SettingsState();
   void ctl.init();

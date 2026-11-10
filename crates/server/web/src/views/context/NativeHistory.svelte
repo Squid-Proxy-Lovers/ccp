@@ -9,10 +9,13 @@
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, stamp} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import {nativeHistoryPage, nativeScalarText} from '../../lib/native_values.js';
   import {focusId} from './content';
+
+  const app = panelApp.forView();
+  const {copyText} = app;
 
   interface Scalar { type: string; value?: unknown }
   interface SourceRecord { ordinal: number; source_table: string; source_key: string; row: {columns: string[]; values: Scalar[]} }
@@ -49,7 +52,7 @@
     } catch {
       if (!app.locked) failed = true;
     } finally { loading = false; }
-    void focusId('source-history-title');
+    void focusId(app, 'source-history-title');
   }
 
   async function copyPage() {

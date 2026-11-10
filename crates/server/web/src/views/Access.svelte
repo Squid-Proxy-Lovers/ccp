@@ -8,9 +8,7 @@
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
   import Tabs from '../lib/ui/Tabs.svelte';
-  import {app} from '../lib/app.svelte';
-  import {notice} from '../lib/notify.svelte';
-  import {confirmAction} from '../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
   import {canManageInvitations, canManageTeam} from '../lib/model.js';
   import ClientsTab from './access/ClientsTab.svelte';
   import InvitationsTab from './access/InvitationsTab.svelte';
@@ -18,6 +16,9 @@
   import TeamTab from './access/TeamTab.svelte';
   import Outcome from './access/Outcome.svelte';
   import {readEnrollment, type Enrollment, type GrantPage, type Outcome as Result} from './access/actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   type Section = 'clients' | 'invitations' | 'enrollment' | 'team';
 
@@ -56,7 +57,7 @@
   async function readWindow() {
     if (!manager) { enrollment = null; return; }
     try {
-      enrollment = await readEnrollment(workspace.id);
+      enrollment = await readEnrollment(app, workspace.id);
       enrollmentError = '';
     } catch (error) {
       if (app.locked) return;
@@ -83,7 +84,7 @@
     await Promise.all([readGrants(grantsAfter), readWindow()]);
     // The button that asked for this read was removed with the outcome.
     await tick();
-    document.getElementById('page-title')?.focus();
+    app.effect(() => document.getElementById('page-title')?.focus());
   }
 
   const report = (next: Result) => { outcome = next; };

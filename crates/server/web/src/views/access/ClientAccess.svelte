@@ -13,12 +13,14 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
-  import {notice, stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import {canManageInvitations, clientRecoveryScope} from '../../lib/model.js';
   import ClientAccessForm from './ClientAccessForm.svelte';
   import {changeClientAccess, readRecovery, readmissionBlocked, scopeLabel, type Grant, type RecoveryItem, type RecoveryScope, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {client, onback, onoutcome}: {client: Grant; onback: () => Promise<void>; onoutcome: Report} = $props();
 
@@ -31,7 +33,7 @@
 
   async function read(cursor: string | null) {
     try {
-      page = await readRecovery(client.client_id, scope, cursor);
+      page = await readRecovery(app, client.client_id, scope, cursor);
       after = cursor;
       error = '';
     } catch (failure) {
@@ -55,7 +57,7 @@
   function revoke(item: RecoveryItem) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
-      await changeClientAccess(onoutcome, workspace, client, {action: 'revoke_recovery', invitation_id: item.invitation_id}, () => confirmAction({
+      await changeClientAccess(app, onoutcome, workspace, client, {action: 'revoke_recovery', invitation_id: item.invitation_id}, () => confirmAction({
         title: 'Revoke recovery invitation?', confirm: 'Revoke invitation', destructive: true,
         body: `Revoke recovery invitation ${item.invitation_id} for client ${client.client_id}? This blocks redemption and receipt retrieval. It does not revoke an already-issued credential or membership.`,
       }));
@@ -65,7 +67,7 @@
   function edit(action: 'recover' | 'readmit') {
     void app.run(async () => {
       if (!app.mayLeave()) return;
-      if (action === 'readmit' && await readmissionBlocked(workspace.id)) return;
+      if (action === 'readmit' && await readmissionBlocked(app, workspace.id)) return;
       editor = action;
     }, `client-edit:${action}`);
   }

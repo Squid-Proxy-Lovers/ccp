@@ -4,11 +4,10 @@
 // unconfirmed outcome that keeps the original request, and a confirmed one
 // re-checks the session before any one-time secret is shown.
 import {
-  wire, invitationPage, invitationStatus, recoveryPage, recoveryStatus, enrollmentStatus,
+  invitationPage, invitationStatus, recoveryPage, recoveryStatus, enrollmentStatus,
   AdmissionAttempt, EnrollmentAttempt, ClientAccessAttempt, SecurityAttempt,
 } from '../../lib/model.js';
-import {app} from '../../lib/app.svelte';
-import {notice} from '../../lib/notify.svelte';
+import {app as panelApp, type ViewApp} from '../../lib/app.svelte';
 import type {Session, Workspace} from '../../lib/types';
 
 export interface Grant {
@@ -128,12 +127,12 @@ export const wording = {
 // ---- shared flow ------------------------------------------------------------
 
 /** Sends once. Verification failures and lost responses come back as `error`. */
-async function send(attempt: Attempt, accept: (result: any) => boolean, refusal: string): Promise<{result: any} | {error: Error}> {
+async function send(app: ViewApp, attempt: Attempt, accept: (result: any) => boolean, refusal: string): Promise<{result: any} | {error: Error}> {
   await app.verify();
   app.pending = attempt;
   try {
     const request = attempt.request(app.session as Session);
-    const result = await wire(attempt.path, request.body, request.proof);
+    const result = await app.wire(attempt.path, request.body, request.proof);
     if (!accept(result)) throw new Error(refusal);
     app.pending = null;
     app.clean();
@@ -143,13 +142,13 @@ async function send(attempt: Attempt, accept: (result: any) => boolean, refusal:
   }
 }
 
-function unconfirmed(report: Report, words: Wording, attempt: Attempt, error: Error, observe: () => Promise<Observation>): void {
+function unconfirmed(app: ViewApp, report: Report, words: Wording, attempt: Attempt, error: Error, observe: () => Promise<Observation>): void {
   report({phase: 'pending', wording: words, attempt, error: error.message, observe});
-  notice(words.pendingNotice, 'warning');
+  app.notice(words.pendingNotice, 'warning');
 }
 
 /** A confirmed write must still be followed by a valid session before showing more. */
-async function stillSignedIn(lockMessage: string): Promise<boolean> {
+async function stillSignedIn(app: ViewApp, lockMessage: string): Promise<boolean> {
   try { await app.verify(); return true; }
   catch { app.lock(lockMessage); return false; }
 }
@@ -161,13 +160,13 @@ const nonEmpty = (value: unknown) => typeof value === 'string' && value !== '';
 
 const INVITATIONS = '/api/v1/admin/invitations/';
 
-export async function changeAdmission(report: Report, workspace: Workspace, action: 'individual' | 'revoke', body: Record<string, unknown>): Promise<void> {
+export async function changeAdmission(app: ViewApp, report: Report, workspace: Workspace, action: 'individual' | 'revoke', body: Record<string, unknown>): Promise<void> {
   const attempt = new AdmissionAttempt(app.session, workspace, action, body) as Attempt;
-  const sent = await send(attempt, result => action === 'individual'
+  const sent = await send(app, attempt, result => action === 'individual'
     ? nonEmpty(result?.invitation_id) && nonEmpty(result.secret) : result?.completed === true,
   'The invitation response could not be verified.');
   if ('error' in sent) {
-    unconfirmed(report, wording.admission, attempt, sent.error, async () => {
+    unconfirmed(app, report, wording.admission, attempt, sent.error, async () => {
       const original = JSON.parse(attempt.requestBody);
       return original.invitation_id
         ? {note: 'Current status observation; no causal attribution.', text: text(invitationStatus(await app.request(INVITATIONS + 'status', original), original.invitation_id))}
@@ -179,34 +178,34 @@ export async function changeAdmission(report: Report, workspace: Workspace, acti
   const confirmed = action === 'individual'
     ? `Invitation creation confirmed: ${result.invitation_id} in workspace ${body.workspace_id}.`
     : `Invitation revocation confirmed: ${body.invitation_id} in workspace ${body.workspace_id}.`;
-  if (!await stillSignedIn(confirmed + (action === 'individual'
+  if (!await stillSignedIn(app, confirmed + (action === 'individual'
     ? ' Its secret is unavailable because this session could not be checked. Sign in with an authorized workspace key to inspect or revoke this invitation before deliberately issuing another.'
     : ' Sign in with an authorized workspace key to inspect current status; revocation is already confirmed.'))) return;
   report({phase: 'done', title: 'Invitation action acknowledged', message: confirmed, reread: READ_ACCESS,
     secret: action === 'individual' ? {title: 'Client invitation · ' + result.invitation_id, value: result.secret} : undefined});
-  notice(confirmed + (action === 'individual' ? ' Copy the secret privately before leaving.' : ' Existing client grants and content are preserved.'), 'success');
+  app.notice(confirmed + (action === 'individual' ? ' Copy the secret privately before leaving.' : ' Existing client grants and content are preserved.'), 'success');
 }
 
 // ---- initial group enrollment ---------------------------------------------------
 
 const ENROLLMENT = '/api/v1/admin/enrollment/status';
 
-export async function readEnrollment(workspaceId: string): Promise<Enrollment> {
+export async function readEnrollment(app: ViewApp, workspaceId: string): Promise<Enrollment> {
   return enrollmentStatus(await app.request(ENROLLMENT, {workspace_id: workspaceId}), workspaceId);
 }
 
 /** `ask` runs after the attempt validated, so invalid input never reaches a confirmation. */
-export async function changeEnrollment(report: Report, state: Enrollment, action: 'initial' | 'close', body: Record<string, unknown>, confirmed: boolean, ask: () => Promise<boolean>): Promise<boolean> {
+export async function changeEnrollment(app: ViewApp, report: Report, state: Enrollment, action: 'initial' | 'close', body: Record<string, unknown>, confirmed: boolean, ask: () => Promise<boolean>): Promise<boolean> {
   const attempt = new EnrollmentAttempt(app.session, state, action, body, confirmed) as Attempt;
   if (!await ask()) return false;
   const opening = action === 'initial';
-  const sent = await send(attempt, result => opening
+  const sent = await send(app, attempt, result => opening
     ? nonEmpty(result?.invitation_id) && nonEmpty(result.secret) : result?.completed === true,
   'The initial-window response could not be verified.');
   if ('error' in sent) {
-    unconfirmed(report, wording.enrollment, attempt, sent.error, async () => ({
+    unconfirmed(app, report, wording.enrollment, attempt, sent.error, async () => ({
       note: 'Current observation only; not causal attribution or cancellation.',
-      text: text(await readEnrollment(attempt.workspace_id)),
+      text: text(await readEnrollment(app, attempt.workspace_id)),
     }));
     return true;
   }
@@ -214,12 +213,12 @@ export async function changeEnrollment(report: Report, state: Enrollment, action
   const message = opening
     ? `Initial group creation confirmed: ${result.invitation_id} in workspace ${attempt.workspace_id}.`
     : `Initial enrollment closure confirmed in workspace ${attempt.workspace_id}.`;
-  if (!await stillSignedIn(message + (opening
+  if (!await stillSignedIn(app, message + (opening
     ? ' Its secret is unavailable because the session could not be checked. Inspect or revoke this group invitation, or close the window, then use individual invitations. The group cannot be reopened.'
     : ' Sign in with a valid workspace key to inspect current state.'))) return true;
   report({phase: 'done', title: 'Initial-window action acknowledged', message, reread: READ_ACCESS,
     secret: opening ? {title: 'Initial group invitation · ' + result.invitation_id, value: result.secret} : undefined});
-  notice(message + (opening ? ' Copy the secret privately before leaving.' : ' Existing client grants and individual invitations are preserved.'), 'success');
+  app.notice(message + (opening ? ' Copy the secret privately before leaving.' : ' Existing client grants and individual invitations are preserved.'), 'success');
   return true;
 }
 
@@ -227,28 +226,28 @@ export async function changeEnrollment(report: Report, state: Enrollment, action
 
 const RECOVERY = '/api/v1/admin/recovery/';
 
-export async function readRecovery(clientId: string, scope: RecoveryScope, after: string | null): Promise<{invitations: RecoveryItem[]; next_cursor: string | null}> {
+export async function readRecovery(app: ViewApp, clientId: string, scope: RecoveryScope, after: string | null): Promise<{invitations: RecoveryItem[]; next_cursor: string | null}> {
   return recoveryPage(await app.request(RECOVERY + 'list', {client_id: clientId, scope, after, limit: 16}), clientId, scope);
 }
 
 /** Targeted readmission is refused while the initial group window is open. */
-export async function readmissionBlocked(workspaceId: string): Promise<boolean> {
-  const window = await readEnrollment(workspaceId);
+export async function readmissionBlocked(app: ViewApp, workspaceId: string): Promise<boolean> {
+  const window = await readEnrollment(app, workspaceId);
   if (window.phase !== 'open') return false;
-  notice('Close initial group enrollment before targeted readmission. Use the Enrollment tab to manage that window.', 'warning');
+  app.notice('Close initial group enrollment before targeted readmission. Use the Enrollment tab to manage that window.', 'warning');
   return true;
 }
 
 type ClientChange = {action: 'recover' | 'readmit'; expires_at: number; role?: string} | {action: 'revoke_recovery'; invitation_id: string};
 
-export async function changeClientAccess(report: Report, workspace: Workspace, client: Grant, change: ClientChange, ask: () => Promise<boolean>): Promise<boolean> {
+export async function changeClientAccess(app: ViewApp, report: Report, workspace: Workspace, client: Grant, change: ClientChange, ask: () => Promise<boolean>): Promise<boolean> {
   const attempt = new ClientAccessAttempt(app.session, workspace, client, change) as Attempt & {client_id: string; scope: RecoveryScope; action: string};
   if (!await ask()) return false;
-  const sent = await send(attempt, result => attempt.action === 'revoke_recovery'
+  const sent = await send(app, attempt, result => attempt.action === 'revoke_recovery'
     ? result?.completed === true : nonEmpty(result?.invitation_id) && nonEmpty(result.secret),
   'The client access response could not be verified.');
   if ('error' in sent) {
-    unconfirmed(report, wording.clientAccess, attempt, sent.error, async () => {
+    unconfirmed(app, report, wording.clientAccess, attempt, sent.error, async () => {
       const original = JSON.parse(attempt.requestBody);
       const value = attempt.action === 'readmit'
         ? invitationPage(await app.request(INVITATIONS + 'list', {workspace_id: attempt.workspace_id, limit: 16}))
@@ -264,14 +263,14 @@ export async function changeClientAccess(report: Report, workspace: Workspace, c
   const what = attempt.action === 'readmit' ? 'Readmission invitation creation'
     : attempt.action === 'recover' ? 'Recovery invitation creation' : 'Recovery invitation revocation';
   const confirmed = `${what} confirmed: ${id} for client ${attempt.client_id}. Scope: ${scopeLabel(attempt.scope, workspace)}.`;
-  if (!await stillSignedIn(confirmed + (attempt.action === 'readmit'
+  if (!await stillSignedIn(app, confirmed + (attempt.action === 'readmit'
     ? ' Its secret is unavailable; inspect or revoke this targeted invitation in the workspace inventory before deliberately issuing another.'
     : attempt.action === 'recover'
       ? ' Its secret is unavailable; inspect this exact client and scope recovery history and revoke the undelivered invitation before deliberately issuing another.'
       : ' Current metadata can be read after signing in again; existing recovered access was not revoked.'))) return true;
   report({phase: 'done', title: 'Client access action acknowledged', message: confirmed, reread: wording.clientAccess.reread,
     secret: result.secret ? {title: (attempt.action === 'readmit' ? 'Targeted readmission invitation · ' : 'Recovery invitation · ') + id, value: result.secret} : undefined});
-  notice(confirmed + (result.secret ? ' Copy the secret privately before leaving.' : ' Existing credentials and grants remain unchanged.'), 'success');
+  app.notice(confirmed + (result.secret ? ' Copy the secret privately before leaving.' : ' Existing credentials and grants remain unchanged.'), 'success');
   return true;
 }
 
@@ -282,17 +281,17 @@ const SECURITY_DONE: Record<SecurityAction, string> = {
   'team/appoint': 'Administrator appointed', 'team/revoke': 'Administrator removed', 'keys/issue': 'Admin key issued', 'keys/revoke': 'Admin key revoked',
 };
 
-export async function changeSecurity(report: Report, action: SecurityAction, body: Record<string, any>): Promise<void> {
+export async function changeSecurity(app: ViewApp, report: Report, action: SecurityAction, body: Record<string, any>): Promise<void> {
   const attempt = new SecurityAttempt(app.session, action, body) as Attempt;
   const issuing = action === 'team/appoint' || action === 'keys/issue';
-  const sent = await send(attempt, result => issuing
+  const sent = await send(app, attempt, result => issuing
     ? typeof result?.key_id === 'string' && typeof result.principal_id === 'string' && nonEmpty(result.secret)
       && !(action === 'keys/issue' && result.principal_id !== body.principal_id)
       && !(action === 'team/appoint' && body.principal.kind === 'existing' && result.principal_id !== body.principal.principal_id)
     : result?.completed === true,
   issuing ? 'The key creation response could not be verified.' : 'The revocation response could not be verified.');
   if ('error' in sent) {
-    unconfirmed(report, wording.security, attempt, sent.error, async () => {
+    unconfirmed(app, report, wording.security, attempt, sent.error, async () => {
       const admins = await app.request('/api/v1/admin/team/list', {workspace_id: attempt.workspace_id, limit: 16});
       const keys = await app.request('/api/v1/admin/keys/list', {workspace_id: attempt.workspace_id, limit: 16});
       return {note: 'Observed first pages only; this does not confirm this request’s outcome. Use the full paginated view after forgetting locally.', text: text({admins, keys})};
@@ -306,13 +305,13 @@ export async function changeSecurity(report: Report, action: SecurityAction, bod
     app.lock(confirmed + 'Your current login key was revoked. Sign in using another owner key, or ask the host operator for local owner-key recovery.');
     return;
   }
-  if (!await stillSignedIn(confirmed + (result.key_id
+  if (!await stillSignedIn(app, confirmed + (result.key_id
     ? 'Its secret is unavailable because the session could not be checked. Sign in using a valid workspace owner key, inspect keys, issue a replacement for this principal and revoke the undelivered key. Do not repeat appointment by name.'
     : 'Read current metadata after signing in with a valid owner key.'))) return;
   report({phase: 'done', title: 'Security action acknowledged', message: confirmed.trim(), reread: wording.security.reread,
     secret: result.key_id ? {title: 'Workspace admin key · ' + result.key_id, value: result.secret} : undefined,
     note: 'This acknowledges the action; current roles and key state may have changed since. No secret is stored by this panel.'});
-  notice((confirmed + (result.key_id ? 'Copy the secret privately before leaving.' : '')).trimEnd(), 'success');
+  app.notice((confirmed + (result.key_id ? 'Copy the secret privately before leaving.' : '')).trimEnd(), 'success');
 }
 
 
@@ -324,15 +323,16 @@ export async function changeSecurity(report: Report, action: SecurityAction, bod
  * untouched form from counting as unsaved work.
  */
 export class FormDraft {
+  #app = panelApp.forView();
   constructor(readonly key: string, readonly defaults: Record<string, string> = {}) {}
-  get(name: string): string { return app.drafts[this.key]?.[name] ?? this.defaults[name] ?? ''; }
+  get(name: string): string { return this.#app.drafts[this.key]?.[name] ?? this.defaults[name] ?? ''; }
   set(name: string, value: unknown): void {
     const next = value === null || value === undefined ? '' : String(value);
     if (next === (this.defaults[name] ?? '')) {
-      const fields = app.drafts[this.key];
+      const fields = this.#app.drafts[this.key];
       if (fields) delete fields[name];
-    } else app.formDraft(this.key)[name] = next;
+    } else this.#app.formDraft(this.key)[name] = next;
   }
-  get touched(): boolean { return Object.keys(app.drafts[this.key] ?? {}).length > 0; }
-  drop(): void { app.dropFormDraft(this.key); }
+  get touched(): boolean { return Object.keys(this.#app.drafts[this.key] ?? {}).length > 0; }
+  drop(): void { this.#app.dropFormDraft(this.key); }
 }

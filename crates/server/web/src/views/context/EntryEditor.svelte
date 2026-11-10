@@ -11,9 +11,7 @@
   import Input from '../../lib/ui/Input.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import Separator from '../../lib/ui/Separator.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {exactRevision} from '../../lib/model.js';
   import PendingWrite from './PendingWrite.svelte';
   import EntryMeta from './EntryMeta.svelte';
@@ -21,6 +19,9 @@
   import NativeHistory from './NativeHistory.svelte';
   import {focusId, type EntryReceipt, type HeldIntent, type Snapshot} from './content';
   import {actionOf, sendEntryWrite, startEntryWrite, type EntryChange} from './entryWrite';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {snapshot, bookId, onwritten, onreload}: {
     snapshot: Snapshot | null; bookId: string;
@@ -64,12 +65,12 @@
   }
 
   async function write(change: EntryChange) {
-    const intent = await startEntryWrite(change);
+    const intent = await startEntryWrite(app, change);
     await send(intent);
   }
 
   async function send(intent: HeldIntent) {
-    const outcome = await sendEntryWrite(intent);
+    const outcome = await sendEntryWrite(app, intent);
     if (!outcome) return;
     if (!outcome.ok) {
       unconfirmed = {intent, error: outcome.message};
@@ -136,7 +137,7 @@
     note = '';
     noteOpen = false;
     sync();
-    void focusId('entry-note-summary');
+    void focusId(app, 'entry-note-summary');
   }
 
   function retry() {
@@ -155,7 +156,7 @@
     // Keep local text until an explicit discard or reload.
     sync();
     if (!app.dirty) app.setDraft(held.intent.body);
-    void focusId('entry-forgotten');
+    void focusId(app, 'entry-forgotten');
   }
 </script>
 

@@ -16,14 +16,15 @@
   import Secret from '../lib/ui/Secret.svelte';
   import {table} from '../lib/ui/table';
   import DeletionLookup from './settings/DeletionLookup.svelte';
-  import {app} from '../lib/app.svelte';
-  import {notice} from '../lib/notify.svelte';
-  import {confirmAction} from '../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
   import {hasDraftContent} from '../lib/drafts.js';
   import {discardDraft} from '../lib/draftDiscard.js';
   import {formFrozen} from '../lib/identitySwitch.js';
   import {WORKSPACE_DRAFT_KEY} from '../lib/draftKeys.js';
   import type {Workspace} from '../lib/types';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   const FORM = WORKSPACE_DRAFT_KEY;
 
@@ -71,7 +72,7 @@
     draft = fresh;
     notice('Local workspace draft discarded.');
     await tick();
-    document.getElementById('create-workspace-name')?.focus();
+    app.effect(() => document.getElementById('create-workspace-name')?.focus());
   }
 </script>
 

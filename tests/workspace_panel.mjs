@@ -1326,14 +1326,17 @@ test('runIdentitySwitch leaves drafts, the owner key and the current session unt
 // ---- workspace creation's one-time owner key: block a second create, never drop its own draft unconditionally ----
 
 test('createWorkspaceFlow blocks while the previous owner key is undismissed, without even trying the write', async () => {
+  const activity = {workspaceCreates: 0};
   let requestCalled = false;
   const outcome = await createWorkspaceFlow({
     hasUndismissedOwnerKey: () => true,
+    activity,
     drafts: {}, key: 'k', submitted: {},
     request: () => { requestCalled = true; return Promise.resolve({}); },
     confirmedText: () => '',
   });
   assert.deepEqual(outcome, {ok: false, blocked: true});
+  assert.equal(activity.workspaceCreates, 0);
   assert.equal(requestCalled, false);
 });
 
@@ -1409,7 +1412,7 @@ test('focusHandoffKey changes with activating, independently of session, locked,
 // login handler: success rotates cookie + CSRF and invalidates the previous
 // token; rejection changes neither. A held request retains its dispatch cookie.
 import {sessionRequest, verifySession, adoptSession, creationRecovery} from '../crates/server/web/src/lib/sessionRequests.js';
-import {discardAndSignIn} from '../crates/server/web/src/lib/lockedSignIn.js';
+import {discardAndSignIn, lockedSignInBlocked} from '../crates/server/web/src/lib/lockedSignIn.js';
 
 function browserSessionServer() {
   let serial = 1, cookie = 'token-1';
@@ -1601,7 +1604,7 @@ test('create recovery: a failed post-write verification describes the owner key 
 
 // Real App methods with native TypeScript erasure and in-memory rune fields.
 // Browser tests separately verify that Svelte observes the same transitions.
-import {panelAppClass, runtime as appRuntime, answerConfirmation} from './helpers/panelApp.mjs';
+import {panelAppClass, panelNotifyModule, runtime as appRuntime, answerConfirmation} from './helpers/panelApp.mjs';
 const PanelApp = await panelAppClass();
 
 function realAppHarness(t) {
@@ -1656,10 +1659,16 @@ test('round 5: failed workspace create releases the locked sign-in guard', async
   assert.equal(app.waitingForWorkspaceCreate, true);
   write.release(); await creating;
   assert.equal(app.waitingForWorkspaceCreate, false); assert.equal(app.createdWorkspace, null);
+  assert.equal(app.workspaceCreates, 0, 'failed create must balance its lifetime exactly');
   const discard = app.discardAndSignIn();
   assert.doesNotMatch(appRuntime.confirmation.body, /owner key/);
   answerConfirmation(false); await discard;
   assert.equal(app.hasFormDrafts, true); assert.equal(app.busy, false);
+  await app.run(() => app.login('accepted-test-key'), 'login');
+  const retry = server.hold('/api/v1/admin/workspaces/create');
+  const retrying = create(); await retry.started;
+  assert.equal(app.workspaceCreates, 1); assert.equal(app.waitingForWorkspaceCreate, true);
+  retry.release(); await retrying; assert.equal(app.workspaceCreates, 0);
 });
 
 test('round 5: superseded successful create cannot acknowledge into an adopted session', async () => {
@@ -1796,6 +1805,223 @@ test('round 5: workspace postverification never restores an owner key dismissed 
   assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
   app.createdWorkspace = null; postcheck.release(); await creating;
   assert.equal(app.createdWorkspace, null);
+});
+
+
+// Deadline and retired-action probes use real App methods and cooperative
+// fetch mocks: native fetch also rejects when its supplied signal aborts.
+function hangUntilAbort(signal) {
+  const finish = defer();
+  if (signal) signal.addEventListener('abort', () => finish.reject(signal.reason), {once: true});
+  return finish;
+}
+
+for (const body of [undefined, '{}']) test(`round 6: every request has a 60-second default and an injectable deadline, write=${body !== undefined}`, async t => {
+  const original = globalThis.fetch;
+  const calls = [];
+  let pending;
+  globalThis.fetch = (_path, options) => {
+    calls.push(options); pending = hangUntilAbort(options.signal); return pending.promise;
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const work = wire('/deadline', body, 'proof', 5).then(() => ({resolved: true}), error => ({error}));
+  const observation = await Promise.race([work, new Promise(resolve => setTimeout(() => resolve(null), 80))]);
+  if (!observation) { pending.reject(new Error('fixture cleanup')); await work; }
+  assert.ok(observation, 'a never-settling request must leave through its deadline');
+  assert.match(observation.error.message, /^No confirmed response\..*may have completed/);
+  assert.equal(observation.error.status, undefined, 'a deadline cannot claim a confirmed HTTP refusal');
+  assert.ok(calls[0].signal instanceof AbortSignal);
+  const {REQUEST_TIMEOUT_MS} = await import('../crates/server/web/src/lib/model.js');
+  assert.equal(REQUEST_TIMEOUT_MS, 60_000);
+});
+
+test('round 6: a response body that stalls also takes the unknown-outcome deadline path', async t => {
+  const original = globalThis.fetch; let pending;
+  globalThis.fetch = async (_path, options) => {
+    pending = hangUntilAbort(options.signal);
+    return {ok: true, status: 200, json: () => pending.promise};
+  };
+  t.after(() => { globalThis.fetch = original; });
+  const work = wire('/deadline-body', '{}', 'proof', 5).catch(error => error);
+  const observation = await Promise.race([work, new Promise(resolve => setTimeout(() => resolve(null), 80))]);
+  if (!observation) { pending.reject(new Error('fixture cleanup')); await work; }
+  assert.ok(observation, 'response parsing cannot outlive the request deadline');
+  assert.match(observation.message, /^No confirmed response\..*may have completed/);
+  assert.equal(observation.status, undefined);
+});
+
+for (const stage of ['preflight', 'write', 'postflight']) test(`round 6: a never-settling workspace ${stage} releases the locked-screen guard at the deadline`, async t => {
+  const {app, create} = realAppHarness(t);
+  const nativeTimeout = AbortSignal.timeout, fetch = globalThis.fetch;
+  const started = defer(); let pending, checks = 0;
+  AbortSignal.timeout = milliseconds => { assert.equal(milliseconds, 60_000); return nativeTimeout(10); };
+  t.after(() => { AbortSignal.timeout = nativeTimeout; });
+  globalThis.fetch = (path, options) => {
+    if (path === '/api/v1/admin/session') checks++;
+    if ((stage === 'write' && path.endsWith('/workspaces/create')) ||
+        (path === '/api/v1/admin/session' && checks === (stage === 'preflight' ? 1 : stage === 'postflight' ? 2 : -1))) {
+      pending = hangUntilAbort(options.signal); started.resolve(); return pending.promise;
+    }
+    return fetch(path, options);
+  };
+  const creating = create(); await started.promise; app.lock('Background permission failure');
+  assert.equal(app.workspaceCreates, 1);
+  const observation = await Promise.race([creating.then(() => true), new Promise(resolve => setTimeout(() => resolve(false), 100))]);
+  if (!observation) { pending.reject(new Error('fixture cleanup')); await creating; }
+  assert.equal(observation, true, 'the create lifetime must settle without a response');
+  assert.equal(app.workspaceCreates, 0); assert.equal(app.waitingForWorkspaceCreate, false);
+  assert.equal(app.busy, false);
+  if (stage === 'postflight') { assert.ok(app.createdWorkspace); assert.equal(app.hasFormDrafts, false); }
+  else { assert.equal(app.createdWorkspace, null); assert.equal(app.hasFormDrafts, true); }
+});
+
+for (const kind of ['shelf', 'book', 'refresh']) for (const reject of [false, true]) test(`round 6: discard and login supersede a stalled ${kind} without late busy changes, reject=${reject}`, async t => {
+  const {app, create, server} = realAppHarness(t);
+  const path = kind === 'refresh' ? '/api/v1/admin/workspaces?limit=32' : `/api/v1/content/${kind === 'shelf' ? 'shelves' : 'books'}/create`;
+  const held = server.hold(path, reject ? {status: 503} : {});
+  const old = kind === 'refresh' ? create() : app.run(() => app.request(path, {name: 'Old draft'}), `create-${kind}`);
+  await held.started;
+  t.after(async () => { held.release(); await old; });
+  if (kind !== 'refresh') app.draft = 'Uncertain original write';
+  app.lock('Background permission failure');
+  const discard = app.discardAndSignIn(); answerConfirmation(true); await discard;
+  let loginRan = false;
+  await app.run(async () => { loginRan = true; await app.login('accepted-test-key'); }, 'login');
+  assert.equal(loginRan, true, 'login must not inherit a retired action slot');
+  assert.equal(app.session, server.current()); assert.equal(app.busy, false);
+  const fresh = defer(); const current = app.run(() => fresh.promise, 'new-action');
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'new-action');
+  held.release(); await old;
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'new-action', 'old finally cannot release the replacement slot');
+  assert.equal(app.locked, false);
+  fresh.resolve(); await current;
+  assert.equal(app.busy, false); assert.equal(app.busyKey, '');
+});
+
+for (const status of [200, 401, 403]) test(`round 6: an old Guidance-style callback has no global effects after adoption, response=${status}`, async t => {
+  const {app, server} = realAppHarness(t);
+  // The fallback models the former unscoped Guidance import on the pinned baseline.
+  const visit = app.forView?.() ?? app;
+  const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
+  const held = server.hold('/api/v1/guidance/get', status === 200 ? {processFirst: true} : {status});
+  let afterNotice;
+  const loading = visit.request('/api/v1/guidance/get', {workspace_id: null}).catch(error => {
+    if (visit.locked) return;
+    notice(error.message, 'destructive');
+    afterNotice = [...appRuntime.toasts];
+    visit.pending = null;
+    visit.lock('Retired callback');
+  });
+  await held.started;
+  await app.hashKeySwitch('accepted-test-key');
+  const pending = {body: 'new session work'}; app.pending = pending;
+  const before = [...appRuntime.toasts]; held.release(); await loading;
+  assert.deepEqual(afterNotice, before, 'the Guidance catch itself must not emit a retired notification');
+  assert.deepEqual(appRuntime.toasts, before, 'retired notification must not reach the shared toaster');
+  assert.equal(app.pending, pending); assert.equal(app.locked, false);
+  const current = app.forView?.() ?? app;
+  (current.notice ?? notice)('Fresh notification', 'success');
+  assert.equal(appRuntime.toasts.at(-1).text, 'Fresh notification');
+});
+
+test('round 6: navigation retires global side effects even within the same session', async t => {
+  const {app} = realAppHarness(t);
+  const visit = app.forView?.() ?? app;
+  const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
+  const pending = {body: 'keep'}; app.pending = pending;
+  app.generation++;
+  notice('Old view', 'destructive'); visit.pending = null; visit.clean();
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.pending, pending);
+});
+
+test('round 6: owner-key guard is independent of busy and excludes shelf, book and refresh operations', () => {
+  const state = {workspaceCreates: 1, busy: false, busyKey: '', inflight: 0};
+  assert.equal(lockedSignInBlocked(state), true);
+  for (const busyKey of ['create-shelf', 'create-book', 'refresh']) {
+    Object.assign(state, {workspaceCreates: 0, busy: true, busyKey});
+    assert.equal(lockedSignInBlocked(state), false, `${busyKey} must not block locked-screen recovery`);
+  }
+});
+
+test('round 6: a workspace create started during confirmation invalidates the accepted decision', async () => {
+  const choice = defer(); let reset = false;
+  const state = {workspaceCreates: 0, createdWorkspace: null, pending: null, deletion: null, session: {}, recoveryText: () => 'kept'};
+  const discarding = discardAndSignIn(state, () => choice.promise, () => { reset = true; });
+  state.workspaceCreates = 1; choice.resolve(true); await discarding;
+  assert.equal(reset, false);
+});
+
+test('round 6: same-identity remount advances the focus handoff to the page title', () => {
+  const before = focusHandoffKey({}, false, false, 'workspace', 'context', 3);
+  assert.notEqual(focusHandoffKey({}, false, false, 'workspace', 'context', 4), before);
+});
+
+test('round 6: an old activation cannot clear a replacement activation screen', async t => {
+  const {app, server} = realAppHarness(t);
+  const first = defer(), second = defer();
+  app.loadWorkspaces = () => first.promise;
+  const old = app.activate(server.current());
+  app.reset(); app.loadWorkspaces = () => second.promise;
+  const current = app.activate({...server.current()});
+  first.resolve(); await old; assert.equal(app.activating, true);
+  second.resolve(); await current; assert.equal(app.activating, false);
+});
+
+test('round 6: the deadline settles even when fetch ignores its abort signal', async t => {
+  const original = globalThis.fetch;
+  globalThis.fetch = () => new Promise(() => {});
+  t.after(() => { globalThis.fetch = original; });
+  const result = await Promise.race([
+    wire('/uncooperative', '{}', 'proof', 5).catch(error => error),
+    new Promise(resolve => setTimeout(() => resolve(null), 80)),
+  ]);
+  assert.ok(result, 'the deadline owns settlement rather than relying on a cooperative transport');
+  assert.match(result.message, /^No confirmed response\..*may have completed/);
+});
+
+for (const method of ['login', 'hashKeySwitch']) test(`round 6: a retired ${method} response cannot adopt or clear the replacement action`, async t => {
+  const {app, server} = realAppHarness(t);
+  const held = server.hold('/api/v1/admin/session/login');
+  const old = app.run(() => app[method]('accepted-test-key'), 'login'); await held.started;
+  app.lock('Old session'); await app.discardAndSignIn();
+  await app.run(() => app.login('accepted-test-key'), 'login'); const session = app.session;
+  const fresh = defer(), current = app.run(() => fresh.promise, 'replacement');
+  held.release(); await old;
+  assert.equal(app.session, session); assert.equal(app.busy, true); assert.equal(app.busyKey, 'replacement');
+  fresh.resolve(); await current; assert.equal(app.busy, false);
+});
+
+test('round 6: a view cannot renew its own scope by navigating before a late callback', async t => {
+  const {app} = realAppHarness(t);
+  const visit = app.forView?.() ?? app;
+  const notice = visit.notice ?? ((text, tone) => appRuntime.toasts.push({text, tone}));
+  await visit.navigate('workspaces');
+  notice('Old view after its own navigation', 'destructive');
+  assert.deepEqual(appRuntime.toasts, []);
+});
+
+for (const fail of [false, true]) test(`round 6: a late clipboard completion cannot notify the replacement visit, fail=${fail}`, async t => {
+  const {app} = realAppHarness(t);
+  const notifications = await panelNotifyModule(); notifications.clearToasts();
+  const clipboard = defer();
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', {configurable: true, value: {clipboard: {writeText: () => clipboard.promise}}});
+  t.after(() => { if (previous) Object.defineProperty(globalThis, 'navigator', previous); else delete globalThis.navigator; });
+  const visit = app.forView?.() ?? app;
+  notifications.bindNoticeScope?.(() => visit.notice ?? notifications.notice);
+  const copying = notifications.copyText('private test value'); app.generation++;
+  if (fail) clipboard.reject(new Error('denied')); else clipboard.resolve();
+  assert.equal(await copying, !fail);
+  assert.equal(notifications.toasts.length, 0); assert.equal(appRuntime.toasts.length, 0);
+});
+
+test('round 6: the admitted login action keeps its own slot until initial loading settles', async t => {
+  const {app, server} = realAppHarness(t); const loading = defer();
+  app.loadWorkspaces = () => loading.promise;
+  const signingIn = app.run(() => app.activate({...server.current()}), 'login');
+  assert.equal(app.activating, true); assert.equal(app.busy, true); assert.equal(app.busyKey, 'login');
+  loading.resolve(); await signingIn;
+  assert.equal(app.activating, false); assert.equal(app.busy, false); assert.equal(app.busyKey, '');
 });
 
 import './workspace_panel_wiring.mjs';

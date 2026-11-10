@@ -10,11 +10,13 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice, stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import {clientRecoveryScope, invitationDeadline} from '../../lib/model.js';
   import {changeClientAccess, FormDraft, roleLabel, roles, scopeLabel, type Grant, type RecoveryScope, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {client, action, onclose, onoutcome}: {
     client: Grant; action: 'recover' | 'readmit'; onclose: () => void; onoutcome: Report;
@@ -35,7 +37,7 @@
       const expires_at = invitationDeadline(form.get('hours'));
       const role = readmit ? form.get('role') : undefined;
       const change = {action, expires_at, role};
-      const sent = await changeClientAccess(onoutcome, workspace, client, change, () => confirmAction({
+      const sent = await changeClientAccess(app, onoutcome, workspace, client, change, () => confirmAction({
         title: readmit ? 'Issue explicit new membership?' : 'Issue credential recovery?',
         body: `${readmit ? 'Issue explicit new membership' : 'Issue credential recovery'} for ${client.client_id}? Scope: ${scopeLabel(scope, workspace)}.${role ? ' New role: ' + roleLabel(role) + '.' : ''} Deadline: ${stamp(expires_at)}.`,
         confirm: readmit ? 'Create readmission invitation' : 'Create recovery invitation',

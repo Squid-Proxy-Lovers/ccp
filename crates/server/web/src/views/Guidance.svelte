@@ -11,10 +11,12 @@
   import Delayed from '../lib/ui/Delayed.svelte';
   import SkeletonCard from '../lib/ui/skeleton/SkeletonCard.svelte';
   import Board from './guidance/Board.svelte';
-  import {app} from '../lib/app.svelte';
-  import {notice} from '../lib/notify.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
   import {canPublish} from '../lib/model.js';
   import {readGuidance, type Board as BoardData, type Bundle} from './guidance/guidance';
+
+  const app = panelApp.forView();
+  const {notice} = app;
 
   let {global = false}: {global?: boolean} = $props();
 
@@ -27,7 +29,7 @@
 
   async function load(): Promise<void> {
     try {
-      bundle = await readGuidance(workspaceId);
+      bundle = await readGuidance(app, workspaceId);
       failed = '';
     } catch (error) {
       if (app.locked) return;
@@ -53,7 +55,7 @@
   async function replace(next: Bundle, kind: string) {
     bundle = next;
     await tick();
-    document.getElementById(`guidance-${kind}`)?.focus();
+    app.effect(() => document.getElementById(`guidance-${kind}`)?.focus());
   }
 </script>
 

@@ -4,9 +4,7 @@
   import Alert from '../../lib/ui/Alert.svelte';
   import Badge from '../../lib/ui/Badge.svelte';
   import Button from '../../lib/ui/Button.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {canManageInvitations, exactRevision} from '../../lib/model.js';
   import EntryMeta from './EntryMeta.svelte';
   import PendingWrite from './PendingWrite.svelte';
@@ -14,6 +12,9 @@
   import {focusId, type EntryReceipt, type EntrySummary, type HeldIntent} from './content';
   import {actionOf, sendEntryWrite, startEntryWrite, type EntryChange} from './entryWrite';
   import type {AdminIntent, ArchiveOutcome} from './archiveWrite';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {entry, onwritten, onarchive}: {
     entry: EntrySummary;
@@ -27,7 +28,7 @@
   let forgotten = $state(false);
 
   async function send(intent: HeldIntent) {
-    const outcome = await sendEntryWrite(intent);
+    const outcome = await sendEntryWrite(app, intent);
     if (!outcome) return;
     if (!outcome.ok) {
       unconfirmed = {intent, error: outcome.message};
@@ -45,7 +46,7 @@
       if (!app.mayLeave()) return;
       const ok = await confirmAction({title: 'Restore this entry?', body: 'A name collision with an active entry will be refused.', confirm: 'Restore entry'});
       if (!ok) return;
-      await send(await startEntryWrite({action: 'restore', entry_id: entry.id, expected_revision: exactRevision(entry.revision)}));
+      await send(await startEntryWrite(app, {action: 'restore', entry_id: entry.id, expected_revision: exactRevision(entry.revision)}));
     }, 'entry-restore');
   }
 
@@ -58,14 +59,14 @@
     unconfirmed = null;
     forgotten = true;
     app.setDraft(held.intent.body);
-    void focusId('archived-forgotten');
+    void focusId(app, 'archived-forgotten');
   }
 
   async function discardCopy() {
     if (!(await confirmAction({title: 'Discard the local copy?', body: 'This does not cancel any server request.', confirm: 'Discard copy', destructive: true}))) return;
     app.clean();
     forgotten = false;
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 </script>
 

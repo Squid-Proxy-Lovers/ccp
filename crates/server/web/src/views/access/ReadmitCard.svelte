@@ -7,9 +7,11 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import ClientAccessForm from './ClientAccessForm.svelte';
   import {readmissionBlocked, type Grant, type Report} from './actions';
+
+  const app = panelApp.forView();
 
   let {grants, onoutcome}: {grants: Grant[]; onoutcome: Report} = $props();
   const candidates = $derived(grants.filter(grant => grant.revoked_at !== null && !grant.client_disabled));
@@ -20,7 +22,7 @@
     void app.run(async () => {
       const grant = candidates.find(item => item.id === choice);
       if (!grant || !app.mayLeave()) return;
-      if (await readmissionBlocked(app.workspace!.id)) return;
+      if (await readmissionBlocked(app, app.workspace!.id)) return;
       target = grant;
     }, 'readmit-start');
   }

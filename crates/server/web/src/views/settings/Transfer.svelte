@@ -14,10 +14,12 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {canTransferOwnership} from '../../lib/model.js';
   import type {Session, Workspace} from '../../lib/types';
   import type {SettingsState} from './state.svelte';
+
+  const app = panelApp.forView();
 
   let {ctl, workspace, session}: {ctl: SettingsState; workspace: Workspace; session: Session} = $props();
 

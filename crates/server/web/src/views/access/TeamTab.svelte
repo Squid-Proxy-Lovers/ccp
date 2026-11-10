@@ -14,11 +14,13 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
-  import {notice, stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import KeyForm from './KeyForm.svelte';
   import {changeSecurity, type Admin, type Report, type WorkspaceKey} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {onoutcome}: {onoutcome: Report} = $props();
 
@@ -72,7 +74,7 @@
       if (!app.mayLeave()) return;
       if (!await confirmAction({title: `Revoke ${admin.name}?`, confirm: 'Revoke administrator', destructive: true,
         body: `Revoke ${admin.name} (${admin.id}) in ${workspace.name}? All of this principal’s workspace keys are revoked; other workspaces and stored content are preserved.`})) return;
-      await changeSecurity(onoutcome, 'team/revoke', {workspace_id: workspace.id, principal_id: admin.id});
+      await changeSecurity(app, onoutcome, 'team/revoke', {workspace_id: workspace.id, principal_id: admin.id});
     }, `revoke-admin:${admin.id}`);
   }
 
@@ -82,7 +84,7 @@
       const own = key.id === currentKey;
       if (!await confirmAction({title: own ? 'Revoke your current login key?' : `Revoke key ${key.name}?`, confirm: 'Revoke key', destructive: true,
         body: `Revoke key ${key.name} (${key.id}) in ${workspace.name}?${own ? ' This is your current login key. This browser session will lose authority; have another owner key available.' : ''} The principal’s other keys and role remain unchanged.`})) return;
-      await changeSecurity(onoutcome, 'keys/revoke', {workspace_id: workspace.id, key_id: key.id});
+      await changeSecurity(app, onoutcome, 'keys/revoke', {workspace_id: workspace.id, key_id: key.id});
     }, `revoke-key:${key.id}`);
   }
 

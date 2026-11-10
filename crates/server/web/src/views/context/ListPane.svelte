@@ -6,8 +6,10 @@
   import Badge from '../../lib/ui/Badge.svelte';
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import type {Pager} from './pager.svelte';
+
+  const app = panelApp.forView();
 
   let {id, kind, title, description, pager, selectedId, pinned = null, label, detail, badge, onselect, emptyText,
     onretry, back, actions, footer, class: className = 'flex'}: {

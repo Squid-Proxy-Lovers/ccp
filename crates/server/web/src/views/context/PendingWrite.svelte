@@ -6,9 +6,11 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import type {HeldIntent} from './content';
+
+  const app = panelApp.forView();
+  const {copyText} = app;
 
   let {intent, error, onretry, onforget, id}: {
     intent: HeldIntent; error: string; onretry: () => void; onforget: () => void; id: string;

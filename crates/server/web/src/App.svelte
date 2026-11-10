@@ -32,7 +32,7 @@
   // that entered the activating state.
   let previous = '';
   $effect(() => {
-    const key = focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view);
+    const key = focusHandoffKey(app.session, app.locked, app.activating, app.workspace?.id, app.view, app.refreshTick);
     if (key === previous || !app.booted) return;
     const first = previous === '';
     previous = key;

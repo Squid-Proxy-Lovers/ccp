@@ -46,13 +46,17 @@ export function unsavedWorkSummary(draftLabelList, hasOwnerKey) {
  * @param {() => Promise<boolean>} deps.confirm
  * @param {() => Promise<unknown>} deps.verify
  * @param {(session: unknown) => Promise<void>} deps.logout
+ * @param {() => boolean} [deps.isCurrent]
  * @param {() => void} deps.reset
  * @returns {Promise<boolean>} true if sign-out actually happened
  */
-export async function runSignOut({hasUnsavedWork, confirm, verify, logout, reset}) {
+export async function runSignOut({hasUnsavedWork, confirm, verify, logout, reset, isCurrent = () => true}) {
   if (hasUnsavedWork() && !await confirm()) return false;
+  if (!isCurrent()) return false;
   const session = await verify();
+  if (!isCurrent()) return false;
   await logout(session);
+  if (!isCurrent()) return false;
   reset();
   return true;
 }
@@ -65,11 +69,13 @@ export async function runSignOut({hasUnsavedWork, confirm, verify, logout, reset
  * they were -- `clearForNewIdentity` never runs before `request` resolves.
  * @param {object} deps
  * @param {() => Promise<unknown>} deps.request
+ * @param {() => boolean} [deps.isCurrent]
  * @param {() => void} deps.clearForNewIdentity
  * @param {(session: unknown) => Promise<void>} deps.activate
  */
-export async function runLogin({request, clearForNewIdentity, activate}) {
+export async function runLogin({request, clearForNewIdentity, activate, isCurrent = () => true}) {
   const session = await request();
+  if (!isCurrent()) throw new Error('This sign-in has been superseded.');
   clearForNewIdentity();
   await activate(session);
 }
@@ -95,13 +101,16 @@ export async function runLogin({request, clearForNewIdentity, activate}) {
  * @param {() => Promise<unknown>} deps.request
  * @param {(session: unknown) => boolean} deps.sameIdentity
  * @param {(session: unknown) => void} deps.adoptSession
+ * @param {() => boolean} [deps.isCurrent]
  * @param {() => void} deps.clearForNewIdentity
  * @param {(session: unknown) => Promise<void>} deps.activate
  * @returns {Promise<'same' | 'declined' | 'switched'>}
  */
-export async function runIdentitySwitch({hasUnsavedWork, confirm, request, sameIdentity, adoptSession, clearForNewIdentity, activate}) {
+export async function runIdentitySwitch({hasUnsavedWork, confirm, request, sameIdentity, adoptSession, clearForNewIdentity, activate, isCurrent = () => true}) {
   if (hasUnsavedWork() && !await confirm()) return 'declined';
+  if (!isCurrent()) throw new Error('This sign-in has been superseded.');
   const session = await request();
+  if (!isCurrent()) throw new Error('This sign-in has been superseded.');
   if (sameIdentity(session)) { adoptSession(session); return 'same'; }
   clearForNewIdentity();
   await activate(session);

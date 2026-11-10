@@ -7,7 +7,7 @@
 // Svelte attributes/effects. Browser checks separately exercise the live UI.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 
 const read = path => readFile(new URL(`../crates/server/web/src/${path}`, import.meta.url), 'utf8');
 
@@ -89,7 +89,7 @@ test('[source] hashKeySwitch delegates to runIdentitySwitch, comparing by identi
   assert.match(hashKeySwitch, /runIdentitySwitch\(\{/);
   assert.match(hashKeySwitch, /sameIdentity:\s*session\s*=>\s*Boolean\(this\.session\)\s*&&\s*identityKey\(session as Session\)\s*===\s*identityKey\(this\.session as Session\)/);
   assert.doesNotMatch(hashKeySwitch, /sameIdentity:[^,]*\bsignature\(/, 'identity comparison must never use signature() (it includes the CSRF token, which always differs)');
-  assert.match(hashKeySwitch, /adoptSession:\s*session\s*=>\s*adoptSession\(this, session\)/);
+  assert.match(hashKeySwitch, /adoptSession:\s*session\s*=>\s*\{ adopted = session as Session; adoptSession\(this, session\); \}/);
   assert.match(hashKeySwitch, /clearForNewIdentity:\s*\(\)\s*=>\s*\{\s*this\.drafts\s*=\s*\{\};\s*this\.createdWorkspace\s*=\s*null;\s*\}/);
 });
 
@@ -99,7 +99,7 @@ test('[source] hashKeySwitch\'s declined notice fires on the plain \'declined\' 
   // appending `&& outcome !== 'declined'` (always false, since this is the
   // only branch where outcome could be 'declined') would make the call
   // unreachable while every substring check above it still passes.
-  assert.match(hashKeySwitch, /else if \(outcome === 'declined'\) notice\(/);
+  assert.match(hashKeySwitch, /else if \(outcome === 'declined' && current\(\)\) notice\(/);
 });
 
 test('[source] createWorkspace delegates to createWorkspaceFlow and surfaces the owner key from the confirmed callback too', () => {
@@ -248,7 +248,7 @@ test('[source] Workspaces.svelte\'s discard assigns discardDraft\'s returned fre
   // focus call must come strictly after it, not merely appear somewhere in
   // the function.
   const afterFresh = discardFn.slice(discardFn.indexOf('draft = fresh;'));
-  assert.match(afterFresh, /await tick\(\);\s*\n\s*document\.getElementById\('create-workspace-name'\)\?\.focus\(\)/);
+  assert.match(afterFresh, /await tick\(\);\s*\n\s*app\.effect\(\(\) => document\.getElementById\('create-workspace-name'\)\?\.focus\(\)\)/);
 });
 
 test('[source] Workspaces.svelte disables the submit (not just a toast) while the owner key is undismissed', () => {
@@ -311,4 +311,27 @@ test('[source] adopted sessions remount views through refreshTick without moving
 
 test('[source] blocked second create explains its prerequisite in neutral text', () => {
   assert.match(workspaces, /<p class="[^"]*text-muted-foreground">Dismiss the owner key above before creating another workspace\.<\/p>/);
+});
+
+
+test('[source] async view effects use the shared scope API instead of global notification imports', async () => {
+  const root = new URL('../crates/server/web/src/views/', import.meta.url);
+  async function inspect(directory) {
+    for (const item of await readdir(directory, {withFileTypes: true})) {
+      const path = new URL(item.name + (item.isDirectory() ? '/' : ''), directory);
+      if (item.isDirectory()) { await inspect(path); continue; }
+      if (!/\.(svelte|ts)$/.test(item.name)) continue;
+      const source = await readFile(path, 'utf8');
+      assert.doesNotMatch(source, /import \{[^}]*\bnotice\b[^}]*\} from '[^']*notify\.svelte'/, path.pathname);
+      if (/const \{[^}]*\bnotice\b/.test(source) && item.name !== 'DeletionTracker.svelte') {
+        assert.match(source, /const app = panelApp\.forView\(\);/, path.pathname);
+      }
+    }
+  }
+  await inspect(root);
+  assert.match(app, /return viewScope\(this, \{notice, copyText, confirmAction, wire,/);
+});
+
+test('[source] the focus effect observes same-identity remounts', () => {
+  assert.match(appSvelte, /focusHandoffKey\(app\.session, app\.locked, app\.activating, app\.workspace\?\.id, app\.view, app\.refreshTick\)/);
 });

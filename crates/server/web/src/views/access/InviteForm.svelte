@@ -8,11 +8,12 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {invitationDeadline} from '../../lib/model.js';
   import {changeAdmission, FormDraft, roles, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {unused, onoutcome}: {unused: boolean; onoutcome: Report} = $props();
   const form = new FormDraft(`invite:${app.workspace?.id}`, {role: 'read', hours: '24'});
@@ -22,7 +23,7 @@
     void app.run(async () => {
       if (app.pending) throw new Error('Resolve the original invitation action first.');
       const workspace = app.workspace!;
-      await changeAdmission(onoutcome, workspace, 'individual',
+      await changeAdmission(app, onoutcome, workspace, 'individual',
         {workspace_id: workspace.id, role: form.get('role'), expires_at: invitationDeadline(form.get('hours'))});
       form.drop();
     }, 'invite-submit');

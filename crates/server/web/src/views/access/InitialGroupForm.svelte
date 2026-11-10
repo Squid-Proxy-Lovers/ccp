@@ -10,11 +10,13 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice, stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import {initialBounds} from '../../lib/model.js';
   import {changeEnrollment, FormDraft, roles, type Enrollment, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {enrollment, onclose, onoutcome}: {enrollment: Enrollment; onclose: () => void; onoutcome: Report} = $props();
   const form = new FormDraft(`initial-group:${app.workspace?.id}`, {role: 'read'});
@@ -29,7 +31,7 @@
       const bounds = initialBounds(form.get('capacity'), form.get('hours'));
       const body = {workspace_id: enrollment.workspace_id, role: form.get('role'), ...bounds};
       const consent = form.get('consent') === 'yes';
-      const sent = await changeEnrollment(onoutcome, enrollment, 'initial', body, consent, () => confirmAction({
+      const sent = await changeEnrollment(app, onoutcome, enrollment, 'initial', body, consent, () => confirmAction({
         title: 'Open the single initial group?', confirm: 'Open initial group',
         body: `Open the single initial group in ${workspace.name}? Capacity: ${bounds.max_clients === null ? 'No count limit' : bounds.max_clients}. Deadline: ${bounds.expires_at === null ? 'None' : stamp(bounds.expires_at)}. It cannot reopen once closed.`,
       }));

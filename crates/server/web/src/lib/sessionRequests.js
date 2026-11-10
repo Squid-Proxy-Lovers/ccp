@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Session-bound request ordering, shared by the app and deferred-request tests.
+import {releaseAction} from './actionOwner.js';
 import {signature} from './model.js';
 
 export async function verifySession(state, deps) {
@@ -56,6 +57,9 @@ export async function sessionRequest(state, deps, path, body, confirmed) {
 }
 
 export function adoptSession(state, session) {
+  releaseAction(state);
+  state.activationOwner = null;
+  state.activating = false;
   state.generation += 1;
   state.session = session;
   state.locked = false;

@@ -13,12 +13,13 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {canManageInvitations} from '../../lib/model.js';
   import ClientAccess from './ClientAccess.svelte';
   import {roleLabel, type Grant, type GrantPage, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {page, after, error, onpage, onoutcome}: {
     page: GrantPage | null; after: string | null; error: string;

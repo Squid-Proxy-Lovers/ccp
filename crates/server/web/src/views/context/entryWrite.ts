@@ -3,13 +3,13 @@
 // app.pending until the server confirms it or the user explicitly forgets it, so
 // a lost response is never silently replaced by a new write.
 import {Intent} from '../../lib/model.js';
-import {app} from '../../lib/app.svelte';
+import type {ViewApp} from '../../lib/app.svelte';
 import {contentPath, message, type EntryReceipt, type HeldIntent} from './content';
 
 export type EntryChange = Record<string, unknown> & {action: 'create' | 'append' | 'revise' | 'archive' | 'restore'};
 export type WriteOutcome = {ok: true; receipt: EntryReceipt} | {ok: false; message: string} | null;
 
-export async function startEntryWrite(change: EntryChange): Promise<HeldIntent> {
+export async function startEntryWrite(app: ViewApp, change: EntryChange): Promise<HeldIntent> {
   if (app.pending) throw new Error('Resolve or explicitly forget the previous uncertain write first.');
   await app.verify();
   const intent: HeldIntent = new Intent(app.session, app.workspace?.id, change);
@@ -18,7 +18,7 @@ export async function startEntryWrite(change: EntryChange): Promise<HeldIntent> 
 }
 
 /** Sends (or exactly re-sends) the held intent. `null` means the session locked. */
-export async function sendEntryWrite(intent: HeldIntent): Promise<WriteOutcome> {
+export async function sendEntryWrite(app: ViewApp, intent: HeldIntent): Promise<WriteOutcome> {
   try {
     const request = intent.request(app.session);
     const receipt = await app.request<EntryReceipt>(contentPath('entries/mutate'), JSON.parse(request.body),

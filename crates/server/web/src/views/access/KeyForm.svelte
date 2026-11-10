@@ -9,11 +9,12 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {keyExpiry, principalIdentity} from '../../lib/model.js';
   import {changeSecurity, FormDraft, type Admin, type Report} from './actions';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {admin = null, onclose, onoutcome}: {admin?: Admin | null; onclose: () => void; onoutcome: Report} = $props();
   const form = $derived(new FormDraft(admin ? `team-key:${app.workspace?.id}:${admin.id}` : `team-appoint:${app.workspace?.id}`, {mode: 'new_principal'}));
@@ -37,7 +38,7 @@
         : {title: 'Appoint workspace administrator?', confirm: 'Appoint and create key',
           body: 'Appoint this principal as a workspace administrator and create its first key? This permits client admission and data management in this workspace.'});
       if (!ok) return;
-      await changeSecurity(onoutcome, admin ? 'keys/issue' : 'team/appoint', body);
+      await changeSecurity(app, onoutcome, admin ? 'keys/issue' : 'team/appoint', body);
       form.drop();
     }, 'key-form-submit');
   }

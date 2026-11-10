@@ -20,10 +20,12 @@
   import WritersCard from './overview/WritersCard.svelte';
   import AttentionCard from './overview/AttentionCard.svelte';
   import {total, whole, type Overview, type AttentionItem} from './overview/types';
-  import {app} from '../lib/app.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
   import {reportedWorkPage} from '../lib/model.js';
   import {relative, stamp} from '../lib/notify.svelte';
   import type {View} from '../lib/types';
+
+  const app = panelApp.forView();
 
   interface Report { status_id: string; client_name: string; agent: string | null; message: string; updated_at: number; stale: boolean; client_disabled: boolean }
   interface ReportPage { items: Report[]; next_cursor: string | null; stale_after_seconds: number }

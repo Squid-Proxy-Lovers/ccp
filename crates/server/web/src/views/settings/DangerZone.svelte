@@ -12,11 +12,13 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Separator from '../../lib/ui/Separator.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {canChangeLifecycle, canDeleteWorkspace} from '../../lib/model.js';
   import type {Session, Workspace} from '../../lib/types';
   import DeletionLookup from './DeletionLookup.svelte';
   import type {SettingsState} from './state.svelte';
+
+  const app = panelApp.forView();
 
   let {ctl, workspace, session}: {ctl: SettingsState; workspace: Workspace; session: Session} = $props();
 

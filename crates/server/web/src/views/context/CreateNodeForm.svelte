@@ -7,12 +7,13 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {hasDraftContent} from '../../lib/drafts.js';
   import {discardDraft} from '../../lib/draftDiscard.js';
   import {formFrozen} from '../../lib/identitySwitch.js';
+
+  const app = panelApp.forView();
+  const {notice, confirmAction} = app;
 
   let {kind, draftKey, oncreate}: {
     kind: 'shelf' | 'book'; draftKey: string;
@@ -54,7 +55,7 @@
     draft = fresh;
     notice(`Local ${kind} draft discarded.`);
     await tick();
-    document.getElementById(`create-${kind}-name`)?.focus();
+    app.effect(() => document.getElementById(`create-${kind}-name`)?.focus());
   }
 </script>
 

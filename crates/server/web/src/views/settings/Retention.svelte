@@ -16,10 +16,13 @@
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, stamp} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {stamp} from '../../lib/notify.svelte';
   import type {Workspace} from '../../lib/types';
   import {duration, type SettingsState} from './state.svelte';
+
+  const app = panelApp.forView();
+  const {copyText} = app;
 
   let {ctl, workspace}: {ctl: SettingsState; workspace: Workspace} = $props();
 

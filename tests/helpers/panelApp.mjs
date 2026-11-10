@@ -10,7 +10,9 @@ const dataModule = source => 'data:text/javascript;base64,' + Buffer.from(source
 const helper = JSON.stringify(import.meta.url);
 const notify = dataModule(`import {runtime} from ${helper};
   export function notice(text, tone) { runtime.toasts.push({text, tone}); }
-  export function clearToasts() { runtime.toasts.length = 0; }`);
+  export function clearToasts() { runtime.toasts.length = 0; }
+  export function bindNoticeScope() {}
+  export async function copyText(value, notify = notice) { notify('Copied. Keep it private.', 'success'); return true; }`);
 const confirm = dataModule(`import {runtime} from ${helper};
   export function confirmAction(options) {
     return new Promise(resolve => { runtime.confirmation = {...options, resolve}; });
@@ -34,4 +36,11 @@ export function answerConfirmation(ok) {
   if (!current) throw new Error('No confirmation is open.');
   runtime.confirmation = null;
   current.resolve(ok);
+}
+
+/** Exercise the real clipboard notification code without Svelte or a DOM. */
+export async function panelNotifyModule() {
+  const url = new URL('../../crates/server/web/src/lib/notify.svelte.ts', import.meta.url);
+  const source = stripTypeScriptTypes(await readFile(url, 'utf8'));
+  return import(dataModule('const $state = value => value;\n' + source));
 }

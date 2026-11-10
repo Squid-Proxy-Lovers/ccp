@@ -8,12 +8,13 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, notice} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
   import {shelfState} from '../../lib/model.js';
   import {PAGE_SIZE, contentPath, focusId, message} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
+
+  const app = panelApp.forView();
+  const {notice, copyText, confirmAction} = app;
 
   let {intent, outcome: initial, onconfirmed, onread, onreturn}: {
     intent: AdminIntent; outcome: ArchiveOutcome;
@@ -33,11 +34,11 @@
 
   function retry() {
     void app.run(async () => {
-      const next = await sendArchive(intent);
+      const next = await sendArchive(app, intent);
       if (!next) return;
       phase = next;
       observation = '';
-      void focusId('context-detail-title');
+      void focusId(app, 'context-detail-title');
       if (next.state === 'confirmed') await onconfirmed(next);
     }, 'archive-retry');
   }
@@ -57,14 +58,14 @@
     app.pending = null;
     app.setDraft(intent.body);
     phase = {state: 'forgotten'};
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 
   async function discard() {
     if (!(await confirmAction({title: 'Discard the local copy?', body: 'This does not cancel any server operation.', confirm: 'Discard copy', destructive: true}))) return;
     app.clean();
     phase = {state: 'discarded'};
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 
   function read() {
