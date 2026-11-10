@@ -3,7 +3,9 @@
 The unreleased workspace foundation can atomically appoint the first owner and
 deliver that owner's first scoped admin key. The
 [workspace HTTPS API](workspace-http-api.md) exposes creation and first-owner
-appointment with the same transactions. The browser creation flow remains later.
+appointment with the same transactions. The
+[desktop panel](workspace-browser-session.md#use-the-desktop-panel) also
+exposes this to instance keys.
 
 [Documentation index](README.md) · [Scoped admin keys](workspace-admin-keys.md)
 

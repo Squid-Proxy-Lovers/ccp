@@ -10,7 +10,7 @@ set -uo pipefail
 
 REPO="squid-proxy-lovers/ccp"
 REPO_RAW="https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
+REPO_ROOT="$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
 INSTALL_DIR="${HOME}/.local/bin"
 SESSION_NAME="my-session"
 MODE="both"
@@ -19,6 +19,7 @@ CHANNEL="stable"
 RELEASE_VERSION=""
 RELEASE_STAGE=""
 PUBLISH_STAGE=""
+MCP_CONFIG_WARNINGS=""
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -147,11 +148,37 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
-publish_binary() {
-    local source="$1" dest="$2"
-    PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
-    if ! cp "$source" "$PUBLISH_STAGE" || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
+resolve_destination() {
+    local dest="$1" link hops=0 parent
+    while true; do
+        parent="$(CDPATH='' cd -P -- "${dest%/*}" && pwd -P)" || return 1
+        dest="$parent/${dest##*/}"
+        if [ ! -L "$dest" ]; then break; fi
+        if [ "$hops" -ge 40 ] || [ ! -f "$dest" ]; then
+            err "$dest is not a symlink to a regular file." >&2
+            return 1
+        fi
+        link="$(readlink "$dest")" || return 1
+        case "$link" in
+            /*) dest="$link" ;;
+            *) dest="$parent/$link" ;;
+        esac
+        hops=$((hops + 1))
+    done
+    if [ -e "$dest" ] && [ ! -f "$dest" ]; then
+        err "$dest exists and is not a regular file; refusing to overwrite it." >&2
+        return 1
+    fi
+    printf '%s\n' "$dest"
+}
+
+finish_publish() {
+    local dest="$1"
+    # mv can succeed by moving the stage *inside* a concurrently created
+    # directory. Verify the postcondition before claiming publication.
+    if ! mv -f "$PUBLISH_STAGE" "$dest" || [ ! -f "$dest" ] || [ -e "$dest/${PUBLISH_STAGE##*/}" ]; then
         err "Could not publish $dest."
+        if [ -d "$dest" ]; then rm -f "$dest/${PUBLISH_STAGE##*/}"; fi
         rm -f "$PUBLISH_STAGE"
         PUBLISH_STAGE=""
         return 1
@@ -159,9 +186,25 @@ publish_binary() {
     PUBLISH_STAGE=""
 }
 
+publish_file() {
+    local source="$1" dest mode="$3"
+    dest="$(resolve_destination "$2")" || return 1
+    PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
+    if ! cp "$source" "$PUBLISH_STAGE" || ! chmod "$mode" "$PUBLISH_STAGE"; then
+        err "Could not stage $dest."
+        return 1
+    fi
+    finish_publish "$dest"
+}
+
+publish_binary() {
+    publish_file "$1" "$2" 0755
+}
+
 download_binary() {
-    local name="$1" dest="$2"
+    local name="$1" dest
     local platform
+    dest="$(resolve_destination "$2")" || return 1
     platform="$(detect_platform)"
     local url="https://github.com/${REPO}/releases/latest/download/${name}-${platform}"
 
@@ -186,11 +229,11 @@ download_binary() {
         echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
         return 1
     fi
-    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE" || ! mv -f "$PUBLISH_STAGE" "$dest"; then
+    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE"; then
         err "Could not publish $dest."
         return 1
     fi
-    PUBLISH_STAGE=""
+    finish_publish "$dest"
 }
 
 download_release_file() {
@@ -270,12 +313,9 @@ PY
     # Verify every component before replacing any installed binary.
     for asset in "ccp-client" "ccp-server"; do
         if [ "$asset" = "ccp-server" ] && [ "$MODE" = "client" ]; then continue; fi
-        if ! chmod +x "$RELEASE_STAGE/$asset-$platform" || ! cp "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset"; then
-            err "Could not install $asset."
-            exit 1
-        fi
+        publish_binary "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset" || exit 1
     done
-    cp "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" || exit 1
+    publish_file "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" 0644 || exit 1
 }
 
 build_from_source() {
@@ -297,7 +337,7 @@ build_from_source() {
     fi
 
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release --locked); then
+    if ! (CDPATH='' cd -P -- "$build_dir" && cargo build --release --locked); then
         err "Build failed."
         exit 1
     fi
@@ -323,8 +363,8 @@ ensure_path() {
 
 install_mcp_bridge() {
     if ! command -v python3 &>/dev/null; then
-        warn "Python 3 is required for the MCP bridge. Skipping."
-        return
+        err "Python 3 is required for the MCP bridge."
+        return 1
     fi
 
     local mcp_home="$HOME/.ccp-mcp"
@@ -369,6 +409,12 @@ install_mcp_bridge() {
     ok "MCP bridge installed in $venv_dir"
 }
 
+mcp_config_warning() {
+    warn "$2"
+    if [ -n "$MCP_CONFIG_WARNINGS" ]; then MCP_CONFIG_WARNINGS+="; "; fi
+    MCP_CONFIG_WARNINGS+="the $1 MCP config was not written"
+}
+
 configure_mcp() {
     local client_bin="$INSTALL_DIR/ccp-client"
     local venv_dir="$HOME/.ccp-mcp/venv"
@@ -409,7 +455,7 @@ MCPEOF
                 codex_env="$codex_env
 CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
             fi
-            cat >> "$codex_config" <<TOMLEOF
+            if cat >> "$codex_config" <<TOMLEOF
 
 [mcp_servers.ccp]
 command = "$mcp_cmd"
@@ -417,7 +463,11 @@ command = "$mcp_cmd"
 [mcp_servers.ccp.env]
 $codex_env
 TOMLEOF
-            ok "Added to $codex_config"
+            then
+                ok "Added to $codex_config"
+            else
+                mcp_config_warning "Codex" "Could not update $codex_config"
+            fi
         else
             ok "$codex_config already configured"
         fi
@@ -442,7 +492,7 @@ with open('$tmp', 'w') as f:
 " 2>/dev/null && mv "$tmp" "$claude_config"; then
                 ok "Added to $claude_config"
             else
-                warn "Could not update $claude_config"
+                mcp_config_warning "Claude" "Could not update $claude_config"
             fi
         else
             ok "$claude_config already configured"
@@ -454,8 +504,11 @@ with open('$tmp', 'w') as f:
     if [ -d "$HOME/.cursor" ] || [ -d "$HOME/Library/Application Support/Cursor" ]; then
         mkdir -p "$HOME/.cursor"
         if [ ! -f "$cursor_config" ]; then
-            echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"
-            ok "Created $cursor_config"
+            if echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"; then
+                ok "Created $cursor_config"
+            else
+                mcp_config_warning "Cursor" "Could not create $cursor_config"
+            fi
         elif ! python3 -c "import json; cfg=json.load(open('$cursor_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
             local tmp
             tmp="$(mktemp)"
@@ -472,7 +525,7 @@ with open('$tmp', 'w') as f:
 " 2>/dev/null && mv "$tmp" "$cursor_config"; then
                 ok "Added to $cursor_config"
             else
-                warn "Could not update $cursor_config"
+                mcp_config_warning "Cursor" "Could not update $cursor_config"
             fi
         else
             ok "$cursor_config already configured"
@@ -577,6 +630,14 @@ fi
 step "Installing CCP ${BOLD}($MODE)${RESET}"
 mkdir -p "$INSTALL_DIR" || exit 1
 
+# Validate every destination before publishing the first component, for all
+# channels and source builds. Publication rechecks each resolved destination.
+resolve_destination "$INSTALL_DIR/ccp-client" >/dev/null || exit 1
+if [ "$MODE" = "both" ]; then
+    resolve_destination "$INSTALL_DIR/ccp-server" >/dev/null || exit 1
+fi
+resolve_destination "$INSTALL_DIR/ccp-nightly.json" >/dev/null || exit 1
+
 if [ "$FROM_SOURCE" = true ]; then
     build_from_source || exit 1
 elif [ "$CHANNEL" = "nightly" ]; then
@@ -625,8 +686,6 @@ fi
 ensure_path
 
 echo ""
-echo -e "${BOLD}${GREEN}Done.${RESET}"
-echo ""
 if [ "$MODE" = "client" ]; then
     info "Enroll with a server:"
     echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
@@ -638,3 +697,8 @@ else
     echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
 fi
 echo ""
+if [ -n "$MCP_CONFIG_WARNINGS" ]; then
+    echo -e "${BOLD}${GREEN}Done, with warnings: $MCP_CONFIG_WARNINGS; see above.${RESET}"
+else
+    echo -e "${BOLD}${GREEN}Done.${RESET}"
+fi

@@ -8,7 +8,8 @@ use uuid::Uuid;
 use super::Actor;
 
 /// Stable content failures. Unexpected database failures retain their internal
-/// cause; a future transport must sanitize those rather than expose SQL errors.
+/// cause; the HTTP transport sanitizes those into a generic error rather than
+/// expose SQL errors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ContentError {
     Forbidden,
