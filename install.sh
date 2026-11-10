@@ -10,7 +10,7 @@ set -uo pipefail
 
 REPO="squid-proxy-lovers/ccp"
 REPO_RAW="https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
+REPO_ROOT="$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
 INSTALL_DIR="${HOME}/.local/bin"
 SESSION_NAME="my-session"
 MODE="both"
@@ -149,7 +149,10 @@ detect_platform() {
 
 resolve_destination() {
     local dest="$1" link hops=0 parent
-    while [ -L "$dest" ]; do
+    while true; do
+        parent="$(CDPATH='' cd -P -- "${dest%/*}" && pwd -P)" || return 1
+        dest="$parent/${dest##*/}"
+        if [ ! -L "$dest" ]; then break; fi
         if [ "$hops" -ge 40 ] || [ ! -f "$dest" ]; then
             err "$dest is not a symlink to a regular file." >&2
             return 1
@@ -157,7 +160,7 @@ resolve_destination() {
         link="$(readlink "$dest")" || return 1
         case "$link" in
             /*) dest="$link" ;;
-            *) dest="${dest%/*}/$link" ;;
+            *) dest="$parent/$link" ;;
         esac
         hops=$((hops + 1))
     done
@@ -165,8 +168,7 @@ resolve_destination() {
         err "$dest exists and is not a regular file; refusing to overwrite it." >&2
         return 1
     fi
-    parent="$(cd "${dest%/*}" && pwd -P)" || return 1
-    printf '%s/%s\n' "$parent" "${dest##*/}"
+    printf '%s\n' "$dest"
 }
 
 finish_publish() {
@@ -334,7 +336,7 @@ build_from_source() {
     fi
 
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release --locked); then
+    if ! (CDPATH='' cd -P -- "$build_dir" && cargo build --release --locked); then
         err "Build failed."
         exit 1
     fi

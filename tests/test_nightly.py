@@ -702,6 +702,45 @@ elif name == 'cat':
                     self.assertEqual(metadata.stat().st_mode & 0o777, 0o644)
                 self.log.unlink()
 
+    def test_symlinked_install_dir_resolves_relative_links_physically(self):
+        real = self.root / "real"
+        logical = self.root / "logical"
+        for directory in (real / "bin", real / "lib", logical / "lib"):
+            directory.mkdir(parents=True)
+        (logical / "bin").symlink_to(real / "bin", target_is_directory=True)
+        binary = real / "bin/ccp-client"
+        binary.symlink_to("../lib/ccp-client")
+        target = real / "lib/ccp-client"
+        unrelated = logical / "lib/ccp-client"
+        for mode, args in self.install_modes():
+            with self.subTest(mode=mode), patch.object(self, "install_dir", logical / "bin"):
+                target.write_bytes(b"old-client")
+                unrelated.write_bytes(b"unrelated-client")
+                result, _ = self.install("--client", *args)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                expected = b"replacement-client" if mode == "source" else b"ccp-client-linux-x86_64"
+                self.assertEqual(target.read_bytes(), expected)
+                self.assertEqual(unrelated.read_bytes(), b"unrelated-client")
+                self.assertTrue(binary.is_symlink())
+
+
+    def test_relative_install_dir_ignores_cdpath(self):
+        self.source_fixture()
+        intended = self.root / "relative-bin"
+        hijack = self.root / "search-path"
+        (hijack / "relative-bin").mkdir(parents=True)
+        unrelated = hijack / "relative-bin/ccp-client"
+        unrelated.write_bytes(b"unrelated-client")
+        with (
+            patch.object(self, "install_dir", Path("relative-bin")),
+            patch.dict(os.environ, CDPATH=str(hijack)),
+        ):
+            result, _ = self.install("--client", "--from-source")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((intended / "ccp-client").read_bytes(), b"replacement-client")
+        self.assertEqual(unrelated.read_bytes(), b"unrelated-client")
+
+
     def test_stable_failed_transfer_preserves_installed_bytes(self):
         target = self.install_dir / "ccp-client"
         target.write_bytes(b"working-client")
