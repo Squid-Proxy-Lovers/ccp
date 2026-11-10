@@ -2362,7 +2362,7 @@ for (const retired of [false, true]) test(`round 8: DeletionTracker queued headi
 
 
 // Round 9 exercises the production callbacks, not copies of their decisions.
-import {captureContextRecovery, discardContextRecovery, clearCopiedContextRecovery, focusRetiredContext} from '../crates/server/web/src/lib/contextRecovery.js';
+import {captureContextRecovery, discardContextRecovery, nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, focusRetiredContext} from '../crates/server/web/src/lib/contextRecovery.js';
 import {reloadContextSelection} from '../crates/server/web/src/lib/contextReload.js';
 for (const phase of ['mount', 'Refresh']) for (const endpoint of ['admin', 'key']) for (const order of ['failure first', 'success first'])
   test(`round 9: Team ${phase}, ${endpoint} failure persists with sibling ${order}`, async t => {
@@ -2416,7 +2416,7 @@ for (const kind of ['entry', 'book', 'shelf']) test(`round 9: inactive ${kind} c
   const shelf = {id: 'shelf', name: 'Shelf'}, book = {id: 'book', shelf_id: 'shelf', name: 'Book'}, entry = {id: 'entry', book_id: 'book', archived: false, name: 'Entry'};
   const page = item => ({items: [item], reload: async function () { if (item.id === kind) this.items = []; }, clear() { this.items = []; this.cleared = true; }});
   const context = {app: api, workspaceId: 'workspace', detailElement: undefined, document: {}, crypto, tick: async () => {},
-    captureContextRecovery, discardContextRecovery, clearCopiedContextRecovery, focusRetiredContext, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveSerial: 0, shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry),
+    captureContextRecovery, discardContextRecovery, nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, focusRetiredContext, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveSerial: 0, shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry),
     selectionRead: new ReadTask(api), reloadContextSelection, contentPath: x => x, detail: {kind: 'entry'}, stage: 'detail', inactiveNotice: '',
     closeDetail: () => { context.detail = {kind: 'none'}; }};
   api.read = async path => {
@@ -2565,13 +2565,16 @@ test('round 10: recovery owns a snapshot; discarding it cannot clean a later edi
   assert.equal(discardContextRecovery(api, key, record), true);
   assert.equal(app.draft, 'second entry new edit'); assert.equal(app.dirty, true); assert.equal(app.mayLeave(), false);
 });
-test('round 10: recovery cleanup preserves uncopied records and the current editor', async t => {
+test('round 11: hierarchy reload preserves copied and uncopied records and the current editor', async t => {
   const {app} = realAppHarness(t), api = app.forView(), prefix = 'context-recovery:workspace:';
   app.setDraft('first recovered text'); captureContextRecovery(api, prefix + 'one');
   app.setDraft('second recovered text'); captureContextRecovery(api, prefix + 'two');
   app.setDraft('current editor text'); app.drafts[prefix + 'one'].copied = 'true';
-  clearCopiedContextRecovery(api, prefix);
-  assert.equal(app.peekFormDraft(prefix + 'one').text, undefined);
+  await componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', {
+    app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf: null, book: null, entry: null,
+    shelves: {items: [], reload: async () => {}}, books: {}, entries: {}, recoveries: Object.entries(app.drafts), inactiveNotice: 'retired',
+  }, 'reload();');
+  assert.equal(app.peekFormDraft(prefix + 'one').text, 'first recovered text');
   assert.equal(app.peekFormDraft(prefix + 'two').text, 'second recovered text');
   assert.equal(app.draft, 'current editor text'); assert.equal(app.dirty, true); assert.equal(app.mayLeave(), false);
 });
@@ -2636,7 +2639,7 @@ test('round 10 N9: archived-entry details adopt the refreshed selected summary',
   const page = item => ({items: [{...item, name: 'fresh'}], reload: async () => {}});
   const context = {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf, book, entry,
     shelves: page(shelf), books: page(book), entries: page(entry), detail: {kind: 'archived-entry', entry},
-    clearCopiedContextRecovery, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveNotice: 'old'};
+    nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveNotice: 'old'};
   await componentCallback('views/Context.svelte','  async function reload() {','\n  reloadView(',context,'reload();');
   assert.equal(context.detail.entry.name, 'fresh'); assert.equal(context.inactiveNotice, '');
 });
@@ -2648,8 +2651,153 @@ test('round 10: the actual recovery discard callback cannot clean a live editor'
   const callbackApp = {confirmAction: async () => true, clean: () => api.clean(),
     peekFormDraft: key => api.peekFormDraft(key), dropFormDraft: key => api.dropFormDraft(key)};
   await componentCallback('views/Context.svelte', "if (await app.confirmAction({title: 'Discard recovered local work?'", '\n',
-    {app: callbackApp, key, record, discardContextRecovery}, '})()', '(async () => {');
+    {app: callbackApp, key, record, discardContextRecovery, nextContextRecovery: () => undefined, focusAfterContextDiscard: async () => {}, tick: async () => {}, document: {}, stage: 'entries', recoveryPrefix: ''}, '})()', '(async () => {');
   assert.equal(app.dirty, true); assert.equal(app.draft, 'second entry new edit'); assert.equal(app.mayLeave(), false);
+});
+
+
+function contextReloadHarness(api, extra = {}) {
+  return {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf: null, book: null, entry: null,
+    shelves: {items: [], reload: async () => {}}, books: {}, entries: {}, inactiveNotice: '',
+    recoveries: Object.entries(api.drafts), ...extra};
+}
+async function beforeUnloadHandler(app) {
+  let handler;
+  await componentCallback('lib/app.svelte.ts', "    window.addEventListener('beforeunload'", "    window.addEventListener('focus'",
+    {app, window: {addEventListener: (_name, fn) => { handler = fn; }}}, '}).call(app);', '(function(){');
+  return () => { let prevented = false; handler({preventDefault: () => { prevented = true; }}); return prevented; };
+}
+test('round 11: copy then Refresh and lock retain exact recovery and beforeunload protection', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:one';
+  app.setDraft('ONLY RECOVERABLE TEXT'); captureContextRecovery(api, key, 'Selected entry'); const record = app.peekFormDraft(key);
+  assert.equal(await api.copyText(record.text), true);
+  // Also tolerate a marker from the former implementation: it is never consent.
+  record.copied = 'true';
+  app.drafts['context-recovery:foreign:one'] = {text: 'foreign recovery', copied: 'true'};
+  const context = contextReloadHarness(api);
+  api.registerReload(() => componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();'));
+  const unload = await beforeUnloadHandler(app); assert.equal(unload(), true);
+  await app.refreshView(); assert.equal(app.peekFormDraft(key), record); assert.equal(record.text, 'ONLY RECOVERABLE TEXT');
+  assert.equal(app.drafts['context-recovery:foreign:one'].text, 'foreign recovery');
+  assert.equal(unload(), true); app.lock('current session unavailable');
+  assert.match(app.recoveryText(), /ONLY RECOVERABLE TEXT/); assert.equal(unload(), true);
+});
+test('round 11: lock recovery is a human label and text without internal fields', () => {
+  const parts = draftsRecoveryParts({'context-recovery:workspace:one': {label: 'Entry “Selected entry” — unsaved text', text: 'EXACT BODY', copied: 'true'}});
+  assert.deepEqual(parts, ['Entry “Selected entry” — unsaved text\nEXACT BODY']);
+  assert.deepEqual(draftsRecoveryParts({'context-recovery:w:empty': {label: 'empty', copied: 'true'}}), []);
+});
+test('round 11: capture names an existing or new entry', async t => {
+  const {app} = realAppHarness(t);
+  app.setDraft('existing text'); captureContextRecovery(app, 'context-recovery:w:one', 'First item');
+  app.setDraft(JSON.stringify({entry: {name: 'New item', text: 'new text'}})); captureContextRecovery(app, 'context-recovery:w:two');
+  assert.equal(app.drafts['context-recovery:w:one'].label, 'Entry “First item” — unsaved text');
+  assert.equal(app.drafts['context-recovery:w:two'].label, 'Entry “New item” — unsaved text');
+});
+test('round 11 M12: two production retirement callbacks keep separate exact snapshots', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); let id = 0;
+  const shelf = {id: 's', name: 'Shelf'}, book = {id: 'b', name: 'Book'};
+  const context = contextReloadHarness(api, {shelf, book, captureContextRecovery, announceContextRecovery, focusRetiredContext,
+    detailElement: undefined, document: {}, tick: async () => {}, crypto: {randomUUID: () => 'unique-' + (++id)},
+    recoveryPrefix: 'context-recovery:workspace:', contentPath: x => x, workspaceId: 'workspace', stage: 'detail',
+    shelves: {items: [shelf], reload: async () => {}}, books: {items: [book], reload: async () => {}},
+    entries: {items: [], reload: async () => {}, clear() {}}, closeDetail() {}});
+  api.read = async () => { throw Object.assign(new Error('NotFound'), {status: 404}); };
+  for (const name of ['FIRST UNIQUE', 'SECOND UNIQUE']) {
+    context.entry = {id: name, name}; app.setDraft(name);
+    await componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();');
+  }
+  const records = Object.values(app.drafts);
+  assert.equal(records.length, 2); assert.deepEqual(records.map(record => record.text), ['FIRST UNIQUE', 'SECOND UNIQUE']);
+  assert.equal(new Set(records.map(record => record.label)).size, 2);
+});
+test('round 11 X13: Context and EntryEditor 503 reloads report exactly one notification', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), read = api.read;
+  api.read = async (...args) => { if (args[0].includes('entries/get')) throw Object.assign(new Error('server unavailable'), {status: 503}); return read(...args); };
+  api.registerReload(async () => { throw new Error('server unavailable'); });
+  const context = {app: api, reader: new ReadTask(api), entry: {id: 'e'}, contentPath: x => '/entries/get', notice: api.notice};
+  api.registerReload(() => componentCallback('views/context/EntryEditor.svelte', '  async function reloadMounted()', '\n  reloadView(', context, 'reloadMounted();'));
+  await app.run(() => app.refreshView(), 'refresh');
+  assert.equal(appRuntime.toasts.filter(toast => toast.text === 'server unavailable').length, 1);
+});
+for (const survivor of ['next', 'notice', 'heading']) test(`round 11: discard focus chooses ${survivor} with session ownership`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), body = {}, calls = [];
+  const ids = {'next-record': {focus: () => calls.push('next')}, 'context-inactive-notice': {focus: () => calls.push('notice')}, 'entries-title': {focus: () => calls.push('heading')}};
+  if (survivor !== 'next') delete ids['next-record']; if (survivor === 'heading') delete ids['context-inactive-notice'];
+  await focusAfterContextDiscard(api, async () => {}, {body, activeElement: body, getElementById: id => ids[id]}, {nextKey: 'next-record', headingId: 'entries-title'});
+  assert.deepEqual(calls, [survivor]);
+});
+test('round 11: discard chooses the next record in order and wraps to a survivor', async t => {
+  const {app} = realAppHarness(t), prefix = 'context-recovery:w:';
+  for (const id of ['one','two','three']) app.drafts[prefix + id] = {text: id};
+  assert.equal(nextContextRecovery(app, prefix, prefix + 'two'), prefix + 'three');
+  assert.equal(nextContextRecovery(app, prefix, prefix + 'three'), prefix + 'one');
+  delete app.drafts[prefix + 'two']; delete app.drafts[prefix + 'three'];
+  assert.equal(nextContextRecovery(app, prefix, prefix + 'one'), undefined);
+});
+for (const retired of [false, true]) test(`round 11: queued discard focus preserves ownership, retired=${retired}`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), dom = defer(), body = {}; let focused = 0;
+  const document = {body, activeElement: body, getElementById: () => ({focus: () => { focused++; }})};
+  const focusing = focusAfterContextDiscard(api, () => dom.promise, document, {nextKey: 'next', headingId: 'entries-title'});
+  if (retired) api.dispose(); else document.activeElement = {id: 'Refresh'};
+  dom.resolve(); await focusing; assert.equal(focused, 0);
+});
+test('round 11: announcement clears before the DOM tick and repeats after it', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); const values = [];
+  for (let i = 0; i < 2; i++) {
+    const dom = defer(), announce = announceContextRecovery(api, 'Entry no longer active', () => dom.promise, text => values.push(text));
+    assert.equal(values.at(-1), ''); dom.resolve(); await announce; assert.equal(values.at(-1), 'Entry no longer active');
+  }
+  assert.deepEqual(values, ['', 'Entry no longer active', '', 'Entry no longer active']);
+});
+test('round 11: recovery focus target remains present and named while captures exist', async () => {
+  const template = await readFile(new URL('../crates/server/web/src/views/Context.svelte', import.meta.url), 'utf8');
+  assert.match(template, /\{#if inactiveNotice \|\| recoveries\.length\}/);
+  assert.match(template, /id="context-inactive-notice" role="region" aria-label=/);
+  const region = template.indexOf('role="status" aria-live="polite"');
+  assert.ok(region >= 0 && region < template.indexOf('{#if inactiveNotice || recoveries.length}'));
+});
+
+
+test('round 11: disposed task errors do not escape a rethrowing reload', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), response = defer();
+  const reading = new ReadTask(api).run(() => response.promise, {receive: () => assert.fail('retired data'), rethrow: true});
+  api.dispose(); response.reject(new Error('retired error')); await assert.doesNotReject(reading);
+});
+test('round 11: a replaced loader cannot begin a late session verification', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), delayed = defer(), task = new ReadTask(api);
+  const reading = task.run(async readApp => { await delayed.promise; return readApp.read('/late'); }, {receive: () => assert.fail('retired data')});
+  await task.run(readApp => readApp.read('/fresh'), {receive() {}});
+  const transport = globalThis.fetch; let requests = 0;
+  globalThis.fetch = (...args) => { requests++; return transport(...args); };
+  delayed.resolve(); await reading; assert.equal(requests, 0);
+});
+for (const status of [401, 503, 200]) test(`round 11: raw scoped verification ${status} after disposal cannot lock`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), verify = defer(), started = defer();
+  const transport = globalThis.fetch; let checks = 0;
+  globalThis.fetch = async (...args) => {
+    if (args[0] === '/api/v1/admin/session' && ++checks === 2) {
+      started.resolve(); await verify.promise;
+      return {ok: status === 200, status, json: async () => status === 200
+        ? {api_version: 1, data: {...app.session, identity: {...app.session.identity, key_id: 'changed'}}}
+        : {api_version: 1, error: {code: 'retired'}}};
+    }
+    return transport(...args);
+  };
+  const reading = api.read('/raw-view').catch(error => error); await started.promise; api.dispose(); verify.resolve();
+  await reading; assert.equal(app.locked, false);
+});
+
+test('round 11: Refresh of another selection never expires copied recovery', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:previous';
+  app.setDraft('previous editor text'); captureContextRecovery(api, key, 'Previous entry');
+  const record = app.peekFormDraft(key); await api.copyText(record.text); record.copied = 'true';
+  const shelf = {id: 's'}, book = {id: 'b'}, entry = {id: 'new-entry'};
+  const page = item => ({items: [item], reload: async () => {}});
+  const context = contextReloadHarness(api, {shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry), detail: {kind: 'none'}});
+  api.registerReload(() => componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();'));
+  await app.refreshView(); assert.equal(app.peekFormDraft(key), record); assert.equal(record.text, 'previous editor text');
+  assert.equal(context.entry.id, 'new-entry'); assert.equal(app.hasUnsavedIdentityWork, true);
 });
 
 import './workspace_panel_wiring.mjs';

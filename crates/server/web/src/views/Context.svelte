@@ -11,7 +11,7 @@
   import Badge from '../lib/ui/Badge.svelte';
   import Alert from '../lib/ui/Alert.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
-  import {captureContextRecovery, discardContextRecovery, clearCopiedContextRecovery, focusRetiredContext} from '../lib/contextRecovery.js';
+  import {captureContextRecovery, discardContextRecovery, nextContextRecovery, focusAfterContextDiscard, announceContextRecovery, focusRetiredContext} from '../lib/contextRecovery.js';
   import {ReadTask} from '../lib/readTask.js';
   import {reloadContextSelection} from '../lib/contextReload.js';
   import Button from '../lib/ui/Button.svelte';
@@ -63,7 +63,7 @@
   let detailSerial = $state(0);
   let detailFrom = $state<Stage>('shelves');
   let inactiveNotice = $state('');
-  let inactiveSerial = $state(0);
+  let recoveryAnnouncement = $state('');
   let detailElement = $state<HTMLElement>();
   const recoveryPrefix = `context-recovery:${workspaceId}:`;
   const recoveries = $derived(Object.entries(app.drafts).filter(([key, record]) => key.startsWith(recoveryPrefix) && record.text));
@@ -307,10 +307,10 @@
         shelf = result.shelf; book = result.book; entry = result.entry;
         if (result.missing) {
           const hadFocus = Boolean(detailElement?.contains(document.activeElement));
-          captureContextRecovery(app, recoveryPrefix + crypto.randomUUID());
-          inactiveSerial += 1;
+          captureContextRecovery(app, recoveryPrefix + crypto.randomUUID(), entry?.name ?? '');
           const label = result.missing.charAt(0).toUpperCase() + result.missing.slice(1);
           inactiveNotice = `${label} is no longer active (archived or removed).`;
+          void announceContextRecovery(app, inactiveNotice, tick, (text: string) => { recoveryAnnouncement = text; });
           if (result.missing === 'shelf') { shelf = null; books.clear(); }
           if (result.missing !== 'entry') { book = null; entries.clear(); }
           entry = null;
@@ -318,10 +318,7 @@
           closeDetail(); stage = result.missing === 'shelf' ? 'shelves' : result.missing === 'book' ? 'books' : 'entries';
           void focusRetiredContext(app, hadFocus, tick, document);
         }
-        if (!result.missing) {
-          clearCopiedContextRecovery(app, recoveryPrefix);
-          if (!recoveries.length) inactiveNotice = '';
-        }
+        if (!result.missing && !recoveries.length) inactiveNotice = '';
         if (entry && detail.kind === 'archived-entry') detail = {...detail, entry};
       }, rethrow: true,
     });
@@ -347,28 +344,30 @@
     {#if entry}<span aria-hidden="true">/</span><span class="max-w-48 truncate px-1 text-foreground" aria-current="location">{entry.name}</span>{/if}
   </nav>
 
-  {#if inactiveNotice}
-    {#key inactiveSerial}
-      <div id="context-inactive-notice" tabindex="-1" class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <Alert title="Selection no longer active" live><p>{inactiveNotice}</p></Alert>
-      </div>
-    {/key}
+  <div class="sr-only" role="status" aria-live="polite" aria-atomic="true">{recoveryAnnouncement}</div>
+  {#if inactiveNotice || recoveries.length}
+    <div id="context-inactive-notice" role="region" aria-label={recoveries.length ? 'Recovered local work' : 'Selection no longer active'} tabindex="-1" class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <Alert title={recoveries.length ? 'Recovered local work' : 'Selection no longer active'}>
+        {#if inactiveNotice}<p>{inactiveNotice}</p>{/if}
+        {#if recoveries.length}<p>Text from closed editors stays here until you explicitly discard it. Copying does not remove it.</p>{/if}
+      </Alert>
+    </div>
   {/if}
   {#each recoveries as [key, record] (key)}
-    <Alert title="Recovered local work">
-      <div class="space-y-3">
-        <p>Text kept from the closed editor. Copy it before explicitly discarding it.</p>
-        <Textarea aria-label="Recoverable local work" value={record.text} readonly rows={6} />
-        <div class="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onclick={async () => {
-            if (await app.copyText(record.text ?? '')) app.effect(() => { record.copied = 'true'; });
-          }}>Copy local work</Button>
-          <Button variant="outline" size="sm" onclick={async () => {
-            if (await app.confirmAction({title: 'Discard recovered local work?', body: 'This clears only the text captured from the closed editor. Copy it first if you need it.', confirm: 'Discard local work', destructive: true})) discardContextRecovery(app, key, record);
-          }}>Discard local work</Button>
+    <section id={key} data-context-recovery tabindex="-1" aria-label={record.label || 'Recovered context text'} class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <Alert title={record.label || 'Recovered context text'}>
+        <div class="space-y-3">
+          <p>Text kept from the closed editor. Copy it before explicitly discarding it.</p>
+          <Textarea aria-label="Recoverable local work" value={record.text} readonly rows={6} />
+          <div class="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onclick={() => app.copyText(record.text ?? '')}>Copy local work</Button>
+            <Button variant="outline" size="sm" onclick={async () => {
+              if (await app.confirmAction({title: 'Discard recovered local work?', body: 'This clears only the text captured from the closed editor. Copy it first if you need it.', confirm: 'Discard local work', destructive: true})) { const nextKey = nextContextRecovery(app, recoveryPrefix, key); if (discardContextRecovery(app, key, record)) await focusAfterContextDiscard(app, tick, document, {nextKey, headingId: stage === 'detail' ? 'context-detail-title' : `${stage}-title`}); }
+            }}>Discard local work</Button>
+          </div>
         </div>
-      </div>
-    </Alert>
+      </Alert>
+    </section>
   {/each}
 
   <div class="grid gap-4 md:grid-cols-3">

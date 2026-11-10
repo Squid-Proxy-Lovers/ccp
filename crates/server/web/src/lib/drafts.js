@@ -71,6 +71,10 @@ export function shelfBadgeLabel(isNew, bookDraftFields) {
 export function draftsRecoveryParts(drafts) {
   const parts = [];
   for (const [key, fields] of Object.entries(drafts)) {
+    if (key.startsWith('context-recovery:')) {
+      if (fields.text?.trim()) parts.push([fields.label || draftLabel(key), fields.text].join('\n'));
+      continue;
+    }
     const filled = Object.entries(fields).filter(([, value]) => value.trim());
     if (filled.length) parts.push([draftLabel(key), ...filled.map(([name, value]) => `${name}: ${value}`)].join('\n'));
   }
