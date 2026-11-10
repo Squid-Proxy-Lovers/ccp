@@ -18,10 +18,16 @@
 - An optional WebSocket server carrier, off by default. Client support is not
   included, so treat it as experimental.
 
+### Security
+
+- Bundled SQLite is now 3.54.1 (rusqlite 0.41.1), fixing RUSTSEC-2026-0459.
+
 ### Upgrading from 0.1.0
 
+Building from source now needs Rust 1.89 or later; 0.1.0 needed 1.88.
+
 The native wire protocol stays at version 1, so existing native deployments
-keep working. Workspaces use a new database schema (25) and do not adopt native
+keep working. Workspaces use a new database schema (27) and do not adopt native
 data in place.
 
 To move a native instance to workspaces, stop it and run
