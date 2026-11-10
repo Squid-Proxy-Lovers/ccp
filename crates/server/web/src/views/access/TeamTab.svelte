@@ -39,7 +39,7 @@
 
   const adminRead = new ReadTask(app), keyRead = new ReadTask(app);
   async function readAdmins(cursor: string | null) {
-    await adminRead.run(() => app.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
+    await adminRead.run(readApp => readApp.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
       {workspace_id: workspace.id, after: cursor, limit: 16}), {
       start: () => { adminLoading = true; },
       receive: data => { admins = data; adminAfter = cursor; adminError = ''; },
@@ -48,7 +48,7 @@
     });
   }
   async function readKeys(cursor: string | null) {
-    await keyRead.run(() => app.read<{keys: WorkspaceKey[]; next_cursor: string | null}>('/api/v1/admin/keys/list',
+    await keyRead.run(readApp => readApp.read<{keys: WorkspaceKey[]; next_cursor: string | null}>('/api/v1/admin/keys/list',
       {workspace_id: workspace.id, after: cursor, limit: 16}), {
       start: () => { keyLoading = true; },
       receive: data => { keys = data; keyAfter = cursor; keyError = ''; },

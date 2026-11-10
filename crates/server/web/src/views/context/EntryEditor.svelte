@@ -55,7 +55,7 @@
   async function reloadMounted() {
     const current = entry;
     if (!current) return;
-    await reader.run(() => app.read<Snapshot>(contentPath('entries/get'),
+    await reader.run(readApp => readApp.read<Snapshot>(contentPath('entries/get'),
       {workspace_id: app.workspace?.id, entry_id: current.id, revision: null}), {
       receive: value => {
         if (app.dirty || app.pending) return;
@@ -63,7 +63,7 @@
         original = {description: value.content.description, labels: value.content.labels.join('\n'), text: value.content.text};
         description = original.description; labels = original.labels; text = original.text;
       },
-      error: error => { if (!app.locked) notice((error as Error).message, 'warning'); },
+      rethrow: true,
     });
   }
   reloadView(app, reloadMounted);

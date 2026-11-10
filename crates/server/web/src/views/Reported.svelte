@@ -63,7 +63,7 @@
   const reader = new ReadTask(app);
   async function load(cursor: string | null, carried: string, announce = true): Promise<void> {
     if (!app.mayLeave()) return;
-    await reader.run(async () => reportedWorkPage(await app.read('/api/v1/work/status/list',
+    await reader.run(async readApp => reportedWorkPage(await readApp.read('/api/v1/work/status/list',
       {workspace_id: workspace.id, after: cursor, limit: 32}), workspace.id) as ReportPage, {
       receive: data => {
         page = data; after = cursor; confirmed = carried; mode = 'list'; loadError = '';

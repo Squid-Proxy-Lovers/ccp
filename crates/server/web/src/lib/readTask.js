@@ -5,14 +5,15 @@ export class SupersededRead extends Error {
 }
 export const isSupersededRead = error => error?.name === 'SupersededRead';
 
+/** @template {{generation: number, session: unknown, sessionEpoch?: number, effect: (fn: () => void) => void, isCurrent?: () => boolean, read?: Function}} A */
 export class ReadTask {
   #serial = 0;
-  /** @param {{generation: number, session: unknown, sessionEpoch?: number, effect: (fn: () => void) => void}} app */
+  /** @param {A} app */
   constructor(app) { this.app = app; }
 
   /**
    * @template T
-   * @param {() => Promise<T>} load
+   * @param {(app: A) => Promise<T>} load
    * @param {{receive: (data: T) => void, error?: (error: unknown) => void, start?: () => void, finish?: () => void, rethrow?: boolean}} effects
    * @returns {Promise<T | undefined>}
    */
@@ -20,11 +21,17 @@ export class ReadTask {
     const serial = ++this.#serial, generation = this.app.generation;
     const session = this.app.session, epoch = this.app.sessionEpoch;
     const current = () => serial === this.#serial && generation === this.app.generation
-      && session === this.app.session && epoch === this.app.sessionEpoch;
+      && session === this.app.session && epoch === this.app.sessionEpoch
+      && (this.app.isCurrent?.() ?? true);
     const commit = fn => { if (current() && fn) this.app.effect(fn); };
     commit(effects.start);
     try {
-      const data = await load();
+      // The loader must use this bound API, including after its own awaits.
+      // Each request carries this exact ticket to the session-effect boundary.
+      const scoped = new Proxy(this.app, {get: (target, key) => key === 'read'
+        ? (path, body) => target.read(path, body, current)
+        : Reflect.get(target, key, target)});
+      const data = await load(scoped);
       if (!current()) return;
       let received = false;
       commit(() => { effects.receive(data); received = true; });

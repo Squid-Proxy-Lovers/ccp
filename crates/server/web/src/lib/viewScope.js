@@ -18,6 +18,7 @@ export function viewScope(state, effects, isMounted = () => true) {
   const retired = () => new Error('This view has been superseded.');
   return new Proxy(state, {
     get(target, key) {
+      if (key === 'isCurrent') return current;
       if (key === 'dispose') return () => { active = false; };
       if (key in effects) {
         return (...args) => {
@@ -42,6 +43,10 @@ export function viewScope(state, effects, isMounted = () => true) {
           if (key === 'request' || key === 'read' || key === 'verify') return Promise.reject(retired());
           if (key === 'clearWorkspace') throw retired();
           return undefined;
+        }
+        if (key === 'read') {
+          const [path, body, valid = () => true] = args;
+          return value.call(target, path, body, () => current() && valid());
         }
         if (key === 'registerReload') {
           return value.call(target, async () => { if (current()) await args[0](); });

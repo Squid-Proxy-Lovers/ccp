@@ -31,7 +31,7 @@
 
   const reader = new ReadTask(app);
   async function load(): Promise<void> {
-    await reader.run(() => readGuidance(app, workspaceId), {
+    await reader.run(readApp => readGuidance(readApp, workspaceId), {
       receive: data => { if (!app.dirty && !app.pending) bundle = data; failed = ''; },
       error: error => {
         if (app.locked) return;

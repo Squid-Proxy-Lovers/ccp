@@ -50,10 +50,10 @@
     const target = workspace;
     if (!target) return;
     const window = days;
-    await overviewRead.run(async () => {
+    await overviewRead.run(async readApp => {
       const path = '/api/v1/admin/workspaces/overview';
-      return Promise.all([app.read<Overview>(path, {workspace_id: target.id, days: window}),
-        window * 2 <= 90 ? app.read<Overview>(path, {workspace_id: target.id, days: window * 2}) : null]);
+      return Promise.all([readApp.read<Overview>(path, {workspace_id: target.id, days: window}),
+        window * 2 <= 90 ? readApp.read<Overview>(path, {workspace_id: target.id, days: window * 2}) : null]);
     }, {
       start: () => { loading = true; overviewError = ''; },
       receive: ([current, wide]) => {
@@ -67,7 +67,7 @@
   async function loadReports() {
     const target = workspace;
     if (!target) return;
-    await reportsRead.run(async () => reportedWorkPage(await app.read('/api/v1/work/status/list',
+    await reportsRead.run(async readApp => reportedWorkPage(await readApp.read('/api/v1/work/status/list',
       {workspace_id: target.id, after: null, limit: 32}), target.id) as ReportPage, {
       start: () => { reportsError = ''; }, receive: data => { reports = data; },
       error: error => { if (!app.locked) reportsError = (error as Error).message; },

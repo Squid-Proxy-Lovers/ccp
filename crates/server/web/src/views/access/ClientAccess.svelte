@@ -35,7 +35,7 @@
 
   const reader = new ReadTask(app);
   async function read(cursor: string | null) {
-    await reader.run(() => readRecovery(app, client.client_id, scope, cursor), {
+    await reader.run(readApp => readRecovery(readApp, client.client_id, scope, cursor), {
       receive: data => { page = data; after = cursor; error = ''; },
       error: failure => { if (!app.locked) error = (failure as Error).message; },
     });

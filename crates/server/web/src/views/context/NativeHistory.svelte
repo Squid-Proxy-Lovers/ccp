@@ -43,7 +43,7 @@
   const reader = new ReadTask(app);
   async function load(cursor: number | null, focus = true) {
     const workspace = app.workspace?.id;
-    const data = await reader.run(async () => validate(await app.read('/api/v1/content/entries/native-history',
+    const data = await reader.run(async readApp => validate(await readApp.read('/api/v1/content/entries/native-history',
       {workspace_id: workspace, entry_id: entryId, after: cursor, limit: 8}), workspace, entryId, cursor), {
       start: () => { loading = true; failed = false; },
       receive: value => { page = value; if (cursor !== after) open = {}; after = cursor; },

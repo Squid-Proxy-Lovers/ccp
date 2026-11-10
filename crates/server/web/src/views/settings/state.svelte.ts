@@ -72,7 +72,7 @@ export class SettingsState {
   async loadPolicy(): Promise<Policy | null> {
     const workspace = this.#app.workspace;
     if (!workspace) return null;
-    const policy = await this.#policyRead.run(async () => retentionPolicy(await this.#app.read(RETENTION_GET, {workspace_id: workspace.id}), workspace.id) as Policy, {
+    const policy = await this.#policyRead.run(async readApp => retentionPolicy(await readApp.read(RETENTION_GET, {workspace_id: workspace.id}), workspace.id) as Policy, {
       start: () => { this.loading = true; },
       receive: value => { if (!this.#app.dirty) this.policy = value; this.policyError = ''; },
       error: error => {
@@ -85,8 +85,8 @@ export class SettingsState {
 
   async loadRoster(after: string | null): Promise<void> {
     if (!this.ownerTools || this.workspace.archived) { this.roster = []; return; }
-    await this.#rosterRead.run(async () => {
-      const page = await this.#app.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
+    await this.#rosterRead.run(async readApp => {
+      const page = await readApp.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
         {workspace_id: this.workspace.id, after, limit: ROSTER_PAGE});
       if (!Array.isArray(page.admins)) throw new Error('The administrator page could not be verified.');
       return page;

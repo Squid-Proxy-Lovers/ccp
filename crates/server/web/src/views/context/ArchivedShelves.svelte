@@ -17,8 +17,8 @@
   let {oninspect, onreturn}: {oninspect: (shelfId: string) => void; onreturn: () => void} = $props();
 
   const workspaceId = app.workspace?.id;
-  const pager = new Pager<ArchivedShelf>(app, async (after, limit) =>
-    archivedShelfPage(await app.read(contentPath('shelves/archived'), {workspace_id: workspaceId, after, limit}), workspaceId) as ContentPage<ArchivedShelf>);
+  const pager = new Pager<ArchivedShelf>(app, async (after, limit, readApp) =>
+    archivedShelfPage(await readApp.read(contentPath('shelves/archived'), {workspace_id: workspaceId, after, limit}), workspaceId) as ContentPage<ArchivedShelf>);
 
   reloadView(app, () => pager.reload());
   onMount(() => { pager.first().catch(() => {}); });

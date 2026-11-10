@@ -47,14 +47,14 @@
 
   const grantsRead = new ReadTask(app), windowRead = new ReadTask(app);
   async function readGrants(after: string | null) {
-    await grantsRead.run(() => app.read<GrantPage>('/api/v1/admin/workspaces/grants', {workspace_id: workspace.id, after, limit: 32}), {
+    await grantsRead.run(readApp => readApp.read<GrantPage>('/api/v1/admin/workspaces/grants', {workspace_id: workspace.id, after, limit: 32}), {
       receive: data => { grants = data; grantsAfter = after; grantsError = ''; },
       error: error => { if (!app.locked) grantsError = (error as Error).message; },
     });
   }
   async function readWindow() {
     if (!manager) { enrollment = null; return; }
-    await windowRead.run(() => readEnrollment(app, workspace.id), {
+    await windowRead.run(readApp => readEnrollment(readApp, workspace.id), {
       receive: data => { enrollment = data; enrollmentError = ''; },
       error: error => { if (!app.locked) { enrollment = null; enrollmentError = (error as Error).message; } },
     });

@@ -13,13 +13,13 @@ export class Pager<T extends {id: string}> {
   loaded = $state(false);
   loading = $state(false);
   error = $state('');
-  #read: ReadTask;
-  #fetch: (after: string | null, limit: number) => Promise<ContentPage<T>>;
+  #read: ReadTask<ViewApp>;
+  #fetch: (after: string | null, limit: number, app: ViewApp) => Promise<ContentPage<T>>;
 
-  constructor(app: ViewApp, fetch: (after: string | null, limit: number) => Promise<ContentPage<T>>) { this.#fetch = fetch; this.#read = new ReadTask(app); }
+  constructor(app: ViewApp, fetch: (after: string | null, limit: number, app: ViewApp) => Promise<ContentPage<T>>) { this.#fetch = fetch; this.#read = new ReadTask(app); }
 
   async load(after: string | null = null, page = 1): Promise<void> {
-    await this.#read.run(() => this.#fetch(after, PAGE_SIZE), {
+    await this.#read.run(readApp => this.#fetch(after, PAGE_SIZE, readApp), {
       start: () => { this.loading = true; this.error = ''; },
       receive: data => {
         this.items = data.items; this.next = data.next_cursor; this.after = after;

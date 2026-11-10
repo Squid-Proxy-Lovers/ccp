@@ -67,6 +67,8 @@ export class App {
   #fragmentKey = '';
   #reloads = new ViewReloads();
 
+  isCurrent(): boolean { return true; }
+
   get waitingForWorkspaceCreate(): boolean { return lockedSignInBlocked(this); }
 
   forView(isMounted: () => boolean = () => true): App & {notice: typeof notice; copyText: typeof copyText; confirmAction: typeof confirmAction; wire: typeof wire; effect: (callback: () => void) => void; dispose: () => void} {
@@ -142,9 +144,9 @@ export class App {
   }
 
   /** Read errors from an obsolete generation are cancellation, never UI failure. */
-  async read<T = any>(path: string, body?: unknown): Promise<T> {
+  async read<T = any>(path: string, body?: unknown, isCurrent: () => boolean = () => true): Promise<T> {
     const generation = this.generation, session = this.session, epoch = this.sessionEpoch;
-    try { return await sessionRequest(this, {wire, lock: (message: string) => this.lock(message)}, path, body, undefined, true); }
+    try { return await sessionRequest(this, {wire, lock: (message: string) => this.lock(message)}, path, body, undefined, true, isCurrent); }
     catch (error) {
       if (generation !== this.generation || session !== this.session || epoch !== this.sessionEpoch) throw new SupersededRead();
       throw error;

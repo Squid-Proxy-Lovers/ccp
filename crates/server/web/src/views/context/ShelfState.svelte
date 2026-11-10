@@ -28,7 +28,7 @@
 
   const reader = new ReadTask(app);
   async function load() {
-    await reader.run(async () => shelfState(await app.read(contentPath('shelves/state'),
+    await reader.run(async readApp => shelfState(await readApp.read(contentPath('shelves/state'),
       {workspace_id: workspace?.id, node_id: shelfId}), workspace?.id, shelfId), {
       start: () => { error = ''; }, receive: data => { observed = data as ShelfStateValue; },
       error: failure => { if (!app.locked) error = message(failure); },

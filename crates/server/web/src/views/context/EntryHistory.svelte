@@ -26,7 +26,7 @@
 
   const reader = new ReadTask(app);
   async function load(cursor: number | null, focus = true) {
-    const data = await reader.run(() => app.read<HistoryPage>(contentPath('entries/history'),
+    const data = await reader.run(readApp => readApp.read<HistoryPage>(contentPath('entries/history'),
       {workspace_id: app.workspace?.id, entry_id: entryId, after: cursor, limit: PAGE_SIZE}), {
       start: () => { loading = true; error = ''; },
       receive: value => { page = value; if (cursor !== after) opened = {}; after = cursor; },

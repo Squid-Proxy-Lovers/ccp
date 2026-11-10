@@ -2362,6 +2362,7 @@ for (const retired of [false, true]) test(`round 8: DeletionTracker queued headi
 
 
 // Round 9 exercises the production callbacks, not copies of their decisions.
+import {captureContextRecovery, discardContextRecovery, clearCopiedContextRecovery, focusRetiredContext} from '../crates/server/web/src/lib/contextRecovery.js';
 import {reloadContextSelection} from '../crates/server/web/src/lib/contextReload.js';
 for (const phase of ['mount', 'Refresh']) for (const endpoint of ['admin', 'key']) for (const order of ['failure first', 'success first'])
   test(`round 9: Team ${phase}, ${endpoint} failure persists with sibling ${order}`, async t => {
@@ -2414,7 +2415,8 @@ for (const kind of ['entry', 'book', 'shelf']) test(`round 9: inactive ${kind} c
   const {app} = realAppHarness(t); const api = app.forView();
   const shelf = {id: 'shelf', name: 'Shelf'}, book = {id: 'book', shelf_id: 'shelf', name: 'Book'}, entry = {id: 'entry', book_id: 'book', archived: false, name: 'Entry'};
   const page = item => ({items: [item], reload: async function () { if (item.id === kind) this.items = []; }, clear() { this.items = []; this.cleared = true; }});
-  const context = {app: api, workspaceId: 'workspace', shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry),
+  const context = {app: api, workspaceId: 'workspace', detailElement: undefined, document: {}, crypto, tick: async () => {},
+    captureContextRecovery, discardContextRecovery, clearCopiedContextRecovery, focusRetiredContext, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveSerial: 0, shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry),
     selectionRead: new ReadTask(api), reloadContextSelection, contentPath: x => x, detail: {kind: 'entry'}, stage: 'detail', inactiveNotice: '',
     closeDetail: () => { context.detail = {kind: 'none'}; }};
   api.read = async path => {
@@ -2428,7 +2430,10 @@ for (const kind of ['entry', 'book', 'shelf']) test(`round 9: inactive ${kind} c
   assert.match(context.inactiveNotice, /no longer active \(archived or removed\)/);
   if (kind !== 'entry') { assert.equal(context.book, null); assert.deepEqual(context.entries.items, []); }
   if (kind === 'shelf') { assert.equal(context.shelf, null); assert.deepEqual(context.books.items, []); }
-  assert.equal(app.dirty, true); assert.match(app.recoveryText(), /unsaved original entry text/);
+  assert.equal(app.dirty, false, 'the closed editor transfers ownership to the kept draft record');
+  assert.equal(app.hasFormDrafts, true); assert.equal(app.hasUnsavedIdentityWork, true); assert.match(app.recoveryText(), /unsaved original entry text/);
+  assert.equal(context.stage, kind === 'shelf' ? 'shelves' : kind === 'book' ? 'books' : 'entries');
+  if (kind === 'entry') { assert.equal(context.book, book); assert.equal(context.shelf, shelf); }
 });
 
 test('round 9: an off-page active selection is retained and lookup errors propagate', async () => {
@@ -2513,6 +2518,138 @@ test('round 9: reload callback is inert between scope disposal and cleanup', asy
   const {app} = realAppHarness(t), visit = app.forView(); let calls = 0;
   const stop = visit.registerReload(async () => { calls++; }); t.after(stop); visit.dispose();
   await app.refreshView(); assert.equal(calls, 0);
+});
+
+
+for (const transition of ['replacement', 'disposal']) for (const status of [401, 503])
+  test(`round 10: Team ${transition} retires old verification ${status} within one generation`, async t => {
+    const {app, server} = realAppHarness(t), api = app.forView();
+    const held = server.hold('/api/v1/admin/team/list');
+    const context = {app: api, ReadTask, workspace: {id: 'workspace'}, admins: null, keys: null,
+      adminAfter: null, keyAfter: null, adminError: '', keyError: '', adminLoading: false, keyLoading: false};
+    const loaders = await componentCallback('views/access/TeamTab.svelte', '  const adminRead =', '\n  reloadView(', context, '({readAdmins, readKeys});');
+    const initial = loaders.readAdmins(null); await held.started; const generation = app.generation;
+    if (transition === 'replacement') await loaders.readAdmins(null); else api.dispose();
+    const transport = globalThis.fetch; let checks = 0;
+    globalThis.fetch = (path, options) => path === '/api/v1/admin/session'
+      ? (checks++, Promise.resolve({ok: false, status, json: async () => ({api_version: 1, error: {code: 'obsolete'}})}))
+      : transport(path, options);
+    const notices = [...appRuntime.toasts]; held.release(); await initial;
+    assert.equal(app.generation, generation); assert.equal(checks, 0); assert.equal(app.locked, false);
+    assert.deepEqual(appRuntime.toasts, notices);
+  });
+for (const transition of ['replacement', 'disposal']) for (const status of [401, 503])
+  test(`round 10: retirement during session verification suppresses ${transition} ${status}`, async t => {
+    const {app, server} = realAppHarness(t), api = app.forView(), task = new ReadTask(api);
+    const response = server.hold('/read-verifying');
+    const reading = task.run(readApp => readApp.read('/read-verifying'), {receive: () => assert.fail('retired data')});
+    await response.started;
+    const verification = server.hold('/api/v1/admin/session', {status}); response.release(); await verification.started;
+    if (transition === 'replacement') task.invalidate(); else api.dispose();
+    verification.release(); await reading; assert.equal(app.locked, false);
+  });
+for (const status of [401, 403]) test(`round 10: disposed read body ${status} cannot lock a live sibling`, async t => {
+  const {app, server} = realAppHarness(t), api = app.forView(), task = new ReadTask(api);
+  const response = server.hold('/retired-denied', {status});
+  const reading = task.run(readApp => readApp.read('/retired-denied'), {receive: () => assert.fail('retired data')});
+  await response.started; api.dispose(); response.release(); await reading; assert.equal(app.locked, false);
+});
+
+test('round 10: recovery owns a snapshot; discarding it cannot clean a later editor', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:first';
+  app.setDraft('retired text'); captureContextRecovery(api, key);
+  const record = app.peekFormDraft(key); assert.equal(record.text, 'retired text');
+  assert.equal(app.dirty, false); assert.equal(app.hasUnsavedIdentityWork, true);
+  app.setDraft('second entry new edit');
+  assert.equal(record.text, 'retired text'); assert.equal(app.mayLeave(), false);
+  assert.equal(discardContextRecovery(api, key, record), true);
+  assert.equal(app.draft, 'second entry new edit'); assert.equal(app.dirty, true); assert.equal(app.mayLeave(), false);
+});
+test('round 10: recovery cleanup preserves uncopied records and the current editor', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), prefix = 'context-recovery:workspace:';
+  app.setDraft('first recovered text'); captureContextRecovery(api, prefix + 'one');
+  app.setDraft('second recovered text'); captureContextRecovery(api, prefix + 'two');
+  app.setDraft('current editor text'); app.drafts[prefix + 'one'].copied = 'true';
+  clearCopiedContextRecovery(api, prefix);
+  assert.equal(app.peekFormDraft(prefix + 'one').text, undefined);
+  assert.equal(app.peekFormDraft(prefix + 'two').text, 'second recovered text');
+  assert.equal(app.draft, 'current editor text'); assert.equal(app.dirty, true); assert.equal(app.mayLeave(), false);
+});
+test('round 10: a delayed discard decision covers only its captured recovery object', async t => {
+  const {app} = realAppHarness(t), key = 'context-recovery:workspace:one';
+  app.setDraft('retired'); captureContextRecovery(app, key); const original = app.peekFormDraft(key);
+  app.drafts[key] = {text: 'replacement'}; app.setDraft('live editor');
+  assert.equal(discardContextRecovery(app, key, original), false);
+  assert.equal(app.drafts[key].text, 'replacement'); assert.equal(app.dirty, true); assert.equal(app.draft, 'live editor');
+});
+for (const kind of ['shelf', 'book', 'entry']) test(`round 10: accepted ${kind} selection clears only the inactive notice`, async () => {
+  const record = {text: 'captured closed editor text'};
+  const context = {app: {mayLeave: () => true, run: async fn => fn()}, inactiveNotice: 'Entry is no longer active', record,
+    shelf: null, book: null, entry: null, books: {clear() {}, first: async () => {}}, entries: {clear() {}, first: async () => {}},
+    archivedEntries: false, closeDetail() {}, stage: 'entries', wide: () => true, focusId() {},
+    detail: {kind: 'none'}, detailSerial: 0, openEntry: async () => {}, show() {}};
+  const marker = kind === 'shelf' ? '  function selectShelf' : kind === 'book' ? '  function selectBook' : '  function selectEntry';
+  const end = kind === 'shelf' ? '\n  function selectBook' : kind === 'book' ? '\n  function selectEntry' : '\n  function toggleArchived';
+  await componentCallback('views/Context.svelte', marker, end, context, `select${kind[0].toUpperCase()+kind.slice(1)}({id: 'next', archived: false});`);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(context.inactiveNotice, ''); assert.equal(record.text, 'captured closed editor text');
+});
+for (const hadFocus of [false, true]) for (const retired of [false, true]) test(`round 10: retired Context focus ownership, editor focused=${hadFocus}, scope retired=${retired}`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), dom = defer(); let focused = 0;
+  const body = {}, document = {body, activeElement: body, getElementById: () => ({focus: () => { focused++; }})};
+  const focusing = focusRetiredContext(api, hadFocus, () => dom.promise, document);
+  if (retired) api.dispose(); dom.resolve(); await focusing;
+  assert.equal(focused, hadFocus && !retired ? 1 : 0);
+});
+test('round 10: queued retirement focus preserves a newly focused Refresh button', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), dom = defer(); let focused = 0;
+  const body = {}, document = {body, activeElement: body, getElementById: () => ({focus: () => { focused++; }})};
+  const focusing = focusRetiredContext(api, true, () => dom.promise, document); document.activeElement = {label: 'Refresh'};
+  dom.resolve(); await focusing; assert.equal(focused, 0);
+});
+
+test('round 10 N1: off-page archived entry summary is kept without active body lookup', async () => {
+  const selection = {shelf: {id: 's'}, book: {id: 'b'}, entry: {id: 'e', archived: true}};
+  const pages = Object.fromEntries(['shelf', 'book', 'entry'].map(kind => [kind, {items: kind === 'entry' ? [] : [selection[kind]], reload: async () => {}}]));
+  const result = await reloadContextSelection({selection, pages, read: async () => assert.fail('archived active-body lookup')});
+  assert.equal(result.entry, selection.entry); assert.equal(result.missing, undefined);
+});
+test('round 10 N3: listed selection metadata is adopted at every hierarchy level', async () => {
+  const selection = Object.fromEntries(['shelf','book','entry'].map(kind => [kind, {id: kind, name: 'old'}]));
+  const pages = Object.fromEntries(Object.keys(selection).map(kind => [kind, {items: [{id: kind, name: 'fresh'}], reload: async () => {}}]));
+  const result = await reloadContextSelection({selection, pages, read: async () => assert.fail('listed lookup')});
+  for (const kind of Object.keys(selection)) assert.equal(result[kind], pages[kind].items[0]);
+});
+for (const status of [400, 401, 403, 409, 503]) test(`round 10 N4: selected lookup ${status} never means inactive`, async () => {
+  const selection = {shelf: {id: 's'}, book: null, entry: null}, failure = Object.assign(new Error('lookup failed'), {status});
+  const pages = {shelf: {items: [], reload: async () => {}}};
+  await assert.rejects(reloadContextSelection({selection, pages, read: async () => { throw failure; }}), failure);
+});
+test('round 10 N6: Context reload propagates active lookup errors', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); api.read = async () => { throw new Error('active lookup failed'); };
+  const context = {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf: {id: 's'}, book: null, entry: null,
+    shelves: {items: [], reload: async () => {}}, books: {}, entries: {}, contentPath: x => x, workspaceId: 'workspace'};
+  await assert.rejects(componentCallback('views/Context.svelte','  async function reload() {','\n  reloadView(',context,'reload();'), /active lookup failed/);
+});
+test('round 10 N9: archived-entry details adopt the refreshed selected summary', async t => {
+  const {app} = realAppHarness(t), api = app.forView(); const shelf = {id: 's'}, book = {id: 'b'}, entry = {id: 'e', archived: true, name: 'old'};
+  const page = item => ({items: [{...item, name: 'fresh'}], reload: async () => {}});
+  const context = {app: api, selectionRead: new ReadTask(api), reloadContextSelection, shelf, book, entry,
+    shelves: page(shelf), books: page(book), entries: page(entry), detail: {kind: 'archived-entry', entry},
+    clearCopiedContextRecovery, recoveryPrefix: 'context-recovery:workspace:', recoveries: [], inactiveNotice: 'old'};
+  await componentCallback('views/Context.svelte','  async function reload() {','\n  reloadView(',context,'reload();');
+  assert.equal(context.detail.entry.name, 'fresh'); assert.equal(context.inactiveNotice, '');
+});
+
+test('round 10: the actual recovery discard callback cannot clean a live editor', async t => {
+  const {app} = realAppHarness(t), api = app.forView(), key = 'context-recovery:workspace:retired';
+  app.setDraft('closed editor text'); captureContextRecovery(api, key); const record = app.peekFormDraft(key);
+  app.setDraft('second entry new edit');
+  const callbackApp = {confirmAction: async () => true, clean: () => api.clean(),
+    peekFormDraft: key => api.peekFormDraft(key), dropFormDraft: key => api.dropFormDraft(key)};
+  await componentCallback('views/Context.svelte', "if (await app.confirmAction({title: 'Discard recovered local work?'", '\n',
+    {app: callbackApp, key, record, discardContextRecovery}, '})()', '(async () => {');
+  assert.equal(app.dirty, true); assert.equal(app.draft, 'second entry new edit'); assert.equal(app.mayLeave(), false);
 });
 
 import './workspace_panel_wiring.mjs';

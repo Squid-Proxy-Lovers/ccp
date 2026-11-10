@@ -3,7 +3,7 @@
   // breakpoint, a stacked drill-down below it, and one detail panel.
   // Selection is kept by ID, so a selected or newly created item stays visible
   // even when it is not on the page currently shown.
-  import {onMount} from 'svelte';
+  import {onMount, tick} from 'svelte';
   import {Archive, ChevronLeft, Library, Plus} from '@lucide/svelte';
   import Delayed from '../lib/ui/Delayed.svelte';
   import EntrySkeleton from './context/EntrySkeleton.svelte';
@@ -11,6 +11,7 @@
   import Badge from '../lib/ui/Badge.svelte';
   import Alert from '../lib/ui/Alert.svelte';
   import Textarea from '../lib/ui/Textarea.svelte';
+  import {captureContextRecovery, discardContextRecovery, clearCopiedContextRecovery, focusRetiredContext} from '../lib/contextRecovery.js';
   import {ReadTask} from '../lib/readTask.js';
   import {reloadContextSelection} from '../lib/contextReload.js';
   import Button from '../lib/ui/Button.svelte';
@@ -62,10 +63,14 @@
   let detailSerial = $state(0);
   let detailFrom = $state<Stage>('shelves');
   let inactiveNotice = $state('');
+  let inactiveSerial = $state(0);
+  let detailElement = $state<HTMLElement>();
+  const recoveryPrefix = `context-recovery:${workspaceId}:`;
+  const recoveries = $derived(Object.entries(app.drafts).filter(([key, record]) => key.startsWith(recoveryPrefix) && record.text));
 
-  const shelves = new Pager<Shelf>(app, (after, limit) => app.read(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
-  const books = new Pager<Book>(app, (after, limit) => app.read(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
-  const entries = new Pager<EntrySummary>(app, (after, limit) => app.read(contentPath('entries/list'), {workspace_id: workspaceId, book_id: book?.id, archived: archivedEntries, after, limit}));
+  const shelves = new Pager<Shelf>(app, (after, limit, readApp) => readApp.read(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
+  const books = new Pager<Book>(app, (after, limit, readApp) => readApp.read(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
+  const entries = new Pager<EntrySummary>(app, (after, limit, readApp) => readApp.read(contentPath('entries/list'), {workspace_id: workspaceId, book_id: book?.id, archived: archivedEntries, after, limit}));
 
   const pinnedEntry = $derived(entry && entry.book_id === book?.id && entry.archived === archivedEntries ? entry : null);
   const isNew = (item: {id: string}) => (created.has(item.id) ? 'New' : undefined);
@@ -100,6 +105,7 @@
   function selectShelf(next: Shelf) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
+      inactiveNotice = '';
       shelf = next; book = null; entry = null; archivedEntries = false;
       books.clear(); entries.clear(); closeDetail();
       stage = 'books';
@@ -111,6 +117,7 @@
   function selectBook(next: Book) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
+      inactiveNotice = '';
       book = next; entry = null; archivedEntries = false;
       entries.clear(); closeDetail();
       stage = 'entries';
@@ -122,6 +129,7 @@
   function selectEntry(next: EntrySummary) {
     void app.run(async () => {
       if (!app.mayLeave()) return;
+      inactiveNotice = '';
       if (next.archived) { entry = next; show({kind: 'archived-entry', entry: next}, 'entries'); }
       else {
         detail = {kind: 'loading'};
@@ -289,22 +297,30 @@
 
   const selectionRead = new ReadTask(app);
   async function reload() {
-    await selectionRead.run(() => reloadContextSelection({
+    await selectionRead.run(readApp => reloadContextSelection({
       selection: {shelf, book, entry}, pages: {shelf: shelves, book: books, entry: entries},
       read: async (kind: string, id: string) => kind === 'entry'
-        ? (await app.read<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null})).entry
-        : app.read(contentPath(`${kind === 'shelf' ? 'shelves' : 'books'}/get`), {workspace_id: workspaceId, node_id: id}),
+        ? (await readApp.read<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null})).entry
+        : readApp.read(contentPath(`${kind === 'shelf' ? 'shelves' : 'books'}/get`), {workspace_id: workspaceId, node_id: id}),
     }), {
       receive: result => {
         shelf = result.shelf; book = result.book; entry = result.entry;
         if (result.missing) {
+          const hadFocus = Boolean(detailElement?.contains(document.activeElement));
+          captureContextRecovery(app, recoveryPrefix + crypto.randomUUID());
+          inactiveSerial += 1;
           const label = result.missing.charAt(0).toUpperCase() + result.missing.slice(1);
           inactiveNotice = `${label} is no longer active (archived or removed).`;
           if (result.missing === 'shelf') { shelf = null; books.clear(); }
           if (result.missing !== 'entry') { book = null; entries.clear(); }
           entry = null;
-          // Closing the editor deliberately leaves app.draft/pending intact.
+          // The closed editor is now held by its own recovery record.
           closeDetail(); stage = result.missing === 'shelf' ? 'shelves' : result.missing === 'book' ? 'books' : 'entries';
+          void focusRetiredContext(app, hadFocus, tick, document);
+        }
+        if (!result.missing) {
+          clearCopiedContextRecovery(app, recoveryPrefix);
+          if (!recoveries.length) inactiveNotice = '';
         }
         if (entry && detail.kind === 'archived-entry') detail = {...detail, entry};
       }, rethrow: true,
@@ -332,18 +348,28 @@
   </nav>
 
   {#if inactiveNotice}
-    <Alert title="Selection no longer active">
-      <p role="status">{inactiveNotice}</p>
-      {#if app.dirty || app.pending}
-        <p>Your unsaved work is kept locally. Copy it before explicitly discarding it.</p>
-        <Textarea aria-label="Recoverable local work" value={app.recoveryText()} readonly rows={6} />
-        <Button variant="outline" size="sm" onclick={() => app.copyText(app.recoveryText())}>Copy local work</Button>
-        {#if !app.pending}<Button variant="outline" size="sm" onclick={async () => {
-          if (await app.confirmAction({title: 'Discard recovered local work?', body: 'This clears the unsaved text shown here. Copy it first if you need it.', confirm: 'Discard local work', destructive: true})) app.clean();
-        }}>Discard local work</Button>{/if}
-      {/if}
-    </Alert>
+    {#key inactiveSerial}
+      <div id="context-inactive-notice" tabindex="-1" class="outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <Alert title="Selection no longer active" live><p>{inactiveNotice}</p></Alert>
+      </div>
+    {/key}
   {/if}
+  {#each recoveries as [key, record] (key)}
+    <Alert title="Recovered local work">
+      <div class="space-y-3">
+        <p>Text kept from the closed editor. Copy it before explicitly discarding it.</p>
+        <Textarea aria-label="Recoverable local work" value={record.text} readonly rows={6} />
+        <div class="flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onclick={async () => {
+            if (await app.copyText(record.text ?? '')) app.effect(() => { record.copied = 'true'; });
+          }}>Copy local work</Button>
+          <Button variant="outline" size="sm" onclick={async () => {
+            if (await app.confirmAction({title: 'Discard recovered local work?', body: 'This clears only the text captured from the closed editor. Copy it first if you need it.', confirm: 'Discard local work', destructive: true})) discardContextRecovery(app, key, record);
+          }}>Discard local work</Button>
+        </div>
+      </div>
+    </Alert>
+  {/each}
 
   <div class="grid gap-4 md:grid-cols-3">
     <ListPane id="shelves" kind="shelf" title="Shelves" pager={shelves} selectedId={shelf?.id ?? null} pinned={shelf}
@@ -412,7 +438,7 @@
     {/if}
   </div>
 
-  <section aria-label="Details" class={['rounded-xl border bg-card p-5 text-card-foreground shadow-xs', stage === 'detail' ? 'block' : 'hidden md:block']}>
+  <section bind:this={detailElement} aria-label="Details" class={['rounded-xl border bg-card p-5 text-card-foreground shadow-xs', stage === 'detail' ? 'block' : 'hidden md:block']}>
     <Button variant="ghost" size="sm" class="-mt-1 mb-3 -ml-2 md:hidden" onclick={() => back(detailFrom)}>
       <ChevronLeft /> {{shelves: 'Shelves', books: 'Books', entries: 'Entries', detail: 'Back'}[detailFrom]}
     </Button>

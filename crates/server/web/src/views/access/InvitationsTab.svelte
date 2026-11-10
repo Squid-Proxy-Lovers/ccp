@@ -39,7 +39,7 @@
 
   const reader = new ReadTask(app);
   async function read(cursor: string | null) {
-    await reader.run(async () => invitationPage(await app.read('/api/v1/admin/invitations/list',
+    await reader.run(async readApp => invitationPage(await readApp.read('/api/v1/admin/invitations/list',
       {workspace_id: workspace.id, after: cursor, limit: 16})), {
       receive: data => { page = data; after = cursor; error = ''; },
       error: failure => { if (!app.locked) error = (failure as Error).message; },
