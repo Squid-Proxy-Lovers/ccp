@@ -12,7 +12,7 @@
   import Button from '../lib/ui/Button.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import {app as panelApp} from '../lib/app.svelte';
-  import {mountedView} from '../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
   import {shelfBadgeLabel} from '../lib/drafts.js';
   import {submitDraftCreate, reportCreateFailure} from '../lib/draftCreate.js';
   import {shelfDraftKey, bookDraftKey} from '../lib/draftKeys.js';
@@ -46,7 +46,7 @@
     | {kind: 'message'; title: string; text: string};
 
   const workspaceId = app.workspace?.id ?? '';
-  const writable = app.writable();
+  const writable = $derived(app.writable());
 
   let shelf = $state.raw<Shelf | null>(null);
   let book = $state.raw<Book | null>(null);
@@ -58,9 +58,9 @@
   let detailSerial = $state(0);
   let detailFrom = $state<Stage>('shelves');
 
-  const shelves = new Pager<Shelf>((after, limit) => app.request(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
-  const books = new Pager<Book>((after, limit) => app.request(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
-  const entries = new Pager<EntrySummary>((after, limit) => app.request(contentPath('entries/list'), {workspace_id: workspaceId, book_id: book?.id, archived: archivedEntries, after, limit}));
+  const shelves = new Pager<Shelf>(app, (after, limit) => app.read(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
+  const books = new Pager<Book>(app, (after, limit) => app.read(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
+  const entries = new Pager<EntrySummary>(app, (after, limit) => app.read(contentPath('entries/list'), {workspace_id: workspaceId, book_id: book?.id, archived: archivedEntries, after, limit}));
 
   const pinnedEntry = $derived(entry && entry.book_id === book?.id && entry.archived === archivedEntries ? entry : null);
   const isNew = (item: {id: string}) => (created.has(item.id) ? 'New' : undefined);
@@ -86,7 +86,7 @@
   }
 
   async function openEntry(id: string) {
-    const snapshot = await app.request<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null});
+    const snapshot = await app.read<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null});
     entry = snapshot.entry;
     show({kind: 'entry', snapshot}, 'entries');
   }
@@ -282,6 +282,14 @@
     await shelves.reload();
   }
 
+  async function reload() {
+    await Promise.all([shelves.reload(), ...(shelf ? [books.reload()] : []), ...(book ? [entries.reload()] : [])]);
+    if (shelf) shelf = shelves.items.find(item => item.id === shelf?.id) ?? shelf;
+    if (book) book = books.items.find(item => item.id === book?.id) ?? book;
+    if (entry) entry = entries.items.find(item => item.id === entry?.id) ?? entry;
+    if (entry && detail.kind === 'archived-entry') detail = {...detail, entry};
+  }
+  reloadView(app, reload);
   onMount(() => { shelves.first().catch(() => {}); });
 </script>
 

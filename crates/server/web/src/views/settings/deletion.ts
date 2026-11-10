@@ -52,7 +52,7 @@ export async function startDeletion(app: ViewApp, intent: WorkspaceDeletionInten
 export async function inspectDeletion(app: ViewApp, current: Tracked): Promise<void> {
   try {
     const request = deletionStatusRequest(app.session as Session, current.reference);
-    const value = await app.request(DELETION + 'status', request);
+    const value = await app.read(DELETION + 'status', request);
     const receipt = deletionReceipt(value, current.reference, current.receipt);
     if (tracked(app)?.reference !== current.reference) return;
     app.deletion = {reference: current.reference, receipt};

@@ -8,7 +8,8 @@
   import Skeleton from '../../lib/ui/Skeleton.svelte';
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
   import {ContentAdminIntent, canManageInvitations, shelfState} from '../../lib/model.js';
   import {contentPath, message, type ShelfStateValue} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
@@ -25,12 +26,15 @@
   let observed = $state.raw<ShelfStateValue | null>(null);
   let error = $state('');
 
+  const reader = new ReadTask(app);
   async function load() {
-    error = '';
-    try {
-      observed = shelfState(await app.request(contentPath('shelves/state'), {workspace_id: workspace?.id, node_id: shelfId}), workspace?.id, shelfId);
-    } catch (failure) { if (!app.locked) error = message(failure); }
+    await reader.run(async () => shelfState(await app.read(contentPath('shelves/state'),
+      {workspace_id: workspace?.id, node_id: shelfId}), workspace?.id, shelfId), {
+      start: () => { error = ''; }, receive: data => { observed = data as ShelfStateValue; },
+      error: failure => { if (!app.locked) error = message(failure); },
+    });
   }
+  reloadView(app, load);
 
   function transition() {
     const current = observed;

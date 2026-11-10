@@ -7,6 +7,8 @@
 // - navigation and session adoption bump `generation`; stale responses are dropped;
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
+import {SupersededRead, isSupersededRead} from './readTask.js';
+import {ViewReloads} from './viewReload.js';
 import {viewScope} from './viewScope.js';
 import {releaseAction} from './actionOwner.js';
 import {verifySession, sessionRequest, adoptSession, creationRecovery} from './sessionRequests.js';
@@ -63,6 +65,7 @@ export class App {
   /** Includes acknowledgement and verification; independent of the action busy slot. */
   workspaceCreates = $state(0);
   #fragmentKey = '';
+  #reloads = new ViewReloads();
 
   get waitingForWorkspaceCreate(): boolean { return lockedSignInBlocked(this); }
 
@@ -138,6 +141,18 @@ export class App {
     return sessionRequest(this, {wire, lock: (message: string) => this.lock(message)}, path, body, confirmed);
   }
 
+  /** Read errors from an obsolete generation are cancellation, never UI failure. */
+  async read<T = any>(path: string, body?: unknown): Promise<T> {
+    const generation = this.generation, session = this.session, epoch = this.sessionEpoch;
+    try { return await sessionRequest(this, {wire, lock: (message: string) => this.lock(message)}, path, body, undefined, true); }
+    catch (error) {
+      if (generation !== this.generation || session !== this.session || epoch !== this.sessionEpoch) throw new SupersededRead();
+      throw error;
+    }
+  }
+
+  registerReload(reload: () => Promise<void>): () => void { return this.#reloads.register(this, reload); }
+
   /** Serialises user actions. Controls stay focusable; `busyKey` marks which one is working. */
   async run(action: () => unknown, key = 'action'): Promise<void> {
     if (this.busy) return;
@@ -146,7 +161,7 @@ export class App {
     this.busy = true;
     this.busyKey = key;
     try { await action(); }
-    catch (error) { if (this.actionOwner === owner && !this.locked) notice((error as Error).message, 'destructive'); }
+    catch (error) { if (this.actionOwner === owner && !this.locked && !isSupersededRead(error)) notice((error as Error).message, 'destructive'); }
     finally {
       if (this.actionOwner === owner) {
         this.actionOwner = null;
@@ -224,17 +239,19 @@ export class App {
 
   // ---- workspaces and navigation -----------------------------------------
   async loadWorkspaces(after: string | null = null): Promise<void> {
-    const session = this.session;
+    const session = this.session, generation = this.generation;
     const query = new URLSearchParams({limit: '32'});
     if (after) query.set('after', after);
-    const data = await this.request<WorkspacePage>(`/api/v1/admin/workspaces?${query}`);
-    if (session !== this.session) return;
+    const data = await this.read<WorkspacePage>(`/api/v1/admin/workspaces?${query}`);
+    if (session !== this.session || generation !== this.generation) return;
     this.workspaces = data.workspaces;
     this.workspacesNext = data.next_cursor;
     this.workspacesAfter = after;
   }
 
   async openWorkspace(workspace: Workspace, view: View = this.view === 'workspaces' || this.view === 'global-guidance' ? 'overview' : this.view): Promise<void> {
+    const retained = workspace.id === this.workspace?.id && view === this.view;
+    if (retained) { await this.refreshView(); return; }
     this.generation += 1;
     if (workspace.id !== this.workspace?.id) this.inspection = null;
     this.workspace = workspace;
@@ -245,7 +262,7 @@ export class App {
   async inspectWorkspace(): Promise<void> {
     if (!this.workspace) return;
     const session = this.session;
-    const info = await this.request<Inspection>('/api/v1/admin/workspaces/inspect', {workspace_id: this.workspace.id});
+    const info = await this.read<Inspection>('/api/v1/admin/workspaces/inspect', {workspace_id: this.workspace.id});
     if (session !== this.session) return;
     this.workspace = info.workspace;
     this.inspection = info;
@@ -264,8 +281,20 @@ export class App {
   async refreshView(): Promise<void> {
     if (!this.mayLeave()) return;
     this.generation += 1;
-    if (this.view === 'workspaces' || !this.workspace) await this.loadWorkspaces(this.workspacesAfter);
-    else await this.inspectWorkspace();
+    const generation = this.generation, session = this.session;
+    let metadataError: unknown;
+    try {
+      if (this.view === 'workspaces' && this.#reloads.has(this)) await this.verify();
+      else if (this.view === 'workspaces' || !this.workspace) await this.loadWorkspaces(this.workspacesAfter);
+      else await this.inspectWorkspace();
+    } catch (error) { metadataError = error; }
+    if (this.locked || generation !== this.generation || session !== this.session) {
+      if (metadataError) throw metadataError;
+      return;
+    }
+    await this.#reloads.run(this);
+    if (generation !== this.generation || session !== this.session) throw new SupersededRead();
+    if (metadataError) throw metadataError;
   }
 
   /** Switch view inside the current workspace (or a global view). */

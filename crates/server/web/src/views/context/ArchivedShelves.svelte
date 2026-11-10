@@ -7,7 +7,7 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
   import {archivedShelfPage} from '../../lib/model.js';
   import {contentPath, type ArchivedShelf, type ContentPage} from './content';
   import {Pager} from './pager.svelte';
@@ -17,9 +17,10 @@
   let {oninspect, onreturn}: {oninspect: (shelfId: string) => void; onreturn: () => void} = $props();
 
   const workspaceId = app.workspace?.id;
-  const pager = new Pager<ArchivedShelf>(async (after, limit) =>
-    archivedShelfPage(await app.request(contentPath('shelves/archived'), {workspace_id: workspaceId, after, limit}), workspaceId) as ContentPage<ArchivedShelf>);
+  const pager = new Pager<ArchivedShelf>(app, async (after, limit) =>
+    archivedShelfPage(await app.read(contentPath('shelves/archived'), {workspace_id: workspaceId, after, limit}), workspaceId) as ContentPage<ArchivedShelf>);
 
+  reloadView(app, () => pager.reload());
   onMount(() => { pager.first().catch(() => {}); });
 </script>
 

@@ -24,3 +24,9 @@ export function mountedView(app) {
   onDestroy(scope.dispose);
   return scope;
 }
+
+/**
+ * @param {{registerReload: (reload: () => Promise<void>) => (() => void)}} app
+ * @param {() => Promise<void>} reload
+ */
+export function reloadView(app, reload) { onDestroy(app.registerReload(reload)); }

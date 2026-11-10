@@ -39,9 +39,12 @@ export function viewScope(state, effects, isMounted = () => true) {
       if (typeof value !== 'function') return value;
       return (...args) => {
         if (!current()) {
-          if (key === 'request' || key === 'verify') return Promise.reject(retired());
+          if (key === 'request' || key === 'read' || key === 'verify') return Promise.reject(retired());
           if (key === 'clearWorkspace') throw retired();
           return undefined;
+        }
+        if (key === 'registerReload') {
+          return value.call(target, async () => { if (current()) await args[0](); });
         }
         if (key === 'run') {
           const [action, ...rest] = args;

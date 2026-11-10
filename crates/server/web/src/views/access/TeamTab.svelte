@@ -15,7 +15,8 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
   import {stamp} from '../../lib/notify.svelte';
   import KeyForm from './KeyForm.svelte';
   import {changeSecurity, type Admin, type Report, type WorkspaceKey} from './actions';
@@ -34,24 +35,23 @@
   let error = $state('');
   let editor = $state.raw<{kind: 'appoint'} | {kind: 'key'; admin: Admin} | null>(null);
 
+  const adminRead = new ReadTask(app), keyRead = new ReadTask(app);
   async function readAdmins(cursor: string | null) {
-    admins = await app.request('/api/v1/admin/team/list', {workspace_id: workspace.id, after: cursor, limit: 16});
-    adminAfter = cursor;
+    await adminRead.run(() => app.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
+      {workspace_id: workspace.id, after: cursor, limit: 16}), {
+      receive: data => { admins = data; adminAfter = cursor; error = ''; },
+      error: failure => { if (!app.locked) error = (failure as Error).message; },
+    });
   }
   async function readKeys(cursor: string | null) {
-    keys = await app.request('/api/v1/admin/keys/list', {workspace_id: workspace.id, after: cursor, limit: 16});
-    keyAfter = cursor;
+    await keyRead.run(() => app.read<{keys: WorkspaceKey[]; next_cursor: string | null}>('/api/v1/admin/keys/list',
+      {workspace_id: workspace.id, after: cursor, limit: 16}), {
+      receive: data => { keys = data; keyAfter = cursor; error = ''; },
+      error: failure => { if (!app.locked) error = (failure as Error).message; },
+    });
   }
-  async function readAll(adminCursor: string | null, keyCursor: string | null) {
-    try {
-      await readAdmins(adminCursor);
-      await readKeys(keyCursor);
-      error = '';
-    } catch (failure) {
-      if (app.locked) return;
-      error = (failure as Error).message;
-    }
-  }
+  async function readAll(adminCursor: string | null, keyCursor: string | null) { await Promise.all([readAdmins(adminCursor), readKeys(keyCursor)]); }
+  reloadView(app, () => readAll(adminAfter, keyAfter));
   onMount(() => { void readAll(null, null); });
 
   function reload() {

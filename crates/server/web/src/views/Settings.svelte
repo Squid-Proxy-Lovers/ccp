@@ -5,7 +5,7 @@
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
   import {app as panelApp} from '../lib/app.svelte';
-  import {mountedView} from '../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
   import {canChangeLifecycle} from '../lib/model.js';
   import DangerZone from './settings/DangerZone.svelte';
   import Details from './settings/Details.svelte';
@@ -18,6 +18,7 @@
   const app = mountedView(panelApp);
 
   const ctl = new SettingsState();
+  reloadView(app, () => ctl.reloadMounted());
   void ctl.init();
 </script>
 

@@ -10,7 +10,8 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
   import {stamp} from '../../lib/notify.svelte';
   import {nativeHistoryPage, nativeScalarText} from '../../lib/native_values.js';
   import {focusId} from './content';
@@ -39,22 +40,18 @@
   let fallback = $state('');
   let exportField: HTMLTextAreaElement | null = $state(null);
 
-  async function load(cursor: number | null) {
+  const reader = new ReadTask(app);
+  async function load(cursor: number | null, focus = true) {
     const workspace = app.workspace?.id;
-    loading = true;
-    failed = false;
-    fallback = '';
-    try {
-      const result = await app.request('/api/v1/content/entries/native-history', {workspace_id: workspace, entry_id: entryId, after: cursor, limit: 8});
-      if (app.locked) return;
-      page = validate(result, workspace, entryId, cursor);
-      after = cursor;
-      open = {};
-    } catch {
-      if (!app.locked) failed = true;
-    } finally { loading = false; }
-    void focusId(app, 'source-history-title');
+    const data = await reader.run(async () => validate(await app.read('/api/v1/content/entries/native-history',
+      {workspace_id: workspace, entry_id: entryId, after: cursor, limit: 8}), workspace, entryId, cursor), {
+      start: () => { loading = true; failed = false; },
+      receive: value => { page = value; if (cursor !== after) open = {}; after = cursor; },
+      error: () => { if (!app.locked) failed = true; }, finish: () => { loading = false; },
+    });
+    if (data && focus) void focusId(app, 'source-history-title');
   }
+  reloadView(app, () => load(after, false));
 
   async function copyPage() {
     const json = JSON.stringify(page, null, 2);

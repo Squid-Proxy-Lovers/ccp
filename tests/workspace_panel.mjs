@@ -1606,7 +1606,7 @@ test('create recovery: a failed post-write verification describes the owner key 
 
 // Real App methods with native TypeScript erasure and in-memory rune fields.
 // Browser tests separately verify that Svelte observes the same transitions.
-import {panelAppClass, panelNotifyModule, runtime as appRuntime, answerConfirmation} from './helpers/panelApp.mjs';
+import {panelAppClass, panelNotifyModule, componentCallback, readTaskClass, runtime as appRuntime, answerConfirmation} from './helpers/panelApp.mjs';
 const PanelApp = await panelAppClass();
 
 function realAppHarness(t) {
@@ -2242,6 +2242,122 @@ test('round 7: persistent draft cleanup outlives its form but cannot reach a rep
   const current = replacement.formDraft('access-model'); current.name = 'New session draft';
   model.dropFormDraft('access-model');
   assert.equal(app.drafts['access-model'], current); assert.equal(current.name, 'New session draft');
+});
+
+
+const ReadTask = await readTaskClass();
+const families = [
+  ['Overview', '/api/v1/admin/workspaces/overview'], ['Context', '/api/v1/content/shelves/list'],
+  ['Access', '/api/v1/admin/workspaces/grants'], ['Reported', '/api/v1/work/status/list'],
+  ['Guidance', '/api/v1/guidance/get'], ['Settings', '/api/v1/admin/content/retention/get'],
+  ['Workspaces', '/api/v1/admin/workspaces?limit=32'],
+];
+function familyLoader(t, family, path) {
+  const h = realAppHarness(t), fetch = globalThis.fetch;
+  let version = 1, calls = 0, hold = null;
+  globalThis.fetch = async (target, options) => {
+    if (target !== path) return fetch(target, options);
+    calls++;
+    const pending = hold; hold = null;
+    if (pending) { pending.started.resolve(); return pending.promise; }
+    return {ok: true, status: 200, json: async () => ({api_version: 1, data: {version, family}})};
+  };
+  const api = h.app.forView(), reader = new ReadTask(api);
+  const state = {data: null, error: '', loading: false};
+  const load = async () => {
+    await reader.run(() => api.read ? api.read(path) : api.request(path), {
+      start: () => { state.loading = true; state.error = ''; },
+      receive: data => { state.data = data; }, error: error => { state.error = error.message; api.notice(error.message, 'destructive'); },
+      finish: () => { state.loading = false; },
+    });
+  };
+  const unregister = api.registerReload?.(load) ?? (() => {});
+  t.after(unregister);
+  return {...h, api, reader, state, load, unregister, calls: () => calls,
+    version: value => { version = value; }, hold: () => { const pending = defer(); pending.started = defer(); hold = pending; return pending; }};
+}
+for (const [family, path] of families) test(`round 8: Refresh re-reads ${family} data without replacing its view state`, async t => {
+  const h = familyLoader(t, family, path); await h.load(); assert.equal(h.state.data.version, 1);
+  const draft = h.api.formDraft('view-fixture:' + family); draft.name = 'Kept draft';
+  const mount = h.app.refreshTick;
+  const focus = () => focusHandoffKey(h.app.session, h.app.locked, h.app.activating, h.app.workspace?.id, h.app.view, h.app.sessionEpoch);
+  const beforeFocus = focus();
+  h.version(2); const before = h.calls(); await h.app.run(() => h.app.refreshView(), 'refresh');
+  assert.ok(h.calls() > before, `${family}'s registered read must run`); assert.equal(h.state.data.version, 2);
+  assert.equal(h.app.refreshTick, mount); assert.equal(h.app.drafts['view-fixture:' + family], draft);
+  assert.equal(draft.name, 'Kept draft'); assert.equal(focus(), beforeFocus);
+});
+for (const [family, path] of families) for (const status of [200, 503]) test(`round 8: obsolete ${family} ${status} cannot replace fresh data or create an error`, async t => {
+  const h = familyLoader(t, family, path); const old = h.hold();
+  const reading = h.load(); await old.started.promise;
+  h.version(2); await h.app.run(() => h.app.refreshView(), 'refresh');
+  // Baseline did not register reloads; issue the fresh read explicitly to
+  // isolate the stale consumer behavior from the missing-Refresh defect.
+  if (!h.app.registerReload) await h.load();
+  const notices = [...appRuntime.toasts];
+  old.resolve({ok: status === 200, status, json: async () => status === 200
+    ? {api_version: 1, data: {version: 0, family}} : {api_version: 1, error: {code: 'old'}}});
+  await reading;
+  assert.equal(h.state.data.version, 2); assert.equal(h.state.error, '');
+  assert.equal(h.state.loading, false); assert.deepEqual(appRuntime.toasts, notices);
+});
+
+test('round 8: Refresh keeps the dirty and pending guard before metadata and loaders', async t => {
+  const {app, server} = realAppHarness(t); let reloads = 0;
+  const unregister = app.registerReload?.(async () => { reloads++; }); t.after(() => unregister?.());
+  for (const pending of [false, true]) {
+    app.dirty = !pending; app.pending = pending ? {body: 'uncertain'} : null;
+    const generation = app.generation, calls = server.requests.length;
+    await app.refreshView();
+    assert.equal(app.generation, generation); assert.equal(server.requests.length, calls); assert.equal(reloads, 0);
+  }
+});
+
+test('round 8: destroyed reload registration cannot execute or remove its replacement', async t => {
+  const {app} = realAppHarness(t); let old = 0, fresh = 0;
+  const visit = app.forView(), unregister = visit.registerReload?.(async () => { old++; });
+  visit.dispose(); unregister?.();
+  const current = app.forView(), stop = current.registerReload?.(async () => { fresh++; }); t.after(() => stop?.());
+  unregister?.(); await app.refreshView();
+  assert.equal(old, 0); assert.equal(fresh, 1);
+});
+
+test('round 8: same-generation read replacement owns loading, data and failure effects', async t => {
+  const {app} = realAppHarness(t), reader = new ReadTask(app.forView()); const first = defer(), second = defer();
+  const state = {data: '', error: '', loading: false};
+  const effects = {start: () => { state.loading = true; }, receive: data => { state.data = data; },
+    error: error => { state.error = error.message; }, finish: () => { state.loading = false; }};
+  const old = reader.run(() => first.promise, effects), fresh = reader.run(() => second.promise, effects);
+  first.reject(new Error('old')); await old; assert.equal(state.loading, true); assert.equal(state.error, '');
+  second.resolve('fresh'); await fresh; assert.equal(state.data, 'fresh'); assert.equal(state.loading, false);
+});
+
+for (const status of [401, 403]) test(`round 8: an obsolete read ${status} cannot lock the current view`, async t => {
+  const {app, server} = realAppHarness(t); const held = server.hold('/read-old', {status});
+  const reading = (app.read ? app.read('/read-old') : app.request('/read-old')).catch(error => error); await held.started;
+  app.generation++; held.release(); const error = await reading;
+  assert.equal(app.locked, false); assert.equal(error.name, 'SupersededRead');
+});
+
+for (const retired of [false, true]) test(`round 8: Secret fallback focus and selection respect lifetime, retired=${retired}`, async t => {
+  const {app} = realAppHarness(t); const visit = app.forView(); const clipboard = defer(), started = defer();
+  let focus = 0, selection = 0;
+  const context = {app: visit, value: 'private fixture', shown: false, tick: async () => {},
+    copyText: () => { started.resolve(); return clipboard.promise; }, code: {focus: () => { focus++; }},
+    document: {createRange: () => ({selectNodeContents: () => { selection++; }})},
+    getSelection: () => ({removeAllRanges: () => { selection++; }, addRange: () => { selection++; }}),
+  };
+  const copying = componentCallback('lib/ui/Secret.svelte', '  async function copy()', '\n</script>', context, 'copy();');
+  await started.promise; if (retired) visit.dispose(); clipboard.resolve(false); await copying;
+  assert.equal(focus, retired ? 0 : 1); assert.equal(selection, retired ? 0 : 3);
+});
+for (const retired of [false, true]) test(`round 8: DeletionTracker queued heading focus respects lifetime, retired=${retired}`, async t => {
+  const {app} = realAppHarness(t), visit = app.forView(), tick = defer(); let focus = 0;
+  const body = {}, context = {$effect: fn => fn(), scoped: () => visit, title: 'Tracking',
+    heading: {focus: () => { focus++; }}, document: {body, activeElement: body}, tick: () => tick.promise};
+  await componentCallback('views/DeletionTracker.svelte', '  $effect(() => {', '\n\n  async function forget()', context);
+  if (retired) visit.dispose(); tick.resolve(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(focus, retired ? 0 : 1);
 });
 
 import './workspace_panel_wiring.mjs';

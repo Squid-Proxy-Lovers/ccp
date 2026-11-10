@@ -4,6 +4,7 @@ import {mountedView} from '../../lib/viewLifecycle.js';
 // lifecycle and ownership transfer have no operation ID and are never resent;
 // retention changes carry an operation ID and the loaded base revision. After
 // any acknowledged or unconfirmed write the cards freeze until a fresh read.
+import {ReadTask} from '../../lib/readTask.js';
 import {app as panelApp} from '../../lib/app.svelte';
 import {LifecycleAttempt, RetentionIntent, TransferAttempt, WorkspaceDeletionIntent, canManageTeam, canTransferOwnership,
   deletionPreview, retentionPolicy, retentionSeconds, workspaceSnapshot} from '../../lib/model.js';
@@ -35,6 +36,8 @@ export const describePolicy = (seconds: number | null): string => seconds === nu
 
 export class SettingsState {
   #app = mountedView(panelApp);
+  #policyRead = new ReadTask(this.#app);
+  #rosterRead = new ReadTask(this.#app);
   policy = $state.raw<Policy | null>(null);
   policyError = $state('');
   loading = $state(true);
@@ -69,36 +72,36 @@ export class SettingsState {
   async loadPolicy(): Promise<Policy | null> {
     const workspace = this.#app.workspace;
     if (!workspace) return null;
-    const generation = this.#app.generation;
-    try {
-      const policy = retentionPolicy(await this.#app.request(RETENTION_GET, {workspace_id: workspace.id}), workspace.id) as Policy;
-      this.policy = policy;
-      this.policyError = '';
-      return policy;
-    } catch (error) {
-      if (!this.#app.locked && generation === this.#app.generation) {
-        this.policy = null;
-        this.policyError = message(error);
-        this.#app.notice('Retention policy unavailable. ' + message(error), 'warning');
-      }
-      return null;
-    } finally { this.loading = false; }
+    const policy = await this.#policyRead.run(async () => retentionPolicy(await this.#app.read(RETENTION_GET, {workspace_id: workspace.id}), workspace.id) as Policy, {
+      start: () => { this.loading = true; },
+      receive: value => { if (!this.#app.dirty) this.policy = value; this.policyError = ''; },
+      error: error => {
+        if (!this.#app.locked) { if (!this.#app.dirty) this.policy = null; this.policyError = message(error); this.#app.notice('Retention policy unavailable. ' + message(error), 'warning'); }
+      },
+      finish: () => { this.loading = false; },
+    });
+    return policy ?? null;
   }
 
   async loadRoster(after: string | null): Promise<void> {
     if (!this.ownerTools || this.workspace.archived) { this.roster = []; return; }
-    const generation = this.#app.generation;
-    this.rosterLoading = true;
-    try {
-      const page = await this.#app.request<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
+    await this.#rosterRead.run(async () => {
+      const page = await this.#app.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
         {workspace_id: this.workspace.id, after, limit: ROSTER_PAGE});
-      this.roster = page.admins;
-      this.rosterNext = page.next_cursor;
-      this.rosterAfter = after;
-      this.rosterError = '';
-    } catch (error) {
-      if (!this.#app.locked && generation === this.#app.generation) this.rosterError = message(error);
-    } finally { this.rosterLoading = false; }
+      if (!Array.isArray(page.admins)) throw new Error('The administrator page could not be verified.');
+      return page;
+    }, {
+      start: () => { this.rosterLoading = true; },
+      receive: page => { this.roster = page.admins; this.rosterNext = page.next_cursor; this.rosterAfter = after; this.rosterError = ''; },
+      error: error => { if (!this.#app.locked) this.rosterError = message(error); },
+      finish: () => { this.rosterLoading = false; },
+    });
+  }
+
+  /** Header reload preserves selections and unfinished local form state. */
+  async reloadMounted(): Promise<void> {
+    const [policy] = await Promise.all([this.loadPolicy(), this.loadRoster(this.rosterAfter)]);
+    if (policy && !this.#app.dirty && !this.#app.pending) this.frozen = false;
   }
 
   #resetLocal(): void {
@@ -210,7 +213,9 @@ export class SettingsState {
       this.retentionReceipt = `Saved revision ${saved.revision}: ${describePolicy(saved.retention_seconds)}. This is a historical receipt; use Refresh for the current policy.`;
     } catch (error) { this.#uncertainFrom(intent, error); return; }
     try {
+      const receipt = this.retentionReceipt;
       const latest = await this.refresh();
+      this.retentionReceipt = receipt;
       this.#app.notice(`Retention change confirmed at revision ${saved.revision}.${latest ? ' Showing current revision ' + latest.revision + '.' : ' Current policy is unavailable.'}`, 'success');
     } catch (error) { this.#app.notice(`Retention change confirmed at revision ${saved.revision}. Refresh failed: ${message(error)}`, 'warning'); }
   }
@@ -285,10 +290,10 @@ export class SettingsState {
     const id = current.attempt.workspace_id;
     let text: string;
     if (current.attempt.kind === 'retention') {
-      const policy = retentionPolicy(await this.#app.request(RETENTION_GET, {workspace_id: id}), id) as Policy;
+      const policy = retentionPolicy(await this.#app.read(RETENTION_GET, {workspace_id: id}), id) as Policy;
       text = `Last read policy revision ${policy.revision}: ${describePolicy(policy.retention_seconds)}. The original request and base are unchanged.`;
     } else {
-      const value = await this.#app.request(INSPECT, {workspace_id: id});
+      const value = await this.#app.read(INSPECT, {workspace_id: id});
       const workspace = workspaceSnapshot(value, id) as Workspace;
       if (current.attempt.kind === 'transfer') {
         if (typeof value.owner_id !== 'string') throw new Error('The current owner metadata could not be verified.');
@@ -335,7 +340,7 @@ export class SettingsState {
       return;
     }
     const workspace = this.workspace;
-    const preview = deletionPreview(await this.#app.request(DELETION + 'preview', {workspace_id: workspace.id}), workspace) as Preview;
+    const preview = deletionPreview(await this.#app.read(DELETION + 'preview', {workspace_id: workspace.id}), workspace) as Preview;
     this.frozen = true;
     this.deletion = {typed: '', confirmed: false};
     this.preview = preview;

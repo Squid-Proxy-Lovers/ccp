@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // One bounded, cursor-paged list (32 per page). Loads throw so callers can tell
 // a failed refresh apart from the write that preceded it.
+import {ReadTask} from '../../lib/readTask.js';
+import type {ViewApp} from '../../lib/app.svelte';
 import {PAGE_SIZE, type ContentPage} from './content';
 
 export class Pager<T extends {id: string}> {
@@ -11,29 +13,21 @@ export class Pager<T extends {id: string}> {
   loaded = $state(false);
   loading = $state(false);
   error = $state('');
-  #serial = 0;
+  #read: ReadTask;
   #fetch: (after: string | null, limit: number) => Promise<ContentPage<T>>;
 
-  constructor(fetch: (after: string | null, limit: number) => Promise<ContentPage<T>>) { this.#fetch = fetch; }
+  constructor(app: ViewApp, fetch: (after: string | null, limit: number) => Promise<ContentPage<T>>) { this.#fetch = fetch; this.#read = new ReadTask(app); }
 
   async load(after: string | null = null, page = 1): Promise<void> {
-    const serial = ++this.#serial;
-    this.loading = true;
-    this.error = '';
-    try {
-      const data = await this.#fetch(after, PAGE_SIZE);
-      if (serial !== this.#serial) return;
-      this.items = data.items;
-      this.next = data.next_cursor;
-      this.after = after;
-      this.page = page;
-      this.loaded = true;
-    } catch (error) {
-      if (serial === this.#serial) this.error = (error as Error).message;
-      throw error;
-    } finally {
-      if (serial === this.#serial) this.loading = false;
-    }
+    await this.#read.run(() => this.#fetch(after, PAGE_SIZE), {
+      start: () => { this.loading = true; this.error = ''; },
+      receive: data => {
+        this.items = data.items; this.next = data.next_cursor; this.after = after;
+        this.page = page; this.loaded = true;
+      },
+      error: error => { this.error = (error as Error).message; },
+      finish: () => { this.loading = false; }, rethrow: true,
+    });
   }
 
   first(): Promise<void> { return this.load(); }
@@ -41,7 +35,7 @@ export class Pager<T extends {id: string}> {
   /** Re-read the page currently shown. */
   reload(): Promise<void> { return this.load(this.after, this.page); }
   clear(): void {
-    this.#serial += 1;
+    this.#read.invalidate();
     this.items = []; this.next = null; this.after = null; this.page = 1;
     this.loaded = false; this.loading = false; this.error = '';
   }

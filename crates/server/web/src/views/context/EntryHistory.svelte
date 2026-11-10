@@ -9,7 +9,8 @@
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
   import {stamp} from '../../lib/notify.svelte';
   import {exactRevision} from '../../lib/model.js';
   import {PAGE_SIZE, actorText, contentPath, focusId, message, type HistoryPage, type Snapshot} from './content';
@@ -23,22 +24,20 @@
   let loading = $state(false);
   let opened = $state.raw<Record<number, Snapshot>>({});
 
-  async function load(cursor: number | null) {
-    loading = true;
-    error = '';
-    try {
-      const data = await app.request<HistoryPage>(contentPath('entries/history'), {workspace_id: app.workspace?.id, entry_id: entryId, after: cursor, limit: PAGE_SIZE});
-      page = data;
-      after = cursor;
-      opened = {};
-      void focusId(app, 'entry-history-title');
-    } catch (failure) {
-      if (!app.locked) error = message(failure);
-    } finally { loading = false; }
+  const reader = new ReadTask(app);
+  async function load(cursor: number | null, focus = true) {
+    const data = await reader.run(() => app.read<HistoryPage>(contentPath('entries/history'),
+      {workspace_id: app.workspace?.id, entry_id: entryId, after: cursor, limit: PAGE_SIZE}), {
+      start: () => { loading = true; error = ''; },
+      receive: value => { page = value; if (cursor !== after) opened = {}; after = cursor; },
+      error: failure => { if (!app.locked) error = message(failure); }, finish: () => { loading = false; },
+    });
+    if (data && focus) void focusId(app, 'entry-history-title');
   }
+  reloadView(app, () => load(after, false));
 
   async function read(revision: number) {
-    const snapshot = await app.request<Snapshot>(contentPath('entries/get'), {workspace_id: app.workspace?.id, entry_id: entryId, revision: exactRevision(revision)});
+    const snapshot = await app.read<Snapshot>(contentPath('entries/get'), {workspace_id: app.workspace?.id, entry_id: entryId, revision: exactRevision(revision)});
     opened = {...opened, [revision]: snapshot};
   }
 

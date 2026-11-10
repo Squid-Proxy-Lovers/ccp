@@ -17,7 +17,7 @@
   import {table} from '../lib/ui/table';
   import DeletionLookup from './settings/DeletionLookup.svelte';
   import {app as panelApp} from '../lib/app.svelte';
-  import {mountedView} from '../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
   import {hasDraftContent} from '../lib/drafts.js';
   import {discardDraft} from '../lib/draftDiscard.js';
   import {formFrozen} from '../lib/identitySwitch.js';
@@ -26,6 +26,8 @@
 
   const app = mountedView(panelApp);
   const {notice, confirmAction} = app;
+
+  reloadView(app, () => app.loadWorkspaces(app.workspacesAfter));
 
   const FORM = WORKSPACE_DRAFT_KEY;
 

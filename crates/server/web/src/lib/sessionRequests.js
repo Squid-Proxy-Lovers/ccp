@@ -22,7 +22,7 @@ export async function verifySession(state, deps) {
   return current;
 }
 
-export async function sessionRequest(state, deps, path, body, confirmed) {
+export async function sessionRequest(state, deps, path, body, confirmed, readOnly = false) {
   // Capture before the first await: adoption can happen even between a
   // successful verify and this function's continuation. Never borrow its CSRF.
   const session = state.session;
@@ -51,7 +51,9 @@ export async function sessionRequest(state, deps, path, body, confirmed) {
     }
     return data;
   } catch (error) {
-    if (session === state.session && (error.status === 401 || error.status === 403)) deps.lock(error.message);
+    if (session === state.session && (error.status === 401 || error.status === 403)) {
+      if (!readOnly || generation === state.generation) deps.lock(error.message);
+    }
     throw error;
   } finally { state.inflight -= 1; }
 }

@@ -350,19 +350,20 @@ test('[source] every per-view scope and private helper scope registers component
       if (!/\.(svelte|ts)$/.test(item.name)) continue;
       const source = await readFile(path, 'utf8');
       assert.doesNotMatch(source, /panelApp\.forView\(/, path.pathname);
-      if (source.includes('mountedView(panelApp)')) assert.match(source, /import \{mountedView\} from '[^']*viewLifecycle\.js'/, path.pathname);
+      if (source.includes('mountedView(panelApp)')) assert.match(source, /import \{mountedView(?:, reloadView)?\} from '[^']*viewLifecycle\.js'/, path.pathname);
     }
   }
   await inspect(root);
   assert.match(lockedView, /viewLifetime\(app\)/);
 });
 
-test('[source] header Refresh delegates a metadata read without remounting or changing the focus epoch', () => {
+test('[source] header Refresh reads metadata then reloads the mounted view without remounting', () => {
   const refresh = slice(appSvelte, 'function refresh()', '\n</script>');
   assert.match(refresh, /app\.run\(\(\) => app\.refreshView\(\), 'refresh'\)/);
   assert.doesNotMatch(refresh, /refreshTick|sessionEpoch/);
   const action = slice(app, 'async refreshView(', '\n  /** Switch view');
   assert.match(action, /this\.generation \+= 1/);
+  assert.match(action, /await this\.#reloads\.run\(this\)/);
   assert.doesNotMatch(action, /refreshTick|sessionEpoch/);
 });
 
@@ -389,4 +390,18 @@ test('[source] persistent access draft models keep the submitted instance across
     assert.match(submit, /submitted\.drop\(\)/, name);
     assert.doesNotMatch(submit, /\bform\.(get|drop)\(/, name);
   }
+});
+
+
+test('[source] every data view registers lifetime-bound reloads and generation-aware read consumers', async () => {
+  const lifecycle = await read('lib/viewLifecycle.js');
+  assert.match(lifecycle, /onDestroy\(app\.registerReload\(reload\)\)/);
+  for (const name of ['Overview', 'Context', 'Access', 'Reported', 'Guidance', 'Settings', 'Workspaces']) {
+    const source = await read(`views/${name}.svelte`);
+    assert.match(source, /reloadView\(app,/, name);
+  }
+  for (const name of ['Overview', 'Access', 'Reported', 'Guidance']) assert.match(await read(`views/${name}.svelte`), /new ReadTask\(app\)/, name);
+  assert.match(await read('views/context/pager.svelte.ts'), /new ReadTask\(app\)/);
+  assert.match(await read('views/settings/state.svelte.ts'), /new ReadTask\(this\.#app\)/);
+  assert.doesNotMatch(await read('views/Guidance.svelte'), /\{#key bundle\}/);
 });

@@ -9,7 +9,8 @@
   import Badge from '../lib/ui/Badge.svelte';
   import Tabs from '../lib/ui/Tabs.svelte';
   import {app as panelApp} from '../lib/app.svelte';
-  import {mountedView} from '../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
+  import {ReadTask} from '../lib/readTask.js';
   import {canManageInvitations, canManageTeam} from '../lib/model.js';
   import ClientsTab from './access/ClientsTab.svelte';
   import InvitationsTab from './access/InvitationsTab.svelte';
@@ -44,28 +45,21 @@
   let enrollment = $state.raw<Enrollment | null>(null);
   let enrollmentError = $state('');
 
+  const grantsRead = new ReadTask(app), windowRead = new ReadTask(app);
   async function readGrants(after: string | null) {
-    try {
-      grants = await app.request<GrantPage>('/api/v1/admin/workspaces/grants', {workspace_id: workspace.id, after, limit: 32});
-      grantsAfter = after;
-      grantsError = '';
-    } catch (error) {
-      if (app.locked) return;
-      grantsError = (error as Error).message;
-    }
+    await grantsRead.run(() => app.read<GrantPage>('/api/v1/admin/workspaces/grants', {workspace_id: workspace.id, after, limit: 32}), {
+      receive: data => { grants = data; grantsAfter = after; grantsError = ''; },
+      error: error => { if (!app.locked) grantsError = (error as Error).message; },
+    });
   }
-
   async function readWindow() {
     if (!manager) { enrollment = null; return; }
-    try {
-      enrollment = await readEnrollment(app, workspace.id);
-      enrollmentError = '';
-    } catch (error) {
-      if (app.locked) return;
-      enrollment = null;
-      enrollmentError = (error as Error).message;
-    }
+    await windowRead.run(() => readEnrollment(app, workspace.id), {
+      receive: data => { enrollment = data; enrollmentError = ''; },
+      error: error => { if (!app.locked) { enrollment = null; enrollmentError = (error as Error).message; } },
+    });
   }
+  reloadView(app, async () => { await Promise.all([readGrants(grantsAfter), readWindow()]); });
 
   onMount(() => { void readGrants(null); void readWindow(); });
 

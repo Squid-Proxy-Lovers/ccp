@@ -2,6 +2,7 @@
   // One guidance board. A save is bound to the loaded revision and carries an
   // operation ID; an unconfirmed save keeps the exact request and never retries
   // on its own. Saves go live immediately.
+  import {untrack} from 'svelte';
   import {Copy, GitCompare, RotateCcw, Save} from '@lucide/svelte';
   import Alert from '../../lib/ui/Alert.svelte';
   import Badge from '../../lib/ui/Badge.svelte';
@@ -27,7 +28,8 @@
     board: Board; workspaceId: string | null; editable: boolean; note: string; onreplace: (bundle: Bundle) => void;
   } = $props();
 
-  // The editor starts from the loaded snapshot; a new snapshot remounts this component.
+  // New read snapshots update a clean editor in place. Edited text and its
+  // base revision stay owned by the draft until explicitly reloaded.
   // svelte-ignore state_referenced_locally
   let text = $state(board.text);
   let edited = $state(false);
@@ -38,6 +40,11 @@
   let comparison = $state.raw<Board | null>(null);
   let forgotten = $state(false);
   let confirmedRevision = $state<number | null>(null);
+
+  $effect(() => {
+    const snapshot = board;
+    if (untrack(() => !edited && !intent && !forgotten)) text = snapshot.text;
+  });
 
   const global = $derived(board.scope.kind === 'global');
   const id = $derived(`guidance-${board.scope.kind}`);
@@ -114,6 +121,7 @@
       // Keep the draft until the read succeeds; a failed read can lock safely.
       const bundle = await readGuidance(app, workspaceId);
       app.clean();
+      edited = false; failure = ''; conflict = false; comparison = null; forgotten = false; confirmedRevision = null;
       onreplace(bundle);
       notice('Loaded current guidance.');
     }, `${busyKey}:reload`);

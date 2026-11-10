@@ -14,7 +14,8 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
   import {stamp} from '../../lib/notify.svelte';
   import {canManageInvitations, clientRecoveryScope} from '../../lib/model.js';
   import ClientAccessForm from './ClientAccessForm.svelte';
@@ -32,16 +33,14 @@
   let error = $state('');
   let editor = $state<'recover' | 'readmit' | null>(null);
 
+  const reader = new ReadTask(app);
   async function read(cursor: string | null) {
-    try {
-      page = await readRecovery(app, client.client_id, scope, cursor);
-      after = cursor;
-      error = '';
-    } catch (failure) {
-      if (app.locked) return;
-      error = (failure as Error).message;
-    }
+    await reader.run(() => readRecovery(app, client.client_id, scope, cursor), {
+      receive: data => { page = data; after = cursor; error = ''; },
+      error: failure => { if (!app.locked) error = (failure as Error).message; },
+    });
   }
+  reloadView(app, () => read(after));
   onMount(() => { void read(null); });
 
   function reload(cursor: string | null, key: string, announce = false) {

@@ -12,7 +12,8 @@
   import SkeletonCard from '../lib/ui/skeleton/SkeletonCard.svelte';
   import Board from './guidance/Board.svelte';
   import {app as panelApp} from '../lib/app.svelte';
-  import {mountedView} from '../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
+  import {ReadTask} from '../lib/readTask.js';
   import {canPublish} from '../lib/model.js';
   import {readGuidance, type Board as BoardData, type Bundle} from './guidance/guidance';
 
@@ -28,16 +29,17 @@
 
   const boards = $derived(bundle ? [bundle.global, bundle.workspace].filter((board): board is BoardData => board !== null) : []);
 
+  const reader = new ReadTask(app);
   async function load(): Promise<void> {
-    try {
-      bundle = await readGuidance(app, workspaceId);
-      failed = '';
-    } catch (error) {
-      if (app.locked) return;
-      failed = (error as Error).message;
-      notice(failed, 'destructive');
-    }
+    await reader.run(() => readGuidance(app, workspaceId), {
+      receive: data => { if (!app.dirty && !app.pending) bundle = data; failed = ''; },
+      error: error => {
+        if (app.locked) return;
+        failed = (error as Error).message; notice(failed, 'destructive');
+      },
+    });
   }
+  reloadView(app, load);
   onMount(() => { void load(); });
 
   function editable(board: BoardData): boolean {
@@ -52,7 +54,7 @@
     if (global) return 'Read-only with a workspace key. Saving global guidance needs an instance key.';
     return 'Read-only. Saving needs this workspace’s owner or admin key while the workspace is active.';
   }
-  // Replacing the bundle remounts the boards; return focus to the board just saved or reloaded.
+  // Explicit board actions may return focus; header reads never move it.
   async function replace(next: Bundle, kind: string) {
     bundle = next;
     await tick();
@@ -75,7 +77,8 @@
       {/snippet}
       <p>{failed}</p>
     </Alert>
-  {:else if !bundle}
+  {/if}
+  {#if !bundle && !failed}
     <Delayed>
       <div class={['grid gap-6', !global && 'xl:grid-cols-2']}>
         {#each global ? [0] : [0, 1] as index (index)}
@@ -88,13 +91,11 @@
         {/each}
       </div>
     </Delayed>
-  {:else}
-    {#key bundle}
+  {:else if bundle}
       <div class={['grid items-start gap-6', boards.length > 1 && 'xl:grid-cols-2']}>
         {#each boards as board (board.scope.kind)}
           <Board {board} {workspaceId} editable={editable(board)} note={note(board)} onreplace={next => replace(next, board.scope.kind)} />
         {/each}
       </div>
-    {/key}
   {/if}
 </div>

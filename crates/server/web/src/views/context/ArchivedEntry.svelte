@@ -23,7 +23,7 @@
     onarchive: (intent: AdminIntent, outcome: ArchiveOutcome) => void;
   } = $props();
 
-  const writable = app.writable();
+  const writable = $derived(app.writable());
   const scoped = Boolean(app.session && canManageInvitations(app.session, app.workspace));
   let unconfirmed = $state.raw<{intent: HeldIntent; error: string} | null>(null);
   let forgotten = $state(false);

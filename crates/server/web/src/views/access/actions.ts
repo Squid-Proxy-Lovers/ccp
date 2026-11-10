@@ -169,8 +169,8 @@ export async function changeAdmission(app: ViewApp, report: Report, workspace: W
     unconfirmed(app, report, wording.admission, attempt, sent.error, async () => {
       const original = JSON.parse(attempt.requestBody);
       return original.invitation_id
-        ? {note: 'Current status observation; no causal attribution.', text: text(invitationStatus(await app.request(INVITATIONS + 'status', original), original.invitation_id))}
-        : {note: 'First page only; no causal attribution. After investigating and discarding locally, use the full inventory pager.', text: text(invitationPage(await app.request(INVITATIONS + 'list', {workspace_id: attempt.workspace_id, limit: 16})))};
+        ? {note: 'Current status observation; no causal attribution.', text: text(invitationStatus(await app.read(INVITATIONS + 'status', original), original.invitation_id))}
+        : {note: 'First page only; no causal attribution. After investigating and discarding locally, use the full inventory pager.', text: text(invitationPage(await app.read(INVITATIONS + 'list', {workspace_id: attempt.workspace_id, limit: 16})))};
     });
     return;
   }
@@ -191,7 +191,7 @@ export async function changeAdmission(app: ViewApp, report: Report, workspace: W
 const ENROLLMENT = '/api/v1/admin/enrollment/status';
 
 export async function readEnrollment(app: ViewApp, workspaceId: string): Promise<Enrollment> {
-  return enrollmentStatus(await app.request(ENROLLMENT, {workspace_id: workspaceId}), workspaceId);
+  return enrollmentStatus(await app.read(ENROLLMENT, {workspace_id: workspaceId}), workspaceId);
 }
 
 /** `ask` runs after the attempt validated, so invalid input never reaches a confirmation. */
@@ -227,7 +227,7 @@ export async function changeEnrollment(app: ViewApp, report: Report, state: Enro
 const RECOVERY = '/api/v1/admin/recovery/';
 
 export async function readRecovery(app: ViewApp, clientId: string, scope: RecoveryScope, after: string | null): Promise<{invitations: RecoveryItem[]; next_cursor: string | null}> {
-  return recoveryPage(await app.request(RECOVERY + 'list', {client_id: clientId, scope, after, limit: 16}), clientId, scope);
+  return recoveryPage(await app.read(RECOVERY + 'list', {client_id: clientId, scope, after, limit: 16}), clientId, scope);
 }
 
 /** Targeted readmission is refused while the initial group window is open. */
@@ -250,10 +250,10 @@ export async function changeClientAccess(app: ViewApp, report: Report, workspace
     unconfirmed(app, report, wording.clientAccess, attempt, sent.error, async () => {
       const original = JSON.parse(attempt.requestBody);
       const value = attempt.action === 'readmit'
-        ? invitationPage(await app.request(INVITATIONS + 'list', {workspace_id: attempt.workspace_id, limit: 16}))
+        ? invitationPage(await app.read(INVITATIONS + 'list', {workspace_id: attempt.workspace_id, limit: 16}))
         : attempt.action === 'revoke_recovery'
-          ? recoveryStatus(await app.request(RECOVERY + 'status', original), attempt.client_id, attempt.scope)
-          : recoveryPage(await app.request(RECOVERY + 'list', {client_id: attempt.client_id, scope: attempt.scope, limit: 16}), attempt.client_id, attempt.scope);
+          ? recoveryStatus(await app.read(RECOVERY + 'status', original), attempt.client_id, attempt.scope)
+          : recoveryPage(await app.read(RECOVERY + 'list', {client_id: attempt.client_id, scope: attempt.scope, limit: 16}), attempt.client_id, attempt.scope);
       return {note: 'Observation only, not attribution or cancellation. Lists are first pages only; use the full pager after local discard.', text: text(value)};
     });
     return true;
@@ -292,8 +292,8 @@ export async function changeSecurity(app: ViewApp, report: Report, action: Secur
   issuing ? 'The key creation response could not be verified.' : 'The revocation response could not be verified.');
   if ('error' in sent) {
     unconfirmed(app, report, wording.security, attempt, sent.error, async () => {
-      const admins = await app.request('/api/v1/admin/team/list', {workspace_id: attempt.workspace_id, limit: 16});
-      const keys = await app.request('/api/v1/admin/keys/list', {workspace_id: attempt.workspace_id, limit: 16});
+      const admins = await app.read('/api/v1/admin/team/list', {workspace_id: attempt.workspace_id, limit: 16});
+      const keys = await app.read('/api/v1/admin/keys/list', {workspace_id: attempt.workspace_id, limit: 16});
       return {note: 'Observed first pages only; this does not confirm this request’s outcome. Use the full paginated view after forgetting locally.', text: text({admins, keys})};
     });
     return;

@@ -14,8 +14,9 @@
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
   import {app as panelApp} from '../../lib/app.svelte';
-  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
   import {stamp} from '../../lib/notify.svelte';
+  import {ReadTask} from '../../lib/readTask.js';
   import {invitationPage} from '../../lib/model.js';
   import InviteForm from './InviteForm.svelte';
   import InitialGroupForm from './InitialGroupForm.svelte';
@@ -36,16 +37,15 @@
   const initialOpen = $derived(enrollment?.phase === 'open');
   const groupDraft = new FormDraft(`initial-group:${app.workspace?.id}`);
 
+  const reader = new ReadTask(app);
   async function read(cursor: string | null) {
-    try {
-      page = invitationPage(await app.request('/api/v1/admin/invitations/list', {workspace_id: workspace.id, after: cursor, limit: 16}));
-      after = cursor;
-      error = '';
-    } catch (failure) {
-      if (app.locked) return;
-      error = (failure as Error).message;
-    }
+    await reader.run(async () => invitationPage(await app.read('/api/v1/admin/invitations/list',
+      {workspace_id: workspace.id, after: cursor, limit: 16})), {
+      receive: data => { page = data; after = cursor; error = ''; },
+      error: failure => { if (!app.locked) error = (failure as Error).message; },
+    });
   }
+  reloadView(app, () => read(after));
   onMount(() => { void read(null); });
 
   function turn(cursor: string | null, key: string) {

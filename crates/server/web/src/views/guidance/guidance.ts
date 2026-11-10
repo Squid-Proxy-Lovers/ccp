@@ -12,5 +12,5 @@ export const MAX_BYTES = 8192;
 export const bytes = (text: string): number => new TextEncoder().encode(text).length;
 
 export async function readGuidance(app: ViewApp, workspaceId: string | null): Promise<Bundle> {
-  return guidanceBundle(await app.request('/api/v1/guidance/get', {workspace_id: workspaceId}), workspaceId) as Bundle;
+  return guidanceBundle(await app.read('/api/v1/guidance/get', {workspace_id: workspaceId}), workspaceId) as Bundle;
 }

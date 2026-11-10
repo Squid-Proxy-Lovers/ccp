@@ -46,7 +46,7 @@
 
   function observe() {
     void app.run(async () => {
-      const data = await app.request(contentPath(intent.action === 'shelf' ? 'shelves/state' : 'entries/list'), intent.action === 'shelf'
+      const data = await app.read(contentPath(intent.action === 'shelf' ? 'shelves/state' : 'entries/list'), intent.action === 'shelf'
         ? {workspace_id: intent.workspace_id, node_id: intent.target_id}
         : {workspace_id: intent.workspace_id, book_id: intent.book_id, archived: true, limit: PAGE_SIZE});
       if (intent.action === 'shelf') shelfState(data, intent.workspace_id, intent.target_id);

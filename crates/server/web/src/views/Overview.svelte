@@ -21,7 +21,8 @@
   import AttentionCard from './overview/AttentionCard.svelte';
   import {total, whole, type Overview, type AttentionItem} from './overview/types';
   import {app as panelApp} from '../lib/app.svelte';
-  import {mountedView} from '../lib/viewLifecycle.js';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
+  import {ReadTask} from '../lib/readTask.js';
   import {reportedWorkPage} from '../lib/model.js';
   import {relative, stamp} from '../lib/notify.svelte';
   import type {View} from '../lib/types';
@@ -44,36 +45,35 @@
   const workspace = $derived(app.workspace);
   const days = $derived(Number(range));
 
+  const overviewRead = new ReadTask(app), reportsRead = new ReadTask(app);
   async function loadOverview() {
-    if (!workspace) return;
-    loading = true;
-    try {
+    const target = workspace;
+    if (!target) return;
+    const window = days;
+    await overviewRead.run(async () => {
       const path = '/api/v1/admin/workspaces/overview';
-      const [current, wide] = await Promise.all([
-        app.request<Overview>(path, {workspace_id: workspace.id, days}),
-        days * 2 <= 90 ? app.request<Overview>(path, {workspace_id: workspace.id, days: days * 2}) : null,
-      ]);
-      overview = current;
-      // The wider read is oldest first, so its first half is the previous window.
-      previous = wide ? wide.activity.slice(0, days).reduce((sum, day) => sum + total(day), 0) : null;
-      overviewError = '';
-    } catch (error) {
-      if (!app.locked) overviewError = (error as Error).message;
-    } finally { loading = false; }
+      return Promise.all([app.read<Overview>(path, {workspace_id: target.id, days: window}),
+        window * 2 <= 90 ? app.read<Overview>(path, {workspace_id: target.id, days: window * 2}) : null]);
+    }, {
+      start: () => { loading = true; overviewError = ''; },
+      receive: ([current, wide]) => {
+        overview = current;
+        previous = wide ? wide.activity.slice(0, window).reduce((sum, day) => sum + total(day), 0) : null;
+      },
+      error: error => { if (!app.locked) overviewError = (error as Error).message; },
+      finish: () => { loading = false; },
+    });
   }
-
   async function loadReports() {
-    if (!workspace) return;
-    try {
-      reports = reportedWorkPage(await app.request('/api/v1/work/status/list', {workspace_id: workspace.id, after: null, limit: 32}), workspace.id) as ReportPage;
-      reportsError = '';
-    } catch (error) {
-      if (!app.locked) reportsError = (error as Error).message;
-    }
+    const target = workspace;
+    if (!target) return;
+    await reportsRead.run(async () => reportedWorkPage(await app.read('/api/v1/work/status/list',
+      {workspace_id: target.id, after: null, limit: 32}), target.id) as ReportPage, {
+      start: () => { reportsError = ''; }, receive: data => { reports = data; },
+      error: error => { if (!app.locked) reportsError = (error as Error).message; },
+    });
   }
-
-  // The view remounts on workspace change and on the header refresh; the
-  // range is the only in-view input, and it keeps the previous render while loading.
+  reloadView(app, async () => { await Promise.all([loadOverview(), loadReports()]); });
   $effect(() => { void range; untrack(() => void loadOverview()); });
   onMount(() => void loadReports());
 
