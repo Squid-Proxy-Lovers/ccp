@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The locked-screen discard decision, including the asynchronous confirmation.
+export function lockedSignInBlocked(state) {
+  return state.workspaceCreates > 0;
+}
+
 function discardSnapshot(state) {
   // Compare the workspace ID, never the raw owner key. New creates have new
   // IDs. A session replacement also invalidates an open discard decision.
@@ -13,6 +17,7 @@ function discardSnapshot(state) {
 }
 
 export async function discardAndSignIn(state, confirmAction, reset) {
+  if (lockedSignInBlocked(state)) return;
   const snapshot = discardSnapshot(state);
   const recovery = snapshot.recovery;
   const ownerKey = snapshot.ownerWorkspaceId !== null;
@@ -25,7 +30,7 @@ export async function discardAndSignIn(state, confirmAction, reset) {
       body: `Any uncertain server write remains uncertain.${ownerKey ? ' This also discards the workspace owner key shown below.' : ''} Copy your work first if you need it.`,
       confirm: 'Discard and sign in', destructive: true,
     });
-  if (!ok) return;
+  if (!ok || lockedSignInBlocked(state)) return;
   const current = discardSnapshot(state);
   // Refuse an outdated approval; another click opens a fresh decision that
   // describes the current work. No secret is cleared by the old approval.

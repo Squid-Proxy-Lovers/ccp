@@ -7,6 +7,7 @@ import {submitDraftCreate} from './draftCreate.js';
 
 /**
  * @param {object} deps
+ * @param {{workspaceCreates: number}} [deps.activity]
  * @param {() => boolean} deps.hasUndismissedOwnerKey
  * @param {Record<string, Record<string,string>>} deps.drafts
  * @param {string} deps.key
@@ -15,8 +16,11 @@ import {submitDraftCreate} from './draftCreate.js';
  * @param {(data: unknown) => string} deps.confirmedText
  * @returns {Promise<{ok: false, blocked: true} | {ok: true, blocked: false, result: unknown} | {ok: false, blocked: false, error: unknown, keptCurrent: boolean}>}
  */
-export async function createWorkspaceFlow({hasUndismissedOwnerKey, drafts, key, submitted, request, confirmedText}) {
+export async function createWorkspaceFlow({hasUndismissedOwnerKey, drafts, key, submitted, request, confirmedText, activity = {workspaceCreates: 0}}) {
   if (hasUndismissedOwnerKey()) return {ok: false, blocked: true};
-  const outcome = await submitDraftCreate({drafts, key, submitted, request, confirmedText});
-  return {...outcome, blocked: false};
+  activity.workspaceCreates += 1;
+  try {
+    const outcome = await submitDraftCreate({drafts, key, submitted, request, confirmedText});
+    return {...outcome, blocked: false};
+  } finally { activity.workspaceCreates -= 1; }
 }

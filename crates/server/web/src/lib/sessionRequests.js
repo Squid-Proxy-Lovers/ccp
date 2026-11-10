@@ -60,6 +60,9 @@ export function adoptSession(state, session) {
   state.session = session;
   state.locked = false;
   state.lockMessage = '';
+  // Remount panes so callbacks from the replaced session have no live view.
+  // Kept drafts and the owner key live in app state and survive the remount.
+  state.refreshTick = (state.refreshTick ?? 0) + 1;
 }
 
 export function creationRecovery(path, result) {

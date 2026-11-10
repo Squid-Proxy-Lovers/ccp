@@ -156,7 +156,7 @@
         </div>
       </form>
       {#if ownerKeyPending}
-        <p class="mt-3 text-[13px] text-destructive">Dismiss the owner key above before creating another workspace.</p>
+        <p class="mt-3 text-[13px] text-muted-foreground">Dismiss the owner key above before creating another workspace.</p>
       {:else}
         <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
       {/if}

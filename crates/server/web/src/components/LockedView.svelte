@@ -29,13 +29,16 @@
     </div>
     <h1 id="page-title" tabindex="-1" class="rounded-sm text-2xl font-semibold tracking-tight outline-none focus-visible:ring-2 focus-visible:ring-ring">Session ended</h1>
     <p role="alert" class="mt-2 text-sm text-pretty text-muted-foreground">{app.lockMessage}</p>
+    {#if app.waitingForWorkspaceCreate}
+      <p role="status" class="mt-3 text-sm text-muted-foreground">Waiting for the workspace create to finish.</p>
+    {/if}
     {#if identity}
       <p class="mt-4 text-xs text-muted-foreground">
         Was signed in as <span class="font-medium text-foreground">{identity.principal_name}</span> · {role}
       </p>
     {/if}
     {#if !recovery && !app.deletion && !ownerKey}
-      <Button class="group mt-7 min-w-44" onclick={() => app.discardAndSignIn()}>
+      <Button class="group mt-7 min-w-44" disabled={app.waitingForWorkspaceCreate} onclick={() => app.discardAndSignIn()}>
         {label} <ArrowRight class="transition-transform duration-200 group-hover:translate-x-0.5" />
       </Button>
     {/if}
@@ -58,7 +61,7 @@
       <DeletionTracker />
       <div class="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
         {#if recovery}<Button variant="outline" onclick={() => copyText(recovery)}><Copy /> Copy local work</Button>{/if}
-        <Button variant={deletionOnly ? 'default' : 'destructive'} onclick={() => app.discardAndSignIn()}>{label}</Button>
+        <Button variant={deletionOnly ? 'default' : 'destructive'} disabled={app.waitingForWorkspaceCreate} onclick={() => app.discardAndSignIn()}>{label}</Button>
       </div>
     </div>
   {/if}

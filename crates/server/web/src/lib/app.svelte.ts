@@ -8,7 +8,7 @@
 // - an uncertain write (`pending`) or unsaved edit (`dirty`) blocks leaving;
 // - no key, draft or session data is written to browser storage.
 import {verifySession, sessionRequest, adoptSession, creationRecovery} from './sessionRequests.js';
-import {discardAndSignIn} from './lockedSignIn.js';
+import {discardAndSignIn, lockedSignInBlocked} from './lockedSignIn.js';
 import {identityKey, takeFragment, wire, canWrite} from './model.js';
 import {acquireDraft, dropDraft, peekDraft, hasAnyDraftContent, draftLabels, recoveryText as draftsRecoveryText} from './drafts.js';
 import {createWorkspaceFlow} from './workspaceCreate.js';
@@ -54,7 +54,11 @@ class App {
   createdWorkspace = $state.raw<CreatedWorkspace | null>(null);
   /** Creation form drafts keyed by form, kept across navigation (not DOM). */
   drafts = $state<Record<string, Record<string, string>>>({});
+  /** Includes acknowledgement and verification; independent of the action busy slot. */
+  workspaceCreates = $state(0);
   #fragmentKey = '';
+
+  get waitingForWorkspaceCreate(): boolean { return lockedSignInBlocked(this); }
 
   get instanceScope(): boolean { return this.session?.identity.scope.kind === 'instance'; }
   writable = (): boolean => Boolean(this.session && this.workspace && canWrite(this.session, this.workspace));
@@ -226,6 +230,7 @@ class App {
    */
   async createWorkspace(name: string, owner: string, draftKey: string, submitted: Record<string, string>): Promise<CreatedWorkspace | null> {
     const outcome = await createWorkspaceFlow({
+      activity: this,
       hasUndismissedOwnerKey: () => this.createdWorkspace !== null,
       drafts: this.drafts, key: draftKey, submitted,
       // Only reached once the owner-key block is known not to apply, so this
@@ -246,7 +251,7 @@ class App {
     if (outcome.blocked) return null;
     if (!outcome.ok) throw outcome.error;
     const result = outcome.result as CreatedWorkspace;
-    this.createdWorkspace = result;
+    // Acknowledgement already surfaced the key; a dismissal must stay final.
     try { await this.loadWorkspaces(); }
     catch (error) {
       if (this.locked) this.lock(creationRecovery('/api/v1/admin/workspaces/create', result));

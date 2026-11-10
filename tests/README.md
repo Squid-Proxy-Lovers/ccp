@@ -5,6 +5,13 @@
 Start with [CONTRIBUTING.md](../CONTRIBUTING.md) to install Rust, the MCP package,
 and the pinned quality tools. Each command runs against local isolated test data.
 
+## Admin panel tests
+
+Run `node --test tests/*.mjs` with Node.js 24 or later. No `node_modules` are
+needed. The App state-machine harness uses Node's native TypeScript erasure
+and identity functions for rune fields; it exercises the actual imperative
+methods, not Svelte reactivity or rendering. Browser checks cover those separately.
+
 ## Rust tests
 
 ```bash

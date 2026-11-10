@@ -1,24 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// What this file is: plain source-contract checks for wiring that exists
-// only in a .svelte template or a rune-compiled `.svelte.ts` file, so it
-// cannot be driven by node:test at all -- there is no Svelte compiler and no
-// Vite in this test run, and `$state`/`$derived`/`$effect` are compiler
-// macros, not runtime functions. Every test here reads a component's source
-// text and asserts a specific call, attribute or class is present.
-//
-// What this file is not, and does not claim to be: a behavioural test, or a
-// substitute for driving the real panel. Every decision that CAN be pulled
-// out of a template and expressed as a plain function has been, and is
-// tested with real inputs (including deferred-promise races) in
-// tests/workspace_panel.mjs; this file only covers what is left after that
-// -- the handful of lines that pass a tested function's result into a
-// template attribute, a prop, or a reactive effect's DOM call. No browser
-// session, mutation run or screenshot is included here or implied by it;
-// those are reported separately, outside this repository.
-//
-// Each remaining check below is annotated with why it is template-only
-// rather than something that could have been moved into a tested function.
+// Source-contract checks for template bindings. Imperative App methods now
+// also run in workspace_panel.mjs via helpers/panelApp.mjs (native TypeScript
+// erasure plus identity rune fields); that harness does not model reactivity
+// or rendering. These checks pin the connection between tested decisions and
+// Svelte attributes/effects. Browser checks separately exercise the live UI.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -45,11 +31,8 @@ function slice(text, fromMarker, toMarker) {
 }
 
 // ---- app.svelte.ts: each method calls the tested function that owns its decision ----
-// (app.svelte.ts itself is a rune-compiled class -- its $state fields mean
-// the whole file needs the Svelte compiler to load, so none of its methods
-// can be imported and called directly from node:test. What each one decides
-// is instead tested via the lib/*.js function it delegates to; these checks
-// only confirm the delegation itself is still wired up.)
+// App's imperative state transitions run in the dependency-free harness;
+// these checks additionally pin its delegation arguments.
 
 test('[source] app.svelte.ts reuses acquireDraft/dropDraft from drafts.js for its form-draft accessors', () => {
   assert.match(app, /from '\.\/drafts\.js'/);
@@ -126,7 +109,7 @@ test('[source] createWorkspace delegates to createWorkspaceFlow and surfaces the
   assert.match(createWorkspace, /drafts: this\.drafts, key: draftKey, submitted,/);
   const confirmedText = slice(createWorkspace, 'confirmedText: data => {', '},\n    });');
   assert.match(confirmedText, /this\.createdWorkspace = data as CreatedWorkspace;/, 'the owner key must surface even when the session check after the write fails');
-  assert.match(createWorkspace, /this\.createdWorkspace = result;/, 'and on the plain success path too');
+  assert.doesNotMatch(createWorkspace, /this\.createdWorkspace = result;/, 'success must not resurrect a key dismissed after acknowledgement');
 });
 
 test('[source] createWorkspace\'s "Creating workspace…" notice is inside the request closure, not fired for a blocked create', () => {
@@ -311,4 +294,21 @@ test('[source] CreateNodeForm.svelte freezes both fields and both buttons', () =
 test('[source] CreateNodeForm.svelte offers Create before Discard, like Workspaces.svelte and InviteForm.svelte', () => {
   const form = slice(createNodeForm, '<div class="flex justify-end', '</form>');
   assert.ok(form.indexOf('Create {kind}') < form.indexOf('Discard draft'), 'Create must come before Discard');
+});
+
+
+test('[source] both locked-screen sign-in actions use the create-in-flight guard and neutral status note', () => {
+  assert.equal((lockedView.match(/disabled=\{app\.waitingForWorkspaceCreate\} onclick=\{\(\) => app\.discardAndSignIn\(\)\}/g) ?? []).length, 2);
+  assert.match(lockedView, /\{#if app\.waitingForWorkspaceCreate\}\s*<p role="status" class="[^"]*text-muted-foreground">Waiting for the workspace create to finish\.<\/p>/);
+  assert.match(app, /get waitingForWorkspaceCreate\(\): boolean \{ return lockedSignInBlocked\(this\); \}/);
+  const create = slice(app, 'async createWorkspace(', '\n\n  workspaceAcknowledged(');
+  assert.match(create, /createWorkspaceFlow\(\{\s*activity: this,/);
+});
+
+test('[source] adopted sessions remount views through refreshTick without moving drafts into components', () => {
+  assert.match(appSvelte, /\{#key `\$\{app\.workspace\?\.id \?\? ''\}:\$\{app\.view\}:\$\{app\.refreshTick\}`\}/);
+});
+
+test('[source] blocked second create explains its prerequisite in neutral text', () => {
+  assert.match(workspaces, /<p class="[^"]*text-muted-foreground">Dismiss the owner key above before creating another workspace\.<\/p>/);
 });

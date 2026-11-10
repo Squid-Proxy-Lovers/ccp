@@ -1418,11 +1418,11 @@ function browserSessionServer() {
   const requests = [];
   const created = {workspace_id: 'created-workspace', owner_key: 'one-time-test-owner'};
   const fail = (status, message) => Object.assign(new Error(message), {status});
-  function hold(path) {
+  function hold(path, options = {}) {
     const started = defer(), response = defer();
     const gate = {started: started.promise, release: null};
     const queue = holds.get(path) ?? [];
-    queue.push({started, response, gate}); holds.set(path, queue);
+    queue.push({started, response, gate, options}); holds.set(path, queue);
     return gate;
   }
   function wire(path, body, csrf) {
@@ -1438,13 +1438,20 @@ function browserSessionServer() {
       const current = sessions.get(token);
       if (!current) throw fail(401, 'Expired browser session');
       if (body !== undefined && csrf !== current.csrf_token) throw fail(403, 'Invalid CSRF');
+      if (path.startsWith('/api/v1/admin/workspaces?')) return {workspaces: [], next_cursor: null};
       if (path === '/denied') throw fail(403, 'Permission revoked');
       if (path.endsWith('/create')) return created;
       return current;
     }
     const held = holds.get(path)?.shift();
     if (held) {
-      held.gate.release = () => { try { held.response.resolve(reply()); } catch (error) { held.response.reject(error); } };
+      const early = held.options.processFirst ? reply() : undefined;
+      held.gate.release = () => {
+        try {
+          if (held.options.status) throw fail(held.options.status, 'Held request failed');
+          held.response.resolve(held.options.processFirst ? early : reply());
+        } catch (error) { held.response.reject(error); }
+      };
       held.started.resolve({token, csrf});
       return held.response.promise;
     }
@@ -1589,6 +1596,206 @@ test('create recovery: a failed post-write verification describes the owner key 
   assert.match(h.state.lockMessage, /owner key shown below/);
   assert.doesNotMatch(h.state.lockMessage, /no longer displayed|reset-owner-key/);
   assert.equal(WORKSPACE_DRAFT_KEY in h.state.drafts, false);
+});
+
+
+// Real App methods with native TypeScript erasure and in-memory rune fields.
+// Browser tests separately verify that Svelte observes the same transitions.
+import {panelAppClass, runtime as appRuntime, answerConfirmation} from './helpers/panelApp.mjs';
+const PanelApp = await panelAppClass();
+
+function realAppHarness(t) {
+  const server = browserSessionServer(), app = new PanelApp();
+  app.session = server.current(); app.booted = true;
+  appRuntime.confirmation = null; appRuntime.toasts.length = 0;
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  globalThis.fetch = async (path, options) => {
+    try {
+      const data = await server.wire(path, options.body, options.headers?.['X-CCP-CSRF']);
+      return {ok: true, status: 200, json: async () => ({api_version: 1, data})};
+    } catch (error) {
+      return {ok: false, status: error.status ?? 503, json: async () => ({api_version: 1, error: {code: 'test'}})};
+    }
+  };
+  const create = () => {
+    const submitted = app.formDraft(WORKSPACE_DRAFT_KEY); submitted.name = 'Created'; submitted.owner = 'Owner';
+    return app.run(() => app.createWorkspace(submitted.name, submitted.owner, WORKSPACE_DRAFT_KEY, submitted), WORKSPACE_DRAFT_KEY);
+  };
+  return {app, server, create};
+}
+
+for (const empty of [false, true]) test(`round 5: locked sign-in cannot discard an in-flight create, empty recovery=${empty}`, async t => {
+  const {app, server, create} = realAppHarness(t);
+  const denied = server.hold('/denied');
+  const background = assert.rejects(app.request('/denied'), {status: 403}); await denied.started;
+  const write = server.hold('/api/v1/admin/workspaces/create');
+  const creating = create(); await write.started;
+  denied.release(); await background;
+  if (empty) app.drafts = {};
+  const original = app.session;
+  const blocked = app.discardAndSignIn();
+  assert.equal(appRuntime.confirmation, null, 'blocked action must not open a discard decision');
+  await blocked;
+  assert.equal(app.session, original);
+  assert.equal(app.waitingForWorkspaceCreate, true);
+  write.release(); await creating;
+  assert.equal(app.waitingForWorkspaceCreate, false);
+  assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
+  const discard = app.discardAndSignIn();
+  assert.match(appRuntime.confirmation.body, /owner key/);
+  answerConfirmation(true); await discard;
+  assert.equal(app.session, null); assert.equal(app.createdWorkspace, null);
+});
+
+test('round 5: failed workspace create releases the locked sign-in guard', async t => {
+  const {app, server, create} = realAppHarness(t);
+  const write = server.hold('/api/v1/admin/workspaces/create', {status: 503});
+  const creating = create(); await write.started;
+  app.lock('Background permission failure');
+  assert.equal(app.waitingForWorkspaceCreate, true);
+  write.release(); await creating;
+  assert.equal(app.waitingForWorkspaceCreate, false); assert.equal(app.createdWorkspace, null);
+  const discard = app.discardAndSignIn();
+  assert.doesNotMatch(appRuntime.confirmation.body, /owner key/);
+  answerConfirmation(false); await discard;
+  assert.equal(app.hasFormDrafts, true); assert.equal(app.busy, false);
+});
+
+test('round 5: superseded successful create cannot acknowledge into an adopted session', async () => {
+  const h = requestHarness();
+  const write = h.server.hold('/api/v1/admin/workspaces/create', {processFirst: true});
+  const creating = h.create(); await write.started;
+  await h.login(); const pending = {body: 'adopted work'}; h.state.pending = pending;
+  write.release(); const outcome = await creating;
+  assert.equal(outcome.ok, false); assert.equal(h.state.createdWorkspace, null);
+  assert.equal(WORKSPACE_DRAFT_KEY in h.state.drafts, true, 'no old-session callback may drop this draft');
+  assert.equal(h.state.pending, pending); assert.equal(h.state.locked, false);
+});
+
+test('round 5: preflight reference binding survives generation reuse', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session');
+  const checking = assert.rejects(verifySession(h.state, h.deps), /Expired browser session/); await preflight.started;
+  const generation = h.state.generation;
+  await h.login(); h.state.generation = generation;
+  preflight.release(); await checking;
+  assert.equal(h.state.locked, false); assert.equal(h.state.generation, generation);
+});
+
+test('round 5: adoption advances the view generation and remount key while preserving stored drafts', async () => {
+  const h = requestHarness(); h.state.refreshTick = 3;
+  const oldGeneration = h.state.generation, oldMount = h.state.refreshTick;
+  const draft = acquireDraft(h.state.drafts, 'context.shelf.ws'); draft.name = 'Kept';
+  await h.login();
+  assert.equal(h.state.generation, oldGeneration + 1);
+  assert.equal(h.state.refreshTick, oldMount + 1, 'old pane callbacks belong to the unmounted view');
+  assert.equal(h.state.drafts['context.shelf.ws'], draft);
+});
+
+test('round 5: confirmed create clears its pending work when postverification locks', async () => {
+  const h = requestHarness(); h.state.pending = {body: 'original create'};
+  const write = h.server.hold('/api/v1/admin/workspaces/create');
+  const creating = h.create(); await write.started;
+  h.deps.lock('Concurrent failure'); write.release(); await creating;
+  assert.equal(h.state.createdWorkspace, h.server.created); assert.equal(h.state.pending, null);
+});
+
+test('round 5: a view change after verification success but before request continuation rejects old data', async () => {
+  const h = requestHarness();
+  const read = h.server.hold('/read');
+  const reading = assert.rejects(h.request('/read'), /view changed/i); await read.started;
+  const postcheck = h.server.hold('/api/v1/admin/session');
+  read.release(); await postcheck.started;
+  postcheck.release(); queueMicrotask(() => { h.state.generation++; });
+  await reading; assert.equal(h.state.locked, false);
+});
+
+test('round 5: adoption in the gap after preflight success cannot send with either old or new CSRF', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session');
+  const writing = assert.rejects(h.request('/write', {}), /session changed/i); await preflight.started;
+  const generation = h.state.generation;
+  preflight.release();
+  // verifySession resumes first and succeeds; adoption runs before the
+  // sessionRequest continuation. Reuse isolates the reference safeguard.
+  queueMicrotask(() => { adoptSession(h.state, {...h.state.session, csrf_token: 'rotated'}); h.state.generation = generation; });
+  await writing;
+  assert.equal(h.server.requests.some(request => request.path === '/write'), false);
+});
+
+test('round 5: owner-only locked recovery requires consent and cancellation keeps the key', async t => {
+  const {app, server} = realAppHarness(t);
+  app.createdWorkspace = server.created; app.lock('Ended');
+  const first = app.discardAndSignIn();
+  assert.match(appRuntime.confirmation.body, /owner key/);
+  answerConfirmation(false); await first; assert.equal(app.createdWorkspace, server.created);
+  const second = app.discardAndSignIn(); answerConfirmation(true); await second;
+  assert.equal(app.createdWorkspace, null); assert.equal(app.session, null);
+});
+
+for (const binding of ['session', 'pending']) test(`round 5: discard consent is bound to the ${binding} object independently of recovery text`, async t => {
+  const {app, server} = realAppHarness(t);
+  app.createdWorkspace = server.created; app.pending = {body: 'same text'}; app.lock('Ended');
+  const discarding = app.discardAndSignIn();
+  app[binding] = {...app[binding]};
+  answerConfirmation(true); await discarding;
+  assert.equal(app.createdWorkspace, server.created); assert.ok(app.session);
+});
+
+for (const rejected of [false, true]) test(`round 5: run retains serialization across lock and releases busy state on completion, reject=${rejected}`, async t => {
+  const {app} = realAppHarness(t); const work = defer(); let calls = 0;
+  const running = app.run(() => work.promise, 'create-workspace');
+  assert.equal(app.busy, true); assert.equal(app.busyKey, 'create-workspace');
+  app.lock('Background failure'); await app.run(() => { calls++; }, 'second');
+  assert.equal(calls, 0); assert.equal(app.busy, true); assert.equal(app.busyKey, 'create-workspace');
+  if (rejected) work.reject(new Error('failed')); else work.resolve();
+  await running; assert.equal(app.busy, false); assert.equal(app.busyKey, '');
+});
+
+for (const rejected of [false, true]) test(`round 5: activation screen settles on completion, reject=${rejected}`, async t => {
+  const {app, server} = realAppHarness(t); const work = defer();
+  app.loadWorkspaces = () => work.promise;
+  const current = {...server.current(), identity: {...server.current().identity, scope: {kind: 'instance'}}};
+  const activating = app.activate(current); const outcome = rejected ? assert.rejects(activating, /failed/) : activating;
+  assert.equal(app.activating, true);
+  if (rejected) work.reject(new Error('failed')); else work.resolve();
+  await outcome; assert.equal(app.activating, false);
+});
+
+test('round 5: reset advances generation rather than reusing zero', async t => {
+  const {app} = realAppHarness(t); app.generation = 17;
+  app.reset(); assert.equal(app.generation, 18); assert.equal(app.session, null);
+});
+
+test('round 5: workspace refresh never resurrects an explicitly dismissed owner key', async t => {
+  const {app, server, create} = realAppHarness(t);
+  const refresh = server.hold('/api/v1/admin/workspaces?limit=32');
+  const creating = create(); await refresh.started;
+  assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
+  app.createdWorkspace = null; refresh.release(); await creating;
+  assert.equal(app.createdWorkspace, null); assert.equal(app.busy, false);
+});
+
+test('round 5: a successful superseded preflight cannot be accepted when generation is reused', async () => {
+  const h = requestHarness();
+  const preflight = h.server.hold('/api/v1/admin/session', {processFirst: true});
+  const checking = assert.rejects(verifySession(h.state, h.deps), /session changed/i); await preflight.started;
+  const generation = h.state.generation;
+  await h.login(); h.state.generation = generation;
+  preflight.release(); await checking;
+  assert.equal(h.state.locked, false);
+});
+
+test('round 5: workspace postverification never restores an owner key dismissed after acknowledgement', async t => {
+  const {app, server, create} = realAppHarness(t);
+  const write = server.hold('/api/v1/admin/workspaces/create');
+  const creating = create(); await write.started;
+  const postcheck = server.hold('/api/v1/admin/session');
+  write.release(); await postcheck.started;
+  assert.equal(app.createdWorkspace.workspace_id, server.created.workspace_id);
+  app.createdWorkspace = null; postcheck.release(); await creating;
+  assert.equal(app.createdWorkspace, null);
 });
 
 import './workspace_panel_wiring.mjs';
