@@ -32,22 +32,28 @@
   let keys = $state.raw<{keys: WorkspaceKey[]; next_cursor: string | null} | null>(null);
   let adminAfter = $state<string | null>(null);
   let keyAfter = $state<string | null>(null);
-  let error = $state('');
+  let adminError = $state(''), keyError = $state('');
+  let adminLoading = $state(false), keyLoading = $state(false);
+  const error = $derived(adminError || keyError);
   let editor = $state.raw<{kind: 'appoint'} | {kind: 'key'; admin: Admin} | null>(null);
 
   const adminRead = new ReadTask(app), keyRead = new ReadTask(app);
   async function readAdmins(cursor: string | null) {
     await adminRead.run(() => app.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
       {workspace_id: workspace.id, after: cursor, limit: 16}), {
-      receive: data => { admins = data; adminAfter = cursor; error = ''; },
-      error: failure => { if (!app.locked) error = (failure as Error).message; },
+      start: () => { adminLoading = true; },
+      receive: data => { admins = data; adminAfter = cursor; adminError = ''; },
+      error: failure => { if (!app.locked) adminError = (failure as Error).message; },
+      finish: () => { adminLoading = false; },
     });
   }
   async function readKeys(cursor: string | null) {
     await keyRead.run(() => app.read<{keys: WorkspaceKey[]; next_cursor: string | null}>('/api/v1/admin/keys/list',
       {workspace_id: workspace.id, after: cursor, limit: 16}), {
-      receive: data => { keys = data; keyAfter = cursor; error = ''; },
-      error: failure => { if (!app.locked) error = (failure as Error).message; },
+      start: () => { keyLoading = true; },
+      receive: data => { keys = data; keyAfter = cursor; keyError = ''; },
+      error: failure => { if (!app.locked) keyError = (failure as Error).message; },
+      finish: () => { keyLoading = false; },
     });
   }
   async function readAll(adminCursor: string | null, keyCursor: string | null) { await Promise.all([readAdmins(adminCursor), readKeys(keyCursor)]); }
@@ -116,7 +122,8 @@
 
   {#if error}
     <Alert tone="destructive" title="Administrator and key metadata unavailable">
-      <p>{error}</p>
+      {#if adminError}<p>Administrators: {adminError}</p>{/if}
+      {#if keyError}<p>Workspace keys: {keyError}</p>{/if}
       <p>No empty roster or key list was assumed.</p>
     </Alert>
     <Button variant="outline" busy={app.working('team-retry')} onclick={() => turn(() => readAll(adminAfter, keyAfter), 'team-retry')}>Read administrators & keys</Button>
@@ -126,7 +133,7 @@
     <CardHeader title="Administrators" />
     <CardContent class="px-0">
       {#if !admins}
-        {#if !error}<Delayed><SkeletonTable rows={2} columns={['w-36', 'w-20', 'w-24', 'w-28']} label="Loading administrators" /></Delayed>{/if}
+        {#if adminLoading && !adminError}<Delayed><SkeletonTable rows={2} columns={['w-36', 'w-20', 'w-24', 'w-28']} label="Loading administrators" /></Delayed>{/if}
       {:else if !admins.admins.length}
         <div class="px-5"><Empty icon={Users} title="No administrators on this page" /></div>
       {:else}
@@ -179,7 +186,7 @@
       description="Metadata contains no secret. Role activity does not mean an expired or revoked key works. Creating a key does not revoke older keys; deliver the new key privately before deliberately revoking an old one." />
     <CardContent class="px-0">
       {#if !keys}
-        {#if !error}<Delayed><SkeletonTable rows={3} columns={['w-32', 'w-24', 'w-28', 'w-16']} label="Loading keys" /></Delayed>{/if}
+        {#if keyLoading && !keyError}<Delayed><SkeletonTable rows={3} columns={['w-32', 'w-24', 'w-28', 'w-16']} label="Loading keys" /></Delayed>{/if}
       {:else if !keys.keys.length}
         <div class="px-5"><Empty icon={KeyRound} title="No workspace keys on this page" /></div>
       {:else}

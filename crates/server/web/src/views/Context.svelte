@@ -9,6 +9,10 @@
   import EntrySkeleton from './context/EntrySkeleton.svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
+  import Alert from '../lib/ui/Alert.svelte';
+  import Textarea from '../lib/ui/Textarea.svelte';
+  import {ReadTask} from '../lib/readTask.js';
+  import {reloadContextSelection} from '../lib/contextReload.js';
   import Button from '../lib/ui/Button.svelte';
   import Empty from '../lib/ui/Empty.svelte';
   import {app as panelApp} from '../lib/app.svelte';
@@ -57,6 +61,7 @@
   let detail = $state.raw<Detail>({kind: 'none'});
   let detailSerial = $state(0);
   let detailFrom = $state<Stage>('shelves');
+  let inactiveNotice = $state('');
 
   const shelves = new Pager<Shelf>(app, (after, limit) => app.read(contentPath('shelves/list'), {workspace_id: workspaceId, after, limit}));
   const books = new Pager<Book>(app, (after, limit) => app.read(contentPath('books/list'), {workspace_id: workspaceId, shelf_id: shelf?.id, after, limit}));
@@ -282,12 +287,28 @@
     await shelves.reload();
   }
 
+  const selectionRead = new ReadTask(app);
   async function reload() {
-    await Promise.all([shelves.reload(), ...(shelf ? [books.reload()] : []), ...(book ? [entries.reload()] : [])]);
-    if (shelf) shelf = shelves.items.find(item => item.id === shelf?.id) ?? shelf;
-    if (book) book = books.items.find(item => item.id === book?.id) ?? book;
-    if (entry) entry = entries.items.find(item => item.id === entry?.id) ?? entry;
-    if (entry && detail.kind === 'archived-entry') detail = {...detail, entry};
+    await selectionRead.run(() => reloadContextSelection({
+      selection: {shelf, book, entry}, pages: {shelf: shelves, book: books, entry: entries},
+      read: async (kind: string, id: string) => kind === 'entry'
+        ? (await app.read<Snapshot>(contentPath('entries/get'), {workspace_id: workspaceId, entry_id: id, revision: null})).entry
+        : app.read(contentPath(`${kind === 'shelf' ? 'shelves' : 'books'}/get`), {workspace_id: workspaceId, node_id: id}),
+    }), {
+      receive: result => {
+        shelf = result.shelf; book = result.book; entry = result.entry;
+        if (result.missing) {
+          const label = result.missing.charAt(0).toUpperCase() + result.missing.slice(1);
+          inactiveNotice = `${label} is no longer active (archived or removed).`;
+          if (result.missing === 'shelf') { shelf = null; books.clear(); }
+          if (result.missing !== 'entry') { book = null; entries.clear(); }
+          entry = null;
+          // Closing the editor deliberately leaves app.draft/pending intact.
+          closeDetail(); stage = result.missing === 'shelf' ? 'shelves' : result.missing === 'book' ? 'books' : 'entries';
+        }
+        if (entry && detail.kind === 'archived-entry') detail = {...detail, entry};
+      }, rethrow: true,
+    });
   }
   reloadView(app, reload);
   onMount(() => { shelves.first().catch(() => {}); });
@@ -309,6 +330,20 @@
       <button type="button" class="max-w-48 cursor-pointer truncate rounded px-1 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring" onclick={() => back('entries')}>{book.name}</button>{/if}
     {#if entry}<span aria-hidden="true">/</span><span class="max-w-48 truncate px-1 text-foreground" aria-current="location">{entry.name}</span>{/if}
   </nav>
+
+  {#if inactiveNotice}
+    <Alert title="Selection no longer active">
+      <p role="status">{inactiveNotice}</p>
+      {#if app.dirty || app.pending}
+        <p>Your unsaved work is kept locally. Copy it before explicitly discarding it.</p>
+        <Textarea aria-label="Recoverable local work" value={app.recoveryText()} readonly rows={6} />
+        <Button variant="outline" size="sm" onclick={() => app.copyText(app.recoveryText())}>Copy local work</Button>
+        {#if !app.pending}<Button variant="outline" size="sm" onclick={async () => {
+          if (await app.confirmAction({title: 'Discard recovered local work?', body: 'This clears the unsaved text shown here. Copy it first if you need it.', confirm: 'Discard local work', destructive: true})) app.clean();
+        }}>Discard local work</Button>{/if}
+      {/if}
+    </Alert>
+  {/if}
 
   <div class="grid gap-4 md:grid-cols-3">
     <ListPane id="shelves" kind="shelf" title="Shelves" pager={shelves} selectedId={shelf?.id ?? null} pinned={shelf}

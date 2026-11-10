@@ -46,12 +46,12 @@ export async function panelNotifyModule() {
 }
 
 /** Execute a trusted production callback with injected DOM/clock dependencies. */
-export async function componentCallback(path, from, to, context, invoke = '') {
+export async function componentCallback(path, from, to, context, invoke = '', prefix = '') {
   const {runInNewContext} = await import('node:vm');
   const source = await readFile(new URL('../../crates/server/web/src/' + path, import.meta.url), 'utf8');
   const start = source.indexOf(from), end = source.indexOf(to, start + from.length);
   if (start < 0 || end < 0) throw new Error('Component callback markers changed: ' + path);
-  return runInNewContext(source.slice(start, end) + '\n' + invoke, context);
+  return runInNewContext(stripTypeScriptTypes(prefix + source.slice(start, end) + '\n' + invoke), context);
 }
 
 /** Baseline adapter: the old view loaders applied results/errors without tickets. */

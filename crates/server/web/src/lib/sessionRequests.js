@@ -2,6 +2,7 @@
 // Session-bound request ordering, shared by the app and deferred-request tests.
 import {releaseAction} from './actionOwner.js';
 import {signature} from './model.js';
+import {SupersededRead} from './readTask.js';
 
 export async function verifySession(state, deps) {
   if (!state.session || state.locked) throw new Error('Sign in again before continuing.');
@@ -34,6 +35,7 @@ export async function sessionRequest(state, deps, path, body, confirmed, readOnl
   try {
     const data = await deps.wire(path, body === undefined ? undefined : JSON.stringify(body), session.csrf_token);
     if (session !== state.session) throw new Error('The browser session changed.');
+    if (readOnly && generation !== state.generation) throw new SupersededRead();
     // Acknowledgement is a fact about the write, independent of verification,
     // navigation, or a concurrent lock. Surface secrets and drop the submitted
     // draft synchronously, before any further await or stale-view rejection.

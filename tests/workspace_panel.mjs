@@ -2360,4 +2360,159 @@ for (const retired of [false, true]) test(`round 8: DeletionTracker queued headi
   assert.equal(focus, retired ? 0 : 1);
 });
 
+
+// Round 9 exercises the production callbacks, not copies of their decisions.
+import {reloadContextSelection} from '../crates/server/web/src/lib/contextReload.js';
+for (const phase of ['mount', 'Refresh']) for (const endpoint of ['admin', 'key']) for (const order of ['failure first', 'success first'])
+  test(`round 9: Team ${phase}, ${endpoint} failure persists with sibling ${order}`, async t => {
+    const {app} = realAppHarness(t), api = app.forView();
+    const queues = {admin: [], key: []};
+    api.read = path => queues[path.includes('/team/') ? 'admin' : 'key'].shift().promise;
+    const context = {app: api, ReadTask, workspace: {id: 'workspace'}, admins: null, keys: null,
+      adminAfter: null, keyAfter: null, adminError: '', keyError: '', error: '', adminLoading: false, keyLoading: false};
+    const loaders = await componentCallback('views/access/TeamTab.svelte', '  const adminRead =', '\n  reloadView(', context, '({readAll, readAdmins, readKeys});');
+    if (phase === 'Refresh') {
+      queues.admin.push({promise: Promise.resolve({admins: [{id: 'old-admin'}]})}); queues.key.push({promise: Promise.resolve({keys: [{id: 'old-key'}]})});
+      await loaders.readAll(null, null); app.generation++;
+    }
+    const failure = defer(), success = defer(); queues[endpoint].push(failure); queues[endpoint === 'admin' ? 'key' : 'admin'].push(success);
+    const reading = loaders.readAll(null, null);
+    const fail = async () => { failure.reject(new Error(endpoint + ' unavailable')); await new Promise(resolve => setImmediate(resolve)); };
+    const succeed = async () => { success.resolve(endpoint === 'admin' ? {keys: []} : {admins: []}); await new Promise(resolve => setImmediate(resolve)); };
+    if (order === 'failure first') { await fail(); await succeed(); } else { await succeed(); await fail(); }
+    await reading;
+    assert.equal(context[endpoint + 'Error'], endpoint + ' unavailable');
+    assert.equal(context[endpoint === 'admin' ? 'keyError' : 'adminError'], '');
+    assert.equal(context.adminLoading, false); assert.equal(context.keyLoading, false);
+    queues[endpoint].push({promise: Promise.resolve(endpoint === 'admin' ? {admins: []} : {keys: []})});
+    await (endpoint === 'admin' ? loaders.readAdmins(null) : loaders.readKeys(null));
+    assert.equal(context[endpoint + 'Error'], '', 'only its own success clears the error');
+  });
+
+for (const status of [401, 503]) test(`round 9: obsolete 200 skips post-read session verification (${status})`, async t => {
+  const {app, server} = realAppHarness(t), held = server.hold('/obsolete-200');
+  const transport = globalThis.fetch; let obsolete = false, checks = 0;
+  globalThis.fetch = (path, options) => {
+    if (obsolete && path === '/api/v1/admin/session') {
+      checks++; return Promise.resolve({ok: false, status, json: async () => ({api_version: 1, error: {code: 'old'}})});
+    }
+    return transport(path, options);
+  };
+  const reading = app.read('/obsolete-200').catch(error => error); await held.started;
+  app.generation++; obsolete = true; held.release(); const error = await reading;
+  assert.equal(checks, 0); assert.equal(app.locked, false); assert.equal(error.name, 'SupersededRead');
+  assert.deepEqual(appRuntime.toasts, []);
+});
+
+for (const status of [401, 403]) test(`round 9: a current read ${status} locks`, async t => {
+  const {app, server} = realAppHarness(t), held = server.hold('/current-denied', {status});
+  const reading = app.read('/current-denied').catch(error => error); await held.started; held.release(); await reading;
+  assert.equal(app.locked, true);
+});
+
+for (const kind of ['entry', 'book', 'shelf']) test(`round 9: inactive ${kind} clears selection, descendants and editor, keeping recovery`, async t => {
+  const {app} = realAppHarness(t); const api = app.forView();
+  const shelf = {id: 'shelf', name: 'Shelf'}, book = {id: 'book', shelf_id: 'shelf', name: 'Book'}, entry = {id: 'entry', book_id: 'book', archived: false, name: 'Entry'};
+  const page = item => ({items: [item], reload: async function () { if (item.id === kind) this.items = []; }, clear() { this.items = []; this.cleared = true; }});
+  const context = {app: api, workspaceId: 'workspace', shelf, book, entry, shelves: page(shelf), books: page(book), entries: page(entry),
+    selectionRead: new ReadTask(api), reloadContextSelection, contentPath: x => x, detail: {kind: 'entry'}, stage: 'detail', inactiveNotice: '',
+    closeDetail: () => { context.detail = {kind: 'none'}; }};
+  api.read = async path => {
+    // Text typed after Refresh began must remain recoverable when it closes.
+    app.setDraft('unsaved original entry text');
+    if (path.startsWith(kind === 'entry' ? 'entries/' : kind === 'book' ? 'books/' : 'shelves/')) throw Object.assign(new Error('NotFound'), {status: 404});
+    return path.startsWith('entries/') ? {entry} : path.startsWith('books/') ? book : shelf;
+  };
+  await componentCallback('views/Context.svelte', '  async function reload() {', '\n  reloadView(', context, 'reload();');
+  assert.equal(context.entry, null); assert.equal(context.detail.kind, 'none');
+  assert.match(context.inactiveNotice, /no longer active \(archived or removed\)/);
+  if (kind !== 'entry') { assert.equal(context.book, null); assert.deepEqual(context.entries.items, []); }
+  if (kind === 'shelf') { assert.equal(context.shelf, null); assert.deepEqual(context.books.items, []); }
+  assert.equal(app.dirty, true); assert.match(app.recoveryText(), /unsaved original entry text/);
+});
+
+test('round 9: an off-page active selection is retained and lookup errors propagate', async () => {
+  const selection = {shelf: {id: 'shelf'}, book: null, entry: null}, failure = new Error('read failed');
+  const pages = {shelf: {items: [], reload: async () => {}}, book: {items: [], reload: async () => {}}};
+  const active = await reloadContextSelection({selection, pages, read: async () => ({id: 'shelf', name: 'current'})});
+  assert.equal(active.shelf.name, 'current'); assert.equal(active.missing, undefined);
+  await assert.rejects(reloadContextSelection({selection, pages, read: async () => { throw failure; }}), failure);
+});
+
+for (const guard of ['dirty', 'pending']) test(`round 9: EntryEditor reload keeps ${guard} text and loaded revision`, async t => {
+  const {app} = realAppHarness(t), api = app.forView(), response = defer(); api.read = () => response.promise;
+  const context = {app: api, reader: new ReadTask(api), contentPath: x => x, notice: api.notice,
+    entry: {id: 'entry', revision: 1}, original: {text: 'original'}, description: '', labels: '', text: 'typed'};
+  const loading = componentCallback('views/context/EntryEditor.svelte', '  async function reloadMounted()', '\n  reloadView(', context, 'reloadMounted();');
+  await Promise.resolve(); app[guard] = guard === 'dirty' ? true : {body: 'pending'};
+  response.resolve({entry: {id: 'entry', revision: 7}, content: {text: 'remote', description: 'remote', labels: []}}); await loading;
+  assert.equal(context.text, 'typed'); assert.equal(context.entry.revision, 1);
+});
+for (const guard of ['dirty', 'pending']) test(`round 9: Guidance reload keeps ${guard} bundle and expected revision`, async t => {
+  const {app} = realAppHarness(t), response = defer(), api = app.forView();
+  const bundle = {workspace: {revision: 1, text: 'original'}};
+  const context = {app: api, reader: new ReadTask(api), workspaceId: 'workspace', readGuidance: () => response.promise, bundle, failed: '', notice: api.notice};
+  const loading = componentCallback('views/Guidance.svelte', '  async function load()', '\n  reloadView(', context, 'load();');
+  await Promise.resolve(); app[guard] = guard === 'dirty' ? true : {body: 'pending'};
+  response.resolve({workspace: {revision: 7, text: 'remote'}}); await loading;
+  assert.equal(context.bundle, bundle); assert.equal(context.bundle.workspace.revision, 1);
+});
+for (const guard of ['edited', 'intent', 'forgotten']) test(`round 9: Board sync preserves ${guard} text`, async () => {
+  const context = {board: {text: 'remote'}, text: 'typed', edited: guard === 'edited', intent: guard === 'intent' ? {} : null,
+    forgotten: guard === 'forgotten', untrack: fn => fn(), $effect: fn => fn()};
+  await componentCallback('views/guidance/Board.svelte', '  $effect(() => {', '\n\n  const global', context);
+  assert.equal(context.text, 'typed');
+});
+for (const guard of ['dirty', 'pending']) test(`round 9: Settings header read cannot unfreeze ${guard} work`, async () => {
+  const app = {dirty: guard === 'dirty', pending: guard === 'pending' ? {} : null};
+  const context = {app};
+  const frozen = await componentCallback('views/settings/state.svelte.ts', '  async reloadMounted()', '\n\n  #resetLocal()', context,
+    '}\nconst state = new Controller(); await state.reloadMounted(); return state.frozen; })();',
+    '(async () => { class Controller { #app = app; frozen = true; rosterAfter = null; loadPolicy = async () => ({}); loadRoster = async () => {};');
+  assert.equal(frozen, true);
+});
+
+test('round 9: current reload failures propagate after every sibling loader runs', async t => {
+  const {app} = realAppHarness(t); let sibling = 0;
+  app.registerReload(async () => { throw new Error('current read failed'); }); app.registerReload(async () => { sibling++; });
+  await assert.rejects(app.refreshView(), /current read failed/); assert.equal(sibling, 1);
+});
+test('round 9: Pager preserves its current error and throws to its caller', async t => {
+  const {app} = realAppHarness(t), failure = new Error('pager failed');
+  const context = {ReadTask, PAGE_SIZE: 32, app: app.forView(), fetch: async () => { throw failure; }, $state: Object.assign(x => x, {raw: x => x})};
+  const pager = await componentCallback('views/context/pager.svelte.ts', 'class Pager', '\n}\n', context, '\n}\nnew Pager(app, fetch);');
+  await assert.rejects(pager.reload(), failure); assert.equal(pager.error, failure.message); assert.equal(pager.loading, false);
+});
+test('round 9: app.run silently finishes a SupersededRead', async t => {
+  const {app} = realAppHarness(t); await app.run(async () => { throw Object.assign(new Error('obsolete'), {name: 'SupersededRead'}); });
+  assert.deepEqual(appRuntime.toasts, []); assert.equal(app.busy, false);
+});
+test('round 9: opening the same workspace invokes its mounted reload', async t => {
+  const {app} = realAppHarness(t); app.workspace = {id: 'workspace', name: 'Workspace'}; app.view = 'context'; let reloads = 0;
+  app.registerReload(async () => { reloads++; }); await app.openWorkspace(app.workspace, 'context'); assert.equal(reloads, 1);
+});
+
+
+test('round 9: ReadTask drops direct obsolete success and error before receive, catch or finish', async t => {
+  const {app} = realAppHarness(t);
+  for (const failure of [false, true]) {
+    const reader = new ReadTask(app.forView()), deferred = defer(); let effects = 0;
+    const reading = reader.run(() => deferred.promise, {receive: () => { effects++; }, error: () => { effects++; }, finish: () => { effects++; }});
+    app.generation++; if (failure) deferred.reject(new Error('old')); else deferred.resolve('old'); await reading;
+    assert.equal(effects, 0);
+  }
+});
+test('round 9: reload registry skips raw registrations from a replaced session or epoch', async t => {
+  const {app} = realAppHarness(t); let calls = 0;
+  app.registerReload(async () => { calls++; }); app.sessionEpoch++;
+  await app.refreshView(); assert.equal(calls, 0);
+  app.registerReload(async () => { calls++; }); app.session = {...app.session};
+  await app.refreshView(); assert.equal(calls, 0);
+});
+test('round 9: reload callback is inert between scope disposal and cleanup', async t => {
+  const {app} = realAppHarness(t), visit = app.forView(); let calls = 0;
+  const stop = visit.registerReload(async () => { calls++; }); t.after(stop); visit.dispose();
+  await app.refreshView(); assert.equal(calls, 0);
+});
+
 import './workspace_panel_wiring.mjs';
