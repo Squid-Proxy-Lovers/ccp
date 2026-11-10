@@ -6,6 +6,16 @@ export const signature = session => JSON.stringify([
   session.identity.scope, session.csrf_token,
 ]);
 
+// The server issues a fresh session token and CSRF on every successful login
+// (crates/server/src/workspace_http/browser/sessions.rs: `issue()` always
+// generates a new random token and HMACs it into a new CSRF, even for the
+// same key), so csrf_token can never be part of an identity comparison: two
+// logins with the same key never produce the same signature(). This compares
+// only the stable identity a session is for.
+export const identityKey = session => JSON.stringify([
+  session.instance_id, session.identity.key_id, session.identity.principal_id, session.identity.scope,
+]);
+
 export function canWrite(session, workspace) {
   return !workspace.archived && session.identity.scope.kind === 'workspace'
     && session.identity.scope.workspace_id === workspace.id;
@@ -16,6 +26,14 @@ export function exactRevision(value) {
     throw new Error('This revision exceeds the browser’s exact numeric range. Use the CLI.');
   }
   return value;
+}
+
+// Strict lowercase, non-nil UUID. Case-insensitive checks (model.js principalIdentity,
+// drafts.js draftLabel) have different semantics and stay separate.
+export function isStrictUuid(value) {
+  return typeof value === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+    && value !== '00000000-0000-0000-0000-000000000000';
 }
 
 export class Intent {
@@ -177,21 +195,38 @@ export function takeFragment(location, history) {
   return params.get('key') || '';
 }
 
-export async function wire(path, body, proof) {
+export const REQUEST_TIMEOUT_MS = 60_000;
+
+async function beforeDeadline(signal, start) {
+  if (signal.aborted) throw signal.reason;
+  let abort;
+  const deadline = new Promise((_resolve, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, {once: true});
+  });
+  try { return await Promise.race([start(), deadline]); }
+  finally { signal.removeEventListener('abort', abort); }
+}
+
+export async function wire(path, body, proof, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const signal = AbortSignal.timeout(timeoutMs);
   let response;
   try {
-    response = await fetch(path, {
+    response = await beforeDeadline(signal, () => fetch(path, {
       method: body === undefined ? 'GET' : 'POST',
-      credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal,
       headers: body === undefined ? {} : {'Content-Type': 'application/json', 'X-CCP-CSRF': proof},
       body,
-    });
+    }));
   } catch {
     throw new Error('No confirmed response. Check your connection; the request may have completed.');
   }
   let envelope;
-  try { envelope = await response.json(); }
-  catch { throw new Error('The server response could not be verified. The outcome may be unknown.'); }
+  try { envelope = await beforeDeadline(signal, () => response.json()); }
+  catch {
+    if (signal.aborted) throw new Error('No confirmed response. Check your connection; the request may have completed.');
+    throw new Error('The server response could not be verified. The outcome may be unknown.');
+  }
   if (!response.ok || envelope.api_version !== 1 || !('data' in envelope)) {
     const messages = {
       400: 'The request was refused. Check the fields and active session.',
@@ -521,7 +556,7 @@ export class StatusClearIntent {
     const revision = exactRevision(report.revision);
     if (revision === Number.MAX_SAFE_INTEGER) throw new Error('The next status revision exceeds the browser’s exact numeric range. Use the API.');
     for (const id of [workspace.id, report.status_id, report.client_id, operation]) {
-      if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) || /^0{8}-0{4}-0{4}-0{4}-0{12}$/.test(id)) throw new Error('Status targets require canonical non-nil UUIDs.');
+      if (!isStrictUuid(id)) throw new Error('Status targets require canonical non-nil UUIDs.');
     }
     this.kind = 'status_clear'; this.workspace_id = workspace.id; this.status_id = report.status_id; this.client_id = report.client_id;
     this.path = '/api/v1/admin/work/status/clear';
@@ -541,9 +576,7 @@ export class StatusClearIntent {
   }
 }
 
-const deletionUuid = value => typeof value === 'string'
-  && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
-  && value !== '00000000-0000-0000-0000-000000000000';
+const deletionUuid = isStrictUuid;
 
 export function canDeleteWorkspace(session, workspace) {
   return workspace?.archived === true && canChangeLifecycle(session, workspace);

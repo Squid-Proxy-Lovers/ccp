@@ -10,11 +10,15 @@
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
   import Select from '../../lib/ui/Select.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {notice, stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {formFrozen} from '../../lib/identitySwitch.js';
+  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {stamp} from '../../lib/notify.svelte';
   import {clientRecoveryScope, invitationDeadline} from '../../lib/model.js';
   import {changeClientAccess, FormDraft, roleLabel, roles, scopeLabel, type Grant, type RecoveryScope, type Report} from './actions';
+
+  const app = mountedView(panelApp);
+  const {notice, confirmAction} = app;
 
   let {client, action, onclose, onoutcome}: {
     client: Grant; action: 'recover' | 'readmit'; onclose: () => void; onoutcome: Report;
@@ -31,20 +35,23 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
     void app.run(async () => {
+      const submitted = form;
       if (app.pending) throw new Error('Resolve the original client access action first.');
-      const expires_at = invitationDeadline(form.get('hours'));
-      const role = readmit ? form.get('role') : undefined;
+      const expires_at = invitationDeadline(submitted.get('hours'));
+      const role = readmit ? submitted.get('role') : undefined;
       const change = {action, expires_at, role};
-      const sent = await changeClientAccess(onoutcome, workspace, client, change, () => confirmAction({
+      await changeClientAccess(app, onoutcome, workspace, client, change, () => confirmAction({
         title: readmit ? 'Issue explicit new membership?' : 'Issue credential recovery?',
         body: `${readmit ? 'Issue explicit new membership' : 'Issue credential recovery'} for ${client.client_id}? Scope: ${scopeLabel(scope, workspace)}.${role ? ' New role: ' + roleLabel(role) + '.' : ''} Deadline: ${stamp(expires_at)}.`,
         confirm: readmit ? 'Create readmission invitation' : 'Create recovery invitation',
-      }));
-      if (sent) form.drop();
+      }), () => submitted.drop());
     }, `client-access-submit:${action}`);
   }
 
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, `client-access-submit:${action}`));
+
   async function discard() {
+    if (frozen) return;
     if (!await confirmAction({title: 'Discard draft?', body: 'Discard this local client access draft?', confirm: 'Discard draft', destructive: true})) return;
     form.drop();
     onclose();
@@ -57,6 +64,7 @@
     description={`Target client ${client.client_name} · ${client.client_id}. ${scopeLabel(scope, workspace)}.`} />
   <CardContent>
     <form class="grid max-w-xl gap-5" onsubmit={submit}>
+      <fieldset disabled={frozen} class="contents">
       <Alert tone="warning">
         {#if readmit}
           <p>Creates a new grant with the chosen role for this same registered client. Every prior grant in this workspace must be revoked; the server rechecks complete history. Any later admission makes this pending invitation stale, even if that later grant is revoked. It preserves old revocations and unrelated access, and does not select the workspace.</p>
@@ -84,6 +92,7 @@
         </Button>
         <Button variant="ghost" onclick={discard}>Discard draft</Button>
       </div>
+      </fieldset>
     </form>
   </CardContent>
 </Card>

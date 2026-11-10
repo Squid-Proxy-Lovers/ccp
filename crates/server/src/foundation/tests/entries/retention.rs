@@ -328,10 +328,36 @@ fn timed_cleanup_preserves_original_write_receipts_siblings_guidance_and_purge_a
     });
     apply(&mut f, actor, &archive);
     let sibling = apply(&mut f, actor, &create(book, "sibling", "kept"));
+    {
+        let mut store = AccessStore::new(&mut f.connection).unwrap();
+        for (publisher, scope) in [
+            (Actor::Admin(f.global), GuidanceScope::Global),
+            (Actor::Admin(f.owner), GuidanceScope::Workspace(f.workspace)),
+        ] {
+            store
+                .save_guidance(
+                    publisher,
+                    scope,
+                    &GuidanceSave {
+                        operation_id: Uuid::new_v4(),
+                        expected_revision: 0,
+                        text: "preserved guidance".into(),
+                    },
+                    NOW,
+                )
+                .unwrap();
+        }
+    }
     let guidance = AccessStore::new(&mut f.connection)
         .unwrap()
         .guidance(Actor::Admin(f.owner), Some(f.workspace), NOW)
         .unwrap();
+    assert!(!guidance.global.text.is_empty());
+    assert_eq!(guidance.global.text, "preserved guidance");
+    assert_eq!(
+        guidance.workspace.as_ref().map(|board| board.text.as_str()),
+        Some("preserved guidance")
+    );
     configure(&mut f, &change(0, Some(10)), NOW);
     assert_eq!(cleanup(&mut f, NOW + 10).len(), 1);
     assert_eq!(apply(&mut f, actor, &original), created);

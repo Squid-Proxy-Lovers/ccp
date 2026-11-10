@@ -14,11 +14,15 @@
   import Delayed from '../../lib/ui/Delayed.svelte';
   import SkeletonTable from '../../lib/ui/skeleton/SkeletonTable.svelte';
   import {table} from '../../lib/ui/table';
-  import {app} from '../../lib/app.svelte';
-  import {notice, stamp} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView, reloadView} from '../../lib/viewLifecycle.js';
+  import {ReadTask} from '../../lib/readTask.js';
+  import {stamp} from '../../lib/notify.svelte';
   import KeyForm from './KeyForm.svelte';
   import {changeSecurity, type Admin, type Report, type WorkspaceKey} from './actions';
+
+  const app = mountedView(panelApp);
+  const {notice, confirmAction} = app;
 
   let {onoutcome}: {onoutcome: Report} = $props();
 
@@ -28,27 +32,32 @@
   let keys = $state.raw<{keys: WorkspaceKey[]; next_cursor: string | null} | null>(null);
   let adminAfter = $state<string | null>(null);
   let keyAfter = $state<string | null>(null);
-  let error = $state('');
+  let adminError = $state(''), keyError = $state('');
+  let adminLoading = $state(false), keyLoading = $state(false);
+  const error = $derived(adminError || keyError);
   let editor = $state.raw<{kind: 'appoint'} | {kind: 'key'; admin: Admin} | null>(null);
 
+  const adminRead = new ReadTask(app), keyRead = new ReadTask(app);
   async function readAdmins(cursor: string | null) {
-    admins = await app.request('/api/v1/admin/team/list', {workspace_id: workspace.id, after: cursor, limit: 16});
-    adminAfter = cursor;
+    await adminRead.run(readApp => readApp.read<{admins: Admin[]; next_cursor: string | null}>('/api/v1/admin/team/list',
+      {workspace_id: workspace.id, after: cursor, limit: 16}), {
+      start: () => { adminLoading = true; },
+      receive: data => { admins = data; adminAfter = cursor; adminError = ''; },
+      error: failure => { if (!app.locked) adminError = (failure as Error).message; },
+      finish: () => { adminLoading = false; },
+    });
   }
   async function readKeys(cursor: string | null) {
-    keys = await app.request('/api/v1/admin/keys/list', {workspace_id: workspace.id, after: cursor, limit: 16});
-    keyAfter = cursor;
+    await keyRead.run(readApp => readApp.read<{keys: WorkspaceKey[]; next_cursor: string | null}>('/api/v1/admin/keys/list',
+      {workspace_id: workspace.id, after: cursor, limit: 16}), {
+      start: () => { keyLoading = true; },
+      receive: data => { keys = data; keyAfter = cursor; keyError = ''; },
+      error: failure => { if (!app.locked) keyError = (failure as Error).message; },
+      finish: () => { keyLoading = false; },
+    });
   }
-  async function readAll(adminCursor: string | null, keyCursor: string | null) {
-    try {
-      await readAdmins(adminCursor);
-      await readKeys(keyCursor);
-      error = '';
-    } catch (failure) {
-      if (app.locked) return;
-      error = (failure as Error).message;
-    }
-  }
+  async function readAll(adminCursor: string | null, keyCursor: string | null) { await Promise.all([readAdmins(adminCursor), readKeys(keyCursor)]); }
+  reloadView(app, () => readAll(adminAfter, keyAfter));
   onMount(() => { void readAll(null, null); });
 
   function reload() {
@@ -72,7 +81,7 @@
       if (!app.mayLeave()) return;
       if (!await confirmAction({title: `Revoke ${admin.name}?`, confirm: 'Revoke administrator', destructive: true,
         body: `Revoke ${admin.name} (${admin.id}) in ${workspace.name}? All of this principal’s workspace keys are revoked; other workspaces and stored content are preserved.`})) return;
-      await changeSecurity(onoutcome, 'team/revoke', {workspace_id: workspace.id, principal_id: admin.id});
+      await changeSecurity(app, onoutcome, 'team/revoke', {workspace_id: workspace.id, principal_id: admin.id});
     }, `revoke-admin:${admin.id}`);
   }
 
@@ -82,7 +91,7 @@
       const own = key.id === currentKey;
       if (!await confirmAction({title: own ? 'Revoke your current login key?' : `Revoke key ${key.name}?`, confirm: 'Revoke key', destructive: true,
         body: `Revoke key ${key.name} (${key.id}) in ${workspace.name}?${own ? ' This is your current login key. This browser session will lose authority; have another owner key available.' : ''} The principal’s other keys and role remain unchanged.`})) return;
-      await changeSecurity(onoutcome, 'keys/revoke', {workspace_id: workspace.id, key_id: key.id});
+      await changeSecurity(app, onoutcome, 'keys/revoke', {workspace_id: workspace.id, key_id: key.id});
     }, `revoke-key:${key.id}`);
   }
 
@@ -113,7 +122,8 @@
 
   {#if error}
     <Alert tone="destructive" title="Administrator and key metadata unavailable">
-      <p>{error}</p>
+      {#if adminError}<p>Administrators: {adminError}</p>{/if}
+      {#if keyError}<p>Workspace keys: {keyError}</p>{/if}
       <p>No empty roster or key list was assumed.</p>
     </Alert>
     <Button variant="outline" busy={app.working('team-retry')} onclick={() => turn(() => readAll(adminAfter, keyAfter), 'team-retry')}>Read administrators & keys</Button>
@@ -123,7 +133,7 @@
     <CardHeader title="Administrators" />
     <CardContent class="px-0">
       {#if !admins}
-        {#if !error}<Delayed><SkeletonTable rows={2} columns={['w-36', 'w-20', 'w-24', 'w-28']} label="Loading administrators" /></Delayed>{/if}
+        {#if adminLoading && !adminError}<Delayed><SkeletonTable rows={2} columns={['w-36', 'w-20', 'w-24', 'w-28']} label="Loading administrators" /></Delayed>{/if}
       {:else if !admins.admins.length}
         <div class="px-5"><Empty icon={Users} title="No administrators on this page" /></div>
       {:else}
@@ -176,7 +186,7 @@
       description="Metadata contains no secret. Role activity does not mean an expired or revoked key works. Creating a key does not revoke older keys; deliver the new key privately before deliberately revoking an old one." />
     <CardContent class="px-0">
       {#if !keys}
-        {#if !error}<Delayed><SkeletonTable rows={3} columns={['w-32', 'w-24', 'w-28', 'w-16']} label="Loading keys" /></Delayed>{/if}
+        {#if keyLoading && !keyError}<Delayed><SkeletonTable rows={3} columns={['w-32', 'w-24', 'w-28', 'w-16']} label="Loading keys" /></Delayed>{/if}
       {:else if !keys.keys.length}
         <div class="px-5"><Empty icon={KeyRound} title="No workspace keys on this page" /></div>
       {:else}

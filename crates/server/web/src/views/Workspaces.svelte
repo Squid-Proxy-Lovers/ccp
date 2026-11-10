@@ -2,6 +2,7 @@
   import WorkspaceAvatar from '../components/WorkspaceAvatar.svelte';
   // Instance-admin workspace list, paged 32 at a time, with workspace creation.
   // The new owner key is shown once and kept only in memory until dismissed.
+  import {tick} from 'svelte';
   import {Building2, ChevronLeft, ChevronRight, Plus} from '@lucide/svelte';
   import PageHeader from '../components/PageHeader.svelte';
   import Badge from '../lib/ui/Badge.svelte';
@@ -15,14 +16,33 @@
   import Secret from '../lib/ui/Secret.svelte';
   import {table} from '../lib/ui/table';
   import DeletionLookup from './settings/DeletionLookup.svelte';
-  import {app} from '../lib/app.svelte';
-  import {notice} from '../lib/notify.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView, reloadView} from '../lib/viewLifecycle.js';
+  import {hasDraftContent} from '../lib/drafts.js';
+  import {discardDraft} from '../lib/draftDiscard.js';
+  import {formFrozen} from '../lib/identitySwitch.js';
+  import {WORKSPACE_DRAFT_KEY} from '../lib/draftKeys.js';
   import type {Workspace} from '../lib/types';
 
-  const FORM = 'create-workspace';
-  const draft = app.formDraft(FORM);
-  draft.name ??= '';
-  draft.owner ??= '';
+  const app = mountedView(panelApp);
+  const {notice, confirmAction} = app;
+
+  reloadView(app, () => app.loadWorkspaces(app.workspacesAfter));
+
+  const FORM = WORKSPACE_DRAFT_KEY;
+
+  function acquire(): Record<string, string> {
+    const draft = app.formDraft(FORM);
+    draft.name ??= '';
+    draft.owner ??= '';
+    return draft;
+  }
+  let draft = $state.raw(acquire());
+  const frozen = $derived(formFrozen(app.busy, app.busyKey, FORM));
+  // Creating a second workspace before dismissing the first's one-time owner
+  // key would silently overwrite and lose it; disable instead of asking,
+  // since there is no safe default to offer.
+  const ownerKeyPending = $derived(app.createdWorkspace !== null);
 
   function page(cursor: string | null, key: string) {
     void app.run(async () => { if (app.mayLeave()) await app.loadWorkspaces(cursor); }, key);
@@ -34,12 +54,28 @@
 
   function create(event: SubmitEvent) {
     event.preventDefault();
+    const submitted = draft;
     void app.run(async () => {
       if (!app.mayLeave()) return;
-      await app.createWorkspace(draft.name ?? '', draft.owner ?? '');
-      app.dropFormDraft(FORM);
+      const result = await app.createWorkspace(submitted.name ?? '', submitted.owner ?? '', FORM, submitted);
+      if (!result) return;
+      draft = acquire();
       if (!app.locked) notice('Workspace created. Copy its owner key privately before navigating away.', 'success');
     }, FORM);
+  }
+
+  async function discard() {
+    const current = draft;
+    const fresh = await discardDraft({
+      drafts: app.drafts, key: FORM, current,
+      isBlocked: () => formFrozen(app.busy, app.busyKey, FORM),
+      confirm: () => confirmAction({title: 'Discard draft?', body: 'Discard this local workspace draft?', confirm: 'Discard draft', destructive: true}),
+    });
+    if (!fresh) return;
+    draft = fresh;
+    notice('Local workspace draft discarded.');
+    await tick();
+    app.effect(() => document.getElementById('create-workspace-name')?.focus());
   }
 </script>
 
@@ -113,14 +149,21 @@
     <CardContent>
       <form class="grid gap-4 md:grid-cols-[1fr_1fr_auto] md:items-end" onsubmit={create}>
         <Field id="create-workspace-name" label="Workspace name">
-          <Input id="create-workspace-name" bind:value={draft.name} required autocomplete="off" />
+          <Input id="create-workspace-name" bind:value={draft.name} required autocomplete="off" disabled={frozen} />
         </Field>
         <Field id="create-workspace-owner" label="New owner principal name">
-          <Input id="create-workspace-owner" bind:value={draft.owner} required autocomplete="off" />
+          <Input id="create-workspace-owner" bind:value={draft.owner} required autocomplete="off" disabled={frozen} />
         </Field>
-        <Button type="submit" busy={app.working(FORM)}><Plus /> Create workspace</Button>
+        <div class="flex flex-wrap gap-2">
+          <Button type="submit" busy={app.working(FORM)} disabled={frozen || ownerKeyPending}><Plus /> Create workspace</Button>
+          {#if hasDraftContent(draft)}<Button type="button" variant="ghost" onclick={discard} disabled={frozen}>Discard draft</Button>{/if}
+        </div>
       </form>
-      <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
+      {#if ownerKeyPending}
+        <p class="mt-3 text-[13px] text-muted-foreground">Dismiss the owner key above before creating another workspace.</p>
+      {:else}
+        <p class="mt-3 text-[13px] text-muted-foreground">If the response is lost, refresh the list before trying again so you don't create a duplicate.</p>
+      {/if}
     </CardContent>
   </Card>
 

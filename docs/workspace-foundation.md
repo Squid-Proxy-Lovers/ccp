@@ -25,7 +25,9 @@ native mode. The separate [workspace HTTPS API](workspace-http-api.md)
 now exposes TLS-only invitation/enrollment/discovery and scoped admin surfaces.
 The [browser-session API](workspace-browser-session.md) provides the authentication
 boundary and a [desktop login/access/context panel](workspace-browser-session.md#use-the-desktop-panel).
-Other panel workflows remain subsequent work as documented there.
+The panel also covers settings, key/admin management, ownership transfer,
+invitations, initial-group enrollment, recovery/readmission, shelf
+archive/restore and purging individual archived entries, as documented there.
 [Content endpoints](workspace-content-http.md) expose hierarchy and entry actions;
 [Shelf archive/restore](workspace-content-http.md#archive-or-restore-a-shelf) is
 also exposed through scoped admin HTTPS, with state/archive summaries available
@@ -167,8 +169,11 @@ principal UUID would not authenticate it. Scoped admin-key primitives are docume
 Internal certificate enrollment and renewal are documented in
 [Workspace enrollment](workspace-enrollment.md). Their limited
 [workspace HTTPS adapters](workspace-http-api.md) now support actual TLS requests;
-the [workspace client](workspace-client.md) adds initial trust/profiles/enrollment
-and discovery. Remaining client lifecycle, selection and MCP remain later work.
+the [workspace client](workspace-client.md) adds trust/profiles/enrollment,
+renewal, recovery and discovery. The
+[workspace MCP bridge](workspace-mcp.md) has no enrollment, renewal, recovery
+or administrative tools, but exposes the same discovery plus content and
+status operations over stdio.
 
 A client data action requires a live, unexpired, nonrevoked, unsuperseded credential, an
 enabled client, a live workspace grant bound to that credential, a suitable
@@ -190,7 +195,9 @@ management and ownership transfer.
 [Explicit archived-entry purge](workspace-content.md#permanently-purge-an-archived-entry)
 now has an internal core and a
 [scoped HTTPS adapter](workspace-content-http.md#permanently-purge-an-archived-entry).
-Human confirmation screens and timed cleanup remain subsequent work.
+The desktop panel provides the matching human confirmation screen and
+[timed-cleanup policy controls](workspace-retention.md); CLI/MCP commands for
+either remain subsequent work.
 Initial-owner appointment is an explicit, audited global-admin operation for an
 unowned workspace. The appointee may be that same global administrator; they
 then exercise workspace powers through the separately recorded owner role.
@@ -279,7 +286,8 @@ now expose these APIs over TLS, with
 [normal client guidance reads](workspace-client.md#read-current-guidance) and
 [explicit MCP refresh](workspace-mcp.md#refresh-guidance-explicitly). The bridge also
 returns [automatic initial/changed guidance and unavailable warnings](workspace-mcp.md#read-automatic-guidance-alongside-results).
-Desktop editors remain subsequent work.
+The desktop panel now provides a
+[guidance read/edit view](workspace-browser-session.md#read-and-edit-guidance).
 
 The internal `client_guidance` read additionally returns authenticated instance,
 client, credential and current bound-grant IDs in the same snapshot. It requires
@@ -356,7 +364,9 @@ historical creators or granting access. Entry provenance follows entry purges;
 workspace provenance follows confirmed whole-workspace cleanup. Migration starts
 no import and leaves the legacy-content gate in place. The explicit
 [native converter](native-conversion.md) builds an independent new instance from
-supported native2 sources. External provenance read adapters remain subsequent work.
+supported native2 sources.
+[HTTPS, client, MCP and desktop readers](native-provenance.md) expose this
+history.
 
 ## First-boot reservation (schema 26, unreleased)
 

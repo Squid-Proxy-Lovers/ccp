@@ -8,12 +8,14 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, notice} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {shelfState} from '../../lib/model.js';
   import {PAGE_SIZE, contentPath, focusId, message} from './content';
   import {sendArchive, type AdminIntent, type ArchiveOutcome} from './archiveWrite';
+
+  const app = mountedView(panelApp);
+  const {notice, copyText, confirmAction} = app;
 
   let {intent, outcome: initial, onconfirmed, onread, onreturn}: {
     intent: AdminIntent; outcome: ArchiveOutcome;
@@ -33,18 +35,18 @@
 
   function retry() {
     void app.run(async () => {
-      const next = await sendArchive(intent);
+      const next = await sendArchive(app, intent);
       if (!next) return;
       phase = next;
       observation = '';
-      void focusId('context-detail-title');
+      void focusId(app, 'context-detail-title');
       if (next.state === 'confirmed') await onconfirmed(next);
     }, 'archive-retry');
   }
 
   function observe() {
     void app.run(async () => {
-      const data = await app.request(contentPath(intent.action === 'shelf' ? 'shelves/state' : 'entries/list'), intent.action === 'shelf'
+      const data = await app.read(contentPath(intent.action === 'shelf' ? 'shelves/state' : 'entries/list'), intent.action === 'shelf'
         ? {workspace_id: intent.workspace_id, node_id: intent.target_id}
         : {workspace_id: intent.workspace_id, book_id: intent.book_id, archived: true, limit: PAGE_SIZE});
       if (intent.action === 'shelf') shelfState(data, intent.workspace_id, intent.target_id);
@@ -57,14 +59,14 @@
     app.pending = null;
     app.setDraft(intent.body);
     phase = {state: 'forgotten'};
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 
   async function discard() {
     if (!(await confirmAction({title: 'Discard the local copy?', body: 'This does not cancel any server operation.', confirm: 'Discard copy', destructive: true}))) return;
     app.clean();
     phase = {state: 'discarded'};
-    void focusId('context-detail-title');
+    void focusId(app, 'context-detail-title');
   }
 
   function read() {

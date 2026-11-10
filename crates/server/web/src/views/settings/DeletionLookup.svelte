@@ -5,8 +5,11 @@
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Input from '../../lib/ui/Input.svelte';
-  import {app} from '../../lib/app.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import {lookupDeletion} from './deletion';
+
+  const app = mountedView(panelApp);
 
   const fields = app.formDraft('deletion-lookup');
   fields.workspace ??= '';
@@ -15,7 +18,7 @@
   function submit(event: SubmitEvent) {
     event.preventDefault();
     void app.run(async () => {
-      await lookupDeletion((fields.workspace ?? '').trim(), (fields.operation ?? '').trim());
+      await lookupDeletion(app, (fields.workspace ?? '').trim(), (fields.operation ?? '').trim());
       if (app.deletion) app.dropFormDraft('deletion-lookup');
     }, 'deletion-lookup');
   }

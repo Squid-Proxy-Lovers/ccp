@@ -2,6 +2,7 @@
   // One guidance board. A save is bound to the loaded revision and carries an
   // operation ID; an unconfirmed save keeps the exact request and never retries
   // on its own. Saves go live immediately.
+  import {untrack} from 'svelte';
   import {Copy, GitCompare, RotateCcw, Save} from '@lucide/svelte';
   import Alert from '../../lib/ui/Alert.svelte';
   import Badge from '../../lib/ui/Badge.svelte';
@@ -11,12 +12,15 @@
   import CardHeader from '../../lib/ui/CardHeader.svelte';
   import Field from '../../lib/ui/Field.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, notice, stamp} from '../../lib/notify.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
+  import {stamp} from '../../lib/notify.svelte';
   import {GuidanceIntent, wire} from '../../lib/model.js';
   import type {Session} from '../../lib/types';
   import {MAX_BYTES, bytes, readGuidance, type Board, type Bundle} from './guidance';
+
+  const app = mountedView(panelApp);
+  const {notice, copyText, confirmAction} = app;
 
   const SAVE = '/api/v1/admin/guidance/save';
 
@@ -24,7 +28,8 @@
     board: Board; workspaceId: string | null; editable: boolean; note: string; onreplace: (bundle: Bundle) => void;
   } = $props();
 
-  // The editor starts from the loaded snapshot; a new snapshot remounts this component.
+  // New read snapshots update a clean editor in place. Edited text and its
+  // base revision stay owned by the draft until explicitly reloaded.
   // svelte-ignore state_referenced_locally
   let text = $state(board.text);
   let edited = $state(false);
@@ -35,6 +40,11 @@
   let comparison = $state.raw<Board | null>(null);
   let forgotten = $state(false);
   let confirmedRevision = $state<number | null>(null);
+
+  $effect(() => {
+    const snapshot = board;
+    if (untrack(() => !edited && !intent && !forgotten)) text = snapshot.text;
+  });
 
   const global = $derived(board.scope.kind === 'global');
   const id = $derived(`guidance-${board.scope.kind}`);
@@ -90,7 +100,7 @@
     edited = false;
     confirmedRevision = revision;
     try {
-      const bundle = await readGuidance(workspaceId);
+      const bundle = await readGuidance(app, workspaceId);
       const latest = JSON.parse(next.body).scope.kind === 'global' ? bundle.global : bundle.workspace;
       onreplace(bundle);
       notice(`Guidance save confirmed at revision ${revision}. Showing current revision ${latest?.revision}.`, 'success');
@@ -109,8 +119,9 @@
         destructive: true,
       })) return;
       // Keep the draft until the read succeeds; a failed read can lock safely.
-      const bundle = await readGuidance(workspaceId);
+      const bundle = await readGuidance(app, workspaceId);
       app.clean();
+      edited = false; failure = ''; conflict = false; comparison = null; forgotten = false; confirmedRevision = null;
       onreplace(bundle);
       notice('Loaded current guidance.');
     }, `${busyKey}:reload`);
@@ -118,7 +129,7 @@
 
   function compare(original: GuidanceIntent) {
     void app.run(async () => {
-      const bundle = await readGuidance(workspaceId);
+      const bundle = await readGuidance(app, workspaceId);
       comparison = JSON.parse(original.body).scope.kind === 'global' ? bundle.global : bundle.workspace;
       notice('Current guidance loaded for comparison. Your original draft and operation are unchanged.');
     }, `${busyKey}:compare`);

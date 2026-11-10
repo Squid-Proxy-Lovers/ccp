@@ -4,6 +4,9 @@ export type Tone = 'info' | 'success' | 'warning' | 'destructive';
 export interface Toast { id: number; text: string; tone: Tone }
 export const toasts = $state<Toast[]>([]);
 let serial = 0;
+let captureNotice = (): typeof notice => notice;
+/** Capture the current visit when a clipboard operation begins. */
+export function bindNoticeScope(capture: () => typeof notice): void { captureNotice = capture; }
 
 export function notice(text: string, tone: Tone = 'info'): void {
   if (!text) return;
@@ -21,13 +24,13 @@ export function dismiss(id: number): void {
 
 export function clearToasts(): void { toasts.splice(0); }
 
-export async function copyText(value: string): Promise<boolean> {
+export async function copyText(value: string, notify: typeof notice = captureNotice()): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(value);
-    notice('Copied. Keep it private.', 'success');
+    notify('Copied. Keep it private.', 'success');
     return true;
   } catch {
-    notice('Clipboard unavailable. Select and copy the text manually.', 'warning');
+    notify('Clipboard unavailable. Select and copy the text manually.', 'warning');
     return false;
   }
 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Shared content types and helpers for the context browser.
 import {tick} from 'svelte';
+import type {ViewApp} from '../../lib/app.svelte';
 import type {Page} from '../../lib/types';
 
 export const PAGE_SIZE = 32;
@@ -36,14 +37,14 @@ export function outcomeUnknown(error: unknown): boolean {
 export const message = (error: unknown): string => (error as Error).message;
 
 /** Move focus after the DOM settles; used for deliberate focus handoffs. */
-export async function focusId(id: string): Promise<void> {
+export async function focusId(app: ViewApp, id: string): Promise<void> {
   await tick();
-  document.getElementById(id)?.focus();
+  app.effect(() => document.getElementById(id)?.focus());
 }
 
-export async function focusRow(key: string): Promise<void> {
+export async function focusRow(app: ViewApp, key: string): Promise<void> {
   await tick();
-  document.querySelector<HTMLElement>(`[data-row="${CSS.escape(key)}"]`)?.focus();
+  app.effect(() => document.querySelector<HTMLElement>(`[data-row="${CSS.escape(key)}"]`)?.focus());
 }
 
 /** The three panes sit side by side from the md breakpoint up. */

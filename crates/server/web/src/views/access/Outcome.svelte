@@ -7,13 +7,13 @@
   import Alert from '../../lib/ui/Alert.svelte';
   import Button from '../../lib/ui/Button.svelte';
   import Field from '../../lib/ui/Field.svelte';
-  import Secret from '../../lib/ui/Secret.svelte';
-  import EnrollmentLinkCard from '../../components/EnrollmentLinkCard.svelte';
   import Textarea from '../../lib/ui/Textarea.svelte';
-  import {app} from '../../lib/app.svelte';
-  import {copyText, notice} from '../../lib/notify.svelte';
-  import {confirmAction} from '../../lib/ui/confirm.svelte';
+  import {app as panelApp} from '../../lib/app.svelte';
+  import {mountedView} from '../../lib/viewLifecycle.js';
   import type {Outcome} from './actions';
+
+  const app = mountedView(panelApp);
+  const {notice, copyText, confirmAction} = app;
 
   let {outcome = $bindable(), onreread}: {outcome: Outcome; onreread: () => Promise<void>} = $props();
   let heading: HTMLHeadingElement | undefined = $state();
@@ -22,7 +22,7 @@
   const phase = $derived(outcome.phase);
   $effect(() => {
     void phase;
-    void tick().then(() => heading?.focus());
+    void tick().then(() => app.effect(() => heading?.focus()));
   });
 
   function observe() {
@@ -93,13 +93,6 @@
   {:else if outcome.phase === 'done'}
     <h2 bind:this={heading} id="access-outcome-title" tabindex="-1" class="text-[15px] font-semibold tracking-tight outline-none">{outcome.title}</h2>
     <p class="text-sm">{outcome.message}</p>
-    {#if outcome.link}
-      <EnrollmentLinkCard value={outcome.link} ondismiss={() => { if (outcome.phase === 'done') outcome = {...outcome, link: undefined}; }} />
-    {/if}
-    {#if outcome.secret}
-      <Secret title={outcome.secret.title} value={outcome.secret.value}
-        ondismiss={() => { if (outcome.phase === 'done') outcome = {...outcome, secret: undefined}; }} />
-    {/if}
     {#if outcome.note}<p class="text-sm text-muted-foreground">{outcome.note}</p>{/if}
     <Button busy={app.working('access-reread')} onclick={reread}>{outcome.reread}</Button>
   {:else}

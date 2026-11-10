@@ -5,8 +5,11 @@
   import PageHeader from '../components/PageHeader.svelte';
   import Button from '../lib/ui/Button.svelte';
   import Empty from '../lib/ui/Empty.svelte';
-  import {app} from '../lib/app.svelte';
+  import {app as panelApp} from '../lib/app.svelte';
+  import {mountedView} from '../lib/viewLifecycle.js';
   import type {View, Workspace} from '../lib/types';
+
+  const app = mountedView(panelApp);
 
   function go(view: View) {
     void app.run(() => app.navigate(view), `nav:${view}`);

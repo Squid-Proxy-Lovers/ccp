@@ -8,8 +8,10 @@
   import Logo from './Logo.svelte';
   import Appearance from './Appearance.svelte';
   import {app} from '../lib/app.svelte';
+  import {viewLifetime} from '../lib/viewLifecycle.js';
+  const scoped = viewLifetime(app);
+  const copyText = (value: string) => scoped().copyText(value);
   import {wire} from '../lib/model.js';
-  import {copyText} from '../lib/notify.svelte';
 
   let key = $state('');
   let shown = $state(false);
