@@ -65,12 +65,7 @@ pub struct NativeRow {
 impl NativeRow {
     /// Capture a physical source row, without cache projections or type coercion.
     pub fn capture(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
-        let columns = row
-            .as_ref()
-            .column_names()
-            .into_iter()
-            .map(str::to_owned)
-            .collect();
+        let columns = row.as_ref().column_names().map(str::to_owned).collect();
         let values = (0..row.as_ref().column_count())
             .map(|i| row.get_ref(i).map(NativeSqlValue::from))
             .collect::<rusqlite::Result<Vec<_>>>()?;
