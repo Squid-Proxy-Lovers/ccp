@@ -28,7 +28,9 @@ Known limits (this is a counter, not a language interpreter):
 - JS recognizes direct test/it calls and t.test with a literal first argument;
   other subtest receiver names and aliased/destructured test/assert APIs are not
   resolved. Options must be inline objects in the first two arguments; dynamic
-  keys, spreads, shared objects and computed truthiness are not evaluated.
+  keys, spreads, shared objects and computed truthiness are not evaluated; a
+  computed key counts only when it is a string or template literal, so
+  `{[name]: true}` is not a skip even when `name` holds "skip".
   Unknown option values and shorthand skip/todo keys conservatively count.
 - JS regex/division uses preceding tokens, not a full grammar: the closing-paren
   ambiguity in `if (cond) /regex/` remains. Only static string/template keys
@@ -493,11 +495,14 @@ def _js_decode_key(content: str) -> str:
             digits = escape[1:].strip("{}")
             scalar = int(digits, 16)
             return chr(scalar) if scalar <= 0x10FFFF else ""
+        if escape in ("\n", "\r", "\r\n"):
+            return ""  # A line continuation contributes nothing to the value.
         return {"n": "\n", "r": "\r", "t": "\t", "b": "\b", "f": "\f", "v": "\v", "0": "\0"}.get(
             escape, escape
         )
 
-    return re.sub(r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\}|.)", decode, content)
+    pattern = r"\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|u\{[0-9a-fA-F]+\}|\r\n|.)"
+    return re.sub(pattern, decode, content, flags=re.DOTALL)
 
 
 def _js_key_literal(text: str, i: int, end: int) -> str:
@@ -693,6 +698,9 @@ def _js_skip_property(part: list[str]) -> bool:
     key_end = 1
     key = part[0]
     if key == "[" and len(part) >= 3 and part[2] == "]":
+        # Only a literal computed key is static; `[name]` depends on a variable.
+        if part[1][:1] not in ("'", '"', "`"):
+            return False
         key, key_end = part[1], 3
     if key.strip("'\"`") not in ("skip", "todo"):
         return False

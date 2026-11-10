@@ -703,6 +703,18 @@ class TestIntegrityGateTests(unittest.TestCase):
             ),
             ("template skip key", ".mjs", "test('live', {[`skip`]: true}, () => {});", (1, 0, 1)),
             (
+                "computed variable key is not a skip",
+                ".mjs",
+                "const skip = 'timeout'; test('live', {[skip]: 100}, () => {});",
+                (1, 0, 0),
+            ),
+            (
+                "line continuation inside a skip key",
+                ".mjs",
+                "test('live', {'sk\\\nip': true}, () => {});",
+                (1, 0, 1),
+            ),
+            (
                 "escaped template skip key",
                 ".mjs",
                 r"test('live', {[`s\u{6b}ip`]: true}, () => {});",
