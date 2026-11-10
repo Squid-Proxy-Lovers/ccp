@@ -36,12 +36,10 @@
       else {
         body = {workspace_id: workspace.id, principal: principalIdentity(submitted.get('mode'), submitted.get('principal')), key_expires_at: expiry};
       }
-      const ok = await confirmAction(admin
+      await changeSecurity(app, onoutcome, admin ? 'keys/issue' : 'team/appoint', body, () => submitted.drop(), () => confirmAction(admin
         ? {title: 'Create an additional key?', confirm: 'Create key', body: `Create an additional key for ${admin.name} (${admin.id})? Existing keys remain valid.`}
         : {title: 'Appoint workspace administrator?', confirm: 'Appoint and create key',
-          body: 'Appoint this principal as a workspace administrator and create its first key? This permits client admission and data management in this workspace.'});
-      if (!ok) return;
-      await changeSecurity(app, onoutcome, admin ? 'keys/issue' : 'team/appoint', body, () => submitted.drop());
+          body: 'Appoint this principal as a workspace administrator and create its first key? This permits client admission and data management in this workspace.'}));
     }, 'key-form-submit');
   }
 

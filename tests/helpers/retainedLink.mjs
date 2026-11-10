@@ -3,10 +3,24 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {panelAppClass, runtime, answerConfirmation, componentCallback} from './panelApp.mjs';
 import {LinkAttempt} from '../../crates/server/web/src/lib/link_issuance.js';
+import {approveRetainedLink} from '../../crates/server/web/src/lib/retainedLink.js';
 import {readFile} from 'node:fs/promises';
 const App = await panelAppClass();
 const id = '11111111-1111-4111-8111-111111111111';
 const turn = () => new Promise(resolve => setImmediate(resolve));
+
+for (const change of ['replacement secret', 'session lock']) {
+  test(`navigation approval expires after a ${change} during confirmation`, async () => {
+    const state = {session: {}, sessionEpoch: 0, locked: false, accessSecret: {kind: 'enrollment_link'}};
+    let answer;
+    const approval = approveRetainedLink(state, () => new Promise(resolve => { answer = resolve; }), 'Navigate');
+    if (change === 'replacement secret') state.accessSecret = {...state.accessSecret};
+    else state.locked = true;
+    answer(true);
+    assert.equal(await approval, false);
+  });
+}
+
 function setup(t) {
   runtime.toasts.length = 0; runtime.confirmation = null;
   const app = new App();

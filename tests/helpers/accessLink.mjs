@@ -52,10 +52,11 @@ function harness(group = false) {
   form.set('https', link.https_origin);
   const enrollment = group ? {workspace_id: workspace.id, phase: 'unused', closed_at: null,
     has_admission_history: false, workspace_archived: false, can_open: true, invitation: null} : null;
-  const attempt = new LinkAttempt(state.session, workspace, 'read', {capacity: '2'}, enrollment, group);
+  const newAttempt = () => new LinkAttempt(state.session, workspace, 'read', {capacity: '2'}, enrollment, group);
+  const attempt = newAttempt();
   const parent = viewScope(state, effects);
-  const run = ask => changeLink(app, value => parent.effect(() => reports.push(value)), attempt, () => form.drop(), ask);
-  return {app, parent, state, form, attempt, transport, reply, notices, reports, writes, run};
+  const run = (ask, next = attempt) => changeLink(app, value => parent.effect(() => reports.push(value)), next, () => form.drop(), ask);
+  return {app, parent, state, form, attempt, transport, reply, notices, reports, writes, run, newAttempt};
 }
 
 for (const group of [false, true]) for (const transition of ['unmount', 'lock']) {
@@ -168,3 +169,15 @@ for (const stage of ['preflight', 'postflight']) for (const replacement of ['vie
     assert.equal(h.state.drafts.link.https, 'replacement draft');
   });
 }
+
+for (const group of [false, true]) test(`a second ${group ? 'group' : 'individual'} link cannot replace a retained link`, async () => {
+  const h = harness(group);
+  assert.equal(await h.run(), true);
+  const retained = h.state.accessSecret;
+  assert.equal(retained.value, uri);
+  let confirmations = 0;
+  await assert.rejects(h.run(async () => { confirmations++; return true; }, h.newAttempt()), /Save and dismiss the previous access secret/);
+  assert.equal(confirmations, 0);
+  assert.equal(h.writes.length, 1);
+  assert.equal(h.state.accessSecret, retained);
+});
