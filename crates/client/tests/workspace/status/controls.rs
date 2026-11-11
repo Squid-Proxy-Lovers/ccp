@@ -110,10 +110,10 @@ async fn status_cli_refuses_private_file_and_partial_guard_errors_without_work_t
     let f = Fixture::new().await;
     enroll_profile(&f).await;
     let req = request(&f);
-    let file = private_invitation(&f, "request.json", &serde_json::to_string(&req).unwrap());
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
+        let file = private_invitation(&f, "request.json", &serde_json::to_string(&req).unwrap());
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
         let failed = cli(&f, &["mutate", "--request-file", file.to_str().unwrap()]).await;
         assert!(!failed.status.success());

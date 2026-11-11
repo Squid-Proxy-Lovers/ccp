@@ -608,11 +608,10 @@ mod tests {
             client_key_pem: "key".to_string(),
         };
 
-        let stored = save_enrollment_to_dir(&material, &base_dir).expect("save should work");
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let stored = save_enrollment_to_dir(&material, &base_dir).expect("save should work");
             let key_mode = fs::metadata(stored.directory.join("client.key"))
                 .expect("client.key should exist")
                 .permissions()
@@ -626,6 +625,9 @@ mod tests {
             assert_eq!(key_mode, 0o600, "client.key should be owner-only");
             assert_eq!(id_mode, 0o600, "identity.pem should be owner-only");
         }
+
+        #[cfg(not(unix))]
+        save_enrollment_to_dir(&material, &base_dir).expect("save should work");
 
         fs::remove_dir_all(base_dir).expect("cleanup");
     }

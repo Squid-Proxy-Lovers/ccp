@@ -137,7 +137,9 @@ impl Scratch {
     fn create() -> Result<Self> {
         let path =
             std::env::temp_dir().join(format!("ccp-native-inspection-{}", uuid::Uuid::new_v4()));
-        let mut builder = fs::DirBuilder::new();
+        let builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        let mut builder = builder;
         #[cfg(unix)]
         builder.mode(0o700);
         builder
