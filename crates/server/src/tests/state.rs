@@ -22,7 +22,7 @@ struct TestContext {
     _env_guard: MutexGuard<'static, ()>,
     data_dir: PathBuf,
     journal: Arc<JournalHandle>,
-    state: ServerState,
+    state: Arc<ServerState>,
     session_id: i64,
 }
 
@@ -99,7 +99,7 @@ impl TestContext {
             _env_guard: env_guard,
             data_dir,
             journal,
-            state,
+            state: Arc::new(state),
             session_id,
         })
     }
@@ -2303,23 +2303,54 @@ fn entry_exists(state: &ServerState, session_id: i64, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Joins a scoped thread, panicking instead of hanging forever if it does
-/// not finish before `deadline`.
+/// Starts an owned worker. Dropping the receiver on timeout never joins it.
+fn spawn_worker<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> std::sync::mpsc::Receiver<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = work();
+        // A timed-out test may already have abandoned its worker.
+        let _ = tx.send(result);
+    });
+    rx
+}
+
 fn join_within<T>(
-    handle: std::thread::ScopedJoinHandle<'_, T>,
+    receiver: std::sync::mpsc::Receiver<T>,
     deadline: std::time::Instant,
     what: &str,
 ) -> T {
-    while !handle.is_finished() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{what} did not finish before the test timeout"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    handle
-        .join()
-        .unwrap_or_else(|_| panic!("{what} thread panicked"))
+    receiver
+        .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+        .unwrap_or_else(|error| panic!("{what} did not finish before the test timeout: {error}"))
+}
+
+#[test]
+fn worker_timeout_does_not_wait_for_worker_exit() {
+    let (release, blocked) = std::sync::mpsc::channel();
+    // Ensure even the old scoped-join design eventually exits, so its
+    // regression fails an assertion instead of hanging the test process.
+    let releaser = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        release.send(()).unwrap();
+    });
+    let start = std::time::Instant::now();
+    let worker = spawn_worker(move || blocked.recv().unwrap());
+    let result = std::panic::catch_unwind(|| {
+        join_within(
+            worker,
+            start + std::time::Duration::from_millis(20),
+            "blocked worker",
+        )
+    });
+    let elapsed = start.elapsed();
+    releaser.join().unwrap();
+    assert!(result.is_err(), "blocked worker must hit the deadline");
+    assert!(
+        elapsed < std::time::Duration::from_millis(150),
+        "timeout joined the blocked worker: {elapsed:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2358,58 +2389,69 @@ async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let import_result = tokio::task::block_in_place(|| {
-        std::thread::scope(|scope| {
-            let import = scope.spawn(|| {
-                handle.block_on(ctx.state.import_bundle(
-                    session_id,
-                    &bundle,
-                    &ConflictPolicy::Overwrite,
-                    &a,
-                ))
-            });
+        {
+            let import = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let a = a.clone();
+                let bundle = bundle.clone();
+                spawn_worker(move || {
+                    handle.block_on(state.import_bundle(
+                        session_id,
+                        &bundle,
+                        &ConflictPolicy::Overwrite,
+                        &a,
+                    ))
+                })
+            };
             // Wait for the import to apply its in-memory mutation (observable
             // as "victim"'s content changing) before client B writes.
             wait_until(deadline, "import to apply its mutation", || {
                 entry_context(&ctx.state, session_id, "shelf::book::victim").as_deref()
                     == Some("IMPORTED")
             });
-            let writes = scope.spawn(|| {
-                handle.block_on(async {
-                    ctx.state
-                        .add_book(session_id, "shelf", "concurrent-book", "", &b)
-                        .await
-                        .unwrap();
-                    ctx.state
-                        .add_entry(
-                            session_id,
-                            "other",
-                            "",
-                            &[],
-                            "x",
-                            "shelf",
-                            "concurrent-book",
-                            &b,
-                        )
-                        .await
-                        .unwrap();
-                    ctx.state
-                        .append_to_entry(
-                            session_id,
-                            "victim",
-                            Some("shelf"),
-                            Some("book"),
-                            &b,
-                            "CONCURRENT-APPEND",
-                            AppendMetadata {
-                                agent_name: None,
-                                host_name: None,
-                                reason: None,
-                            },
-                        )
-                        .await
-                        .unwrap();
-                });
-            });
+            let writes = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let b = b.clone();
+                spawn_worker(move || {
+                    handle.block_on(async {
+                        state
+                            .add_book(session_id, "shelf", "concurrent-book", "", &b)
+                            .await
+                            .unwrap();
+                        state
+                            .add_entry(
+                                session_id,
+                                "other",
+                                "",
+                                &[],
+                                "x",
+                                "shelf",
+                                "concurrent-book",
+                                &b,
+                            )
+                            .await
+                            .unwrap();
+                        state
+                            .append_to_entry(
+                                session_id,
+                                "victim",
+                                Some("shelf"),
+                                Some("book"),
+                                &b,
+                                "CONCURRENT-APPEND",
+                                AppendMetadata {
+                                    agent_name: None,
+                                    host_name: None,
+                                    reason: None,
+                                },
+                            )
+                            .await
+                            .unwrap();
+                    });
+                })
+            };
             // Client B's writes may themselves be blocked out until the
             // import finishes (if native mutations are now serialized), so
             // release the blocked persist before joining either thread.
@@ -2417,7 +2459,7 @@ async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
             let import_result = join_within(import, deadline, "import");
             join_within(writes, deadline, "concurrent writes");
             import_result
-        })
+        }
     });
     assert!(import_result.is_err(), "poisoned import should fail");
 
@@ -2486,40 +2528,52 @@ async fn restore_rollback_does_not_clobber_concurrent_sibling_writes() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let restore_result = tokio::task::block_in_place(|| {
-        std::thread::scope(|scope| {
-            let restore = scope
-                .spawn(|| handle.block_on(ctx.state.restore_deleted_entry(session_id, &key, &a)));
+        {
+            let restore = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let a = a.clone();
+                let key = key.clone();
+                spawn_worker(move || {
+                    handle.block_on(state.restore_deleted_entry(session_id, &key, &a))
+                })
+            };
             // Wait for the restore to apply its in-memory mutation
             // (observable as "victim" reappearing) before client B writes.
             wait_until(deadline, "restore to apply its mutation", || {
                 entry_exists(&ctx.state, session_id, "shelf::book::victim")
             });
-            let writes = scope.spawn(|| {
-                handle.block_on(async {
-                    ctx.state
-                        .add_book(session_id, "shelf", "concurrent-book", "", &b)
-                        .await
-                        .unwrap();
-                    ctx.state
-                        .add_entry(
-                            session_id,
-                            "other",
-                            "",
-                            &[],
-                            "x",
-                            "shelf",
-                            "concurrent-book",
-                            &b,
-                        )
-                        .await
-                        .unwrap();
-                });
-            });
+            let writes = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let b = b.clone();
+                spawn_worker(move || {
+                    handle.block_on(async {
+                        state
+                            .add_book(session_id, "shelf", "concurrent-book", "", &b)
+                            .await
+                            .unwrap();
+                        state
+                            .add_entry(
+                                session_id,
+                                "other",
+                                "",
+                                &[],
+                                "x",
+                                "shelf",
+                                "concurrent-book",
+                                &b,
+                            )
+                            .await
+                            .unwrap();
+                    });
+                })
+            };
             blocker.execute_batch("COMMIT;").unwrap();
             let restore_result = join_within(restore, deadline, "restore");
             join_within(writes, deadline, "concurrent writes");
             restore_result
-        })
+        }
     });
     assert!(restore_result.is_err(), "poisoned restore should fail");
 
@@ -2576,30 +2630,41 @@ async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let (import_result, delete_result) = tokio::task::block_in_place(|| {
-        std::thread::scope(|scope| {
-            let import = scope.spawn(|| {
-                handle.block_on(ctx.state.import_bundle(
-                    session_id,
-                    &bundle,
-                    &ConflictPolicy::Overwrite,
-                    &a,
-                ))
-            });
+        {
+            let import = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let a = a.clone();
+                let bundle = bundle.clone();
+                spawn_worker(move || {
+                    handle.block_on(state.import_bundle(
+                        session_id,
+                        &bundle,
+                        &ConflictPolicy::Overwrite,
+                        &a,
+                    ))
+                })
+            };
             // Wait for the import to apply its in-memory mutation (observable
             // as "victim"'s content changing) before client B deletes it.
             wait_until(deadline, "import to apply its mutation", || {
                 entry_context(&ctx.state, session_id, "shelf::book::victim").as_deref()
                     == Some("IMPORTED")
             });
-            let delete = scope.spawn(|| {
-                handle.block_on(ctx.state.delete_entry(
-                    session_id,
-                    "victim",
-                    Some("shelf"),
-                    Some("book"),
-                    &b,
-                ))
-            });
+            let delete = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let b = b.clone();
+                spawn_worker(move || {
+                    handle.block_on(state.delete_entry(
+                        session_id,
+                        "victim",
+                        Some("shelf"),
+                        Some("book"),
+                        &b,
+                    ))
+                })
+            };
             // Client B's delete may itself be blocked out until the import
             // finishes (if native mutations are now serialized), so release
             // the blocked persist before joining either thread.
@@ -2607,7 +2672,7 @@ async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
             let import_result = join_within(import, deadline, "import");
             let delete_result = join_within(delete, deadline, "concurrent delete");
             (import_result, delete_result)
-        })
+        }
     });
     assert!(import_result.is_err(), "poisoned import should fail");
     assert!(delete_result.is_ok(), "concurrent delete should succeed");
@@ -2664,29 +2729,39 @@ async fn import_rollback_does_not_resurrect_entry_whose_shelf_was_concurrently_d
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let (import_result, delete_shelf_result) = tokio::task::block_in_place(|| {
-        std::thread::scope(|scope| {
-            let import = scope.spawn(|| {
-                handle.block_on(ctx.state.import_bundle(
-                    session_id,
-                    &bundle,
-                    &ConflictPolicy::Overwrite,
-                    &a,
-                ))
-            });
+        {
+            let import = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let a = a.clone();
+                let bundle = bundle.clone();
+                spawn_worker(move || {
+                    handle.block_on(state.import_bundle(
+                        session_id,
+                        &bundle,
+                        &ConflictPolicy::Overwrite,
+                        &a,
+                    ))
+                })
+            };
             // Wait for the import to apply its in-memory mutation (observable
             // as "victim"'s content changing) before client B deletes the shelf.
             wait_until(deadline, "import to apply its mutation", || {
                 entry_context(&ctx.state, session_id, "shelf::book::victim").as_deref()
                     == Some("IMPORTED")
             });
-            let delete_shelf =
-                scope.spawn(|| handle.block_on(ctx.state.delete_shelf(session_id, "shelf", &b)));
+            let delete_shelf = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let b = b.clone();
+                spawn_worker(move || handle.block_on(state.delete_shelf(session_id, "shelf", &b)))
+            };
             blocker.execute_batch("COMMIT;").unwrap();
             let import_result = join_within(import, deadline, "import");
             let delete_shelf_result =
                 join_within(delete_shelf, deadline, "concurrent delete_shelf");
             (import_result, delete_shelf_result)
-        })
+        }
     });
     assert!(import_result.is_err(), "poisoned import should fail");
     assert!(
@@ -2747,13 +2822,15 @@ async fn revoke_does_not_block_unrelated_reads_while_persisting() {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let (revoke_result, bystander_elapsed) = tokio::task::block_in_place(|| {
-        std::thread::scope(|scope| {
-            let revoke = scope.spawn(|| {
-                handle.block_on(
-                    ctx.state
-                        .revoke_client_cert(session_id, &operator, "victim"),
-                )
-            });
+        {
+            let revoke = {
+                let state = Arc::clone(&ctx.state);
+                let handle = handle.clone();
+                let operator = operator.clone();
+                spawn_worker(move || {
+                    handle.block_on(state.revoke_client_cert(session_id, &operator, "victim"))
+                })
+            };
             // Wait for the revoke to mark the CN revoked (its first observable
             // effect) before measuring how long an unrelated read waits.
             wait_until(deadline, "revoke to mark the CN revoked", || {
@@ -2771,7 +2848,7 @@ async fn revoke_does_not_block_unrelated_reads_while_persisting() {
             blocker.execute_batch("COMMIT;").unwrap();
             let revoke_result = join_within(revoke, deadline, "revoke");
             (revoke_result, elapsed)
-        })
+        }
     });
     assert!(
         revoke_result.is_ok(),
