@@ -159,6 +159,51 @@ class ManagedBundleTests(unittest.TestCase):
                 [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
             )
 
+    def test_rc_build_checks_exact_canonical_mcp_metadata(self):
+        import asyncio
+        import importlib.metadata
+        from dataclasses import replace
+
+        generation = self.root / "rc-candidate"
+        generation.mkdir()
+        manifest = replace(
+            contract.decode((self.inputs / contract.MANIFEST).read_bytes()),
+            package_version="0.2.0-rc.1",
+        )
+        info = {
+            "format": 1,
+            "package_version": manifest.package_version,
+            **{
+                key: manifest.contracts[key]
+                for key in [
+                    "native_wire",
+                    "workspace_api",
+                    "client_profile_read_min",
+                    "client_profile_write",
+                ]
+            },
+        }
+        with (
+            patch.object(build_module, "expand"),
+            patch.object(
+                build_module, "run", side_effect=[json.dumps(info).encode(), b"", b"", b""]
+            ) as run,
+        ):
+            build_module.build(generation, manifest)
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[4], "0.2.0rc1")
+        for installed in ["0.2.0rc1", "0.2.0rc2", "0.2.0", "0.2.0-rc.1", "0.2.1rc1"]:
+            with (
+                patch.object(sys, "argv", ["-c", *arguments[4:]]),
+                patch.object(importlib.metadata, "version", return_value=installed),
+                patch.object(asyncio, "run", side_effect=lambda coroutine: coroutine.close()),
+            ):
+                if installed == "0.2.0rc1":
+                    exec(build_module.MCP_HEALTH, {})  # noqa: S102 -- execute the actual fixed health script with mocked metadata.
+                else:
+                    with self.assertRaisesRegex(SystemExit, "version differs"):
+                        exec(build_module.MCP_HEALTH, {})  # noqa: S102 -- same fixed script, testing rejection before health calls.
+
     def test_copy_then_verify_never_installs_again_from_mutable_download_directory(self):
         original = (self.inputs / "ccp-mcp.tar.gz").read_bytes()
 

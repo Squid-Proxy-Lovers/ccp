@@ -424,6 +424,42 @@ class ReleaseContractTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source contract"):
             self.contract.source_number(other, "mcp/pyproject.toml", "MISSING")
 
+    def test_exact_rust_and_python_version_pairs(self):
+        from ccp_mcp_server.release_contract import python_version
+
+        source = self.dist / "source"
+        paths = [
+            source / "crates" / name / "Cargo.toml" for name in ["client", "server", "protocol"]
+        ]
+        paths.append(source / "mcp/pyproject.toml")
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        for rust, python in [("0.2.0", "0.2.0"), ("0.2.0-rc.1", "0.2.0rc1")]:
+            for path in paths[:3]:
+                path.write_text(f'version = "{rust}"\n')
+            paths[3].write_text(f'version = "{python}"\n')
+            self.assertEqual(self.contract.source_version(source), rust)
+            self.assertEqual(python_version(rust), python)
+        for python in [
+            "0.2.0-rc.1",
+            "0.2.0rc2",
+            "0.2.1rc1",
+            "0.2.0",
+            "0.2.0RC1",
+            "0.2.0rc01",
+            "0.2.0rc1+local",
+        ]:
+            paths[3].write_text(f'version = "{python}"\n')
+            with self.subTest(python=python), self.assertRaises(ValueError):
+                self.contract.source_version(source)
+        paths[3].write_text('version = "0.2.0rc1"\n')
+        paths[1].write_text('version = "0.2.1-rc.1"\n')
+        with self.assertRaises(ValueError):
+            self.contract.source_version(source)
+        for rust in ["0.2.0-rc.01", "00.2.0-rc.1", "0.2.0rc1", "0.2.0-beta.1", "0.2.0-rc.1+local"]:
+            with self.subTest(rust=rust), self.assertRaises(ValueError):
+                python_version(rust)
+
     def test_provenance_publication_has_no_self_download_and_both_publishers_get_the_bundle(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         jobs = dict(re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)", workflow, re.M | re.S))

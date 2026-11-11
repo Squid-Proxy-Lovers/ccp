@@ -31,6 +31,8 @@ CONTRACTS = {
     "server_schema_write",
 }
 MAX_ARTIFACT = 256 * 1024 * 1024
+VERSION_CORE = r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+RC_VERSION = VERSION_CORE + r"-rc\.(0|[1-9][0-9]*)"
 
 
 def require(condition: bool, reason: str) -> None:
@@ -177,6 +179,14 @@ def source_number(root: Path, filename: str, constant: str) -> int:
     return number(int(values[0]))
 
 
+def python_version(version: str) -> str:
+    """Map only canonical SemVer RCs to their exact Python metadata spelling."""
+    if re.fullmatch(VERSION_CORE, version):
+        return version
+    text(version, RC_VERSION)
+    return version.replace("-rc.", "rc")
+
+
 def source_version(root: Path) -> str:
     versions: list[str] = []
     for filename in (
@@ -188,7 +198,10 @@ def source_version(root: Path) -> str:
         matches = re.findall(r'^version = "([^"]+)"$', (root / filename).read_text(), re.M)
         require(len(matches) == 1, "Missing package version")
         versions.append(matches[0])
-    require(len(set(versions)) == 1, "Client, server and MCP package versions differ")
+    require(
+        len(set(versions[:3])) == 1 and versions[3] == python_version(versions[0]),
+        "Client, server and MCP package versions differ",
+    )
     return versions[0]
 
 
