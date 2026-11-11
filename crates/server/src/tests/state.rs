@@ -3073,6 +3073,30 @@ async fn checkpoint_preserves_concurrent_write(kind: &'static str) {
         .add_entry(sid, "doomed", "", &[], "x", "shelf", "book", &a)
         .await
         .unwrap();
+    crate::init::initialize_auth_secret().unwrap();
+    let token = derive_auth_token(sid, "read_write", "checkpoint-test").unwrap();
+    if kind == "delete-token" {
+        open_sqlite_connection().unwrap().execute("INSERT INTO auth_tokens (session_id, token_hash, token_prefix, access_level, token_nonce) VALUES (?1, ?2, 'test', 'read_write', 'checkpoint-test')", params![sid, hash_token(&token)]).unwrap();
+        ctx.state.auth_tokens.write().await.insert(
+            token.clone(),
+            AuthGrant {
+                session_id: sid,
+                access_level: "read_write".into(),
+                metadata: ctx
+                    .state
+                    .sessions
+                    .read()
+                    .await
+                    .get(&sid)
+                    .unwrap()
+                    .metadata
+                    .clone(),
+                token_nonce: "checkpoint-test".into(),
+                token_hash: hash_token(&token),
+                last_used_at: None,
+            },
+        );
+    }
     let (events, observed) = std::sync::mpsc::channel();
     let (resume, paused) = std::sync::mpsc::channel();
     let paused = std::sync::Mutex::new(paused);
@@ -3121,25 +3145,44 @@ async fn checkpoint_preserves_concurrent_write(kind: &'static str) {
         let state = Arc::clone(&ctx.state);
         let write = spawn_worker(move || {
             handle.block_on(async {
-                state
-                    .add_entry(
-                        sid,
-                        "acked",
-                        "",
-                        &[],
-                        "ACKED",
-                        "shelf",
-                        "book",
-                        &writer(sid, "client-a"),
-                    )
-                    .await
-                    .unwrap();
+                match kind {
+                    "delete-cert" => state
+                        .record_issued_cert(sid, "new-client", "read_write", "PEM", "4102444800")
+                        .await
+                        .unwrap(),
+                    "delete-token" => state.note_auth_token_used(&token).await.unwrap(),
+                    _ => {
+                        state
+                            .add_entry(
+                                sid,
+                                "acked",
+                                "",
+                                &[],
+                                "ACKED",
+                                "shelf",
+                                "book",
+                                &writer(sid, "client-a"),
+                            )
+                            .await
+                            .unwrap();
+                    }
+                }
             });
             wait_until(
                 std::time::Instant::now() + std::time::Duration::from_secs(5),
-                "writer to flush acknowledged add",
+                "writer to flush acknowledged record",
                 || {
-                    load_entries(state.journal.path()).unwrap().iter().any(|record| matches!(record, JournalEntry::AddEntry { name, .. } if name == "acked"))
+                    load_entries(state.journal.path())
+                        .unwrap()
+                        .iter()
+                        .any(|record| match (kind, record) {
+                            ("delete-cert", JournalEntry::IssuedCert { common_name, .. }) => {
+                                common_name == "new-client"
+                            }
+                            ("delete-token", JournalEntry::AuthTokenUsed { .. }) => true,
+                            ("revoke-add", JournalEntry::AddEntry { name, .. }) => name == "acked",
+                            _ => false,
+                        })
                 },
             );
             events.send("write_completed").unwrap();
@@ -3157,13 +3200,84 @@ async fn checkpoint_preserves_concurrent_write(kind: &'static str) {
     let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
         .await
         .unwrap();
-    assert!(
-        entry_exists(&reloaded, sid, "shelf::book::acked"),
-        "acknowledged add_entry was dropped by revoke's checkpoint"
-    );
+    match kind {
+        "delete-cert" => assert!(
+            reloaded.cert_grants.read().await.contains_key("new-client"),
+            "acknowledged issued certificate was dropped by delete checkpoint"
+        ),
+        "delete-token" => assert!(
+            reloaded
+                .auth_tokens
+                .read()
+                .await
+                .values()
+                .any(|grant| grant.last_used_at.is_some()),
+            "acknowledged token use was dropped by delete checkpoint"
+        ),
+        _ => assert!(
+            entry_exists(&reloaded, sid, "shelf::book::acked"),
+            "acknowledged add_entry was dropped by revoke's checkpoint"
+        ),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn revoke_checkpoint_preserves_concurrent_add_entry() {
     checkpoint_preserves_concurrent_write("revoke-add").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_checkpoint_preserves_concurrent_issued_cert() {
+    checkpoint_preserves_concurrent_write("delete-cert").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_checkpoint_preserves_concurrent_token_use() {
+    checkpoint_preserves_concurrent_write("delete-token").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn export_audit_waits_for_checkpoint_boundary() {
+    let ctx = TestContext::new("export-boundary").await.unwrap();
+    let guard = ctx.state.native_checkpoint.write().await;
+    let (events, observed) = std::sync::mpsc::channel();
+    let hook_events = events.clone();
+    *ctx.state.test_hook.lock().unwrap() = Some(Arc::new(move |event| {
+        hook_events.send(event).unwrap();
+    }));
+    let state = Arc::clone(&ctx.state);
+    let sid = ctx.session_id;
+    let handle = tokio::runtime::Handle::current();
+    let export = spawn_worker(move || {
+        let bundle = handle
+            .block_on(state.export_bundle(
+                sid,
+                &TransferSelector {
+                    scope: TransferScope::Session,
+                    include_history: true,
+                },
+                &writer(sid, "writer"),
+            ))
+            .unwrap();
+        events.send("export_completed").unwrap();
+        bundle
+    });
+    let event = tokio::task::block_in_place(|| {
+        observed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap()
+    });
+    drop(guard);
+    let bundle = tokio::task::block_in_place(|| {
+        join_within(
+            export,
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            "export",
+        )
+    });
+    assert_eq!(
+        event, "native_guard_pending",
+        "export audit bypassed the checkpoint boundary"
+    );
+    assert_eq!(bundle.session.session_id, sid);
 }

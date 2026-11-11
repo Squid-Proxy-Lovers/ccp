@@ -633,6 +633,9 @@ impl ServerState {
     }
 
     pub async fn note_auth_token_used(&self, token: &str) -> anyhow::Result<()> {
+        let _mutation = self
+            .observe_native_guard(self.native_checkpoint.read())
+            .await;
         let timestamp = current_timestamp_string()?;
         let token_hash = hash_token(token);
 
@@ -664,6 +667,9 @@ impl ServerState {
         cert_pem: &str,
         expires_at: &str,
     ) -> anyhow::Result<()> {
+        let _mutation = self
+            .observe_native_guard(self.native_checkpoint.read())
+            .await;
         let created_at = current_timestamp_string()?;
         self.journal.append(JournalEntry::IssuedCert {
             session_id,

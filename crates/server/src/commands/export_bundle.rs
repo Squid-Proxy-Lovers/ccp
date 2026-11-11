@@ -15,6 +15,9 @@ impl ServerState {
         selector: &TransferSelector,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<TransferBundle> {
+        let _mutation = self
+            .observe_native_guard(self.native_checkpoint.read())
+            .await;
         self.ensure_read_access(session_id, auth_context).await?;
         let sessions = self.sessions.read().await;
         let session = sessions
