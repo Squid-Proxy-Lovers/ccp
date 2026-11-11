@@ -12,5 +12,9 @@ All notable changes to this project are documented in this file.
 
 - Hardened certificate revocation against concurrent and repeated requests.
 - Hardened native state mutations (imports, restores, deletes) against concurrent interleaving.
-- Native state is now persisted before a routine checkpoint retires journal records, so pending writes are no longer dropped by that checkpoint.
+- Routine checkpoints capture native state while excluding journal producers before retiring journal records.
 - Fixed a bundle-import edge case that could leave the in-memory and persisted state inconsistent after a failed import.
+
+### Known issues
+
+- In rare crash or concurrency windows, native-mode journal recovery can replay a write twice or restore a just-deleted entry. Version 0.2.0 replaces the journal recovery design.

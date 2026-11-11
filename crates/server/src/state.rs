@@ -780,7 +780,7 @@ impl ServerState {
 
     /// Exclusive guard for native mutations that snapshot state, persist
     /// outside the session lock and may roll back on failure
-    /// (`import_bundle`, `restore_deleted_entry`, `delete_entry`). Held for
+    /// (`import_bundle`, `restore_deleted_entry`, `delete_entry`, `delete_shelf`). Held for
     /// the whole operation so no other native mutation's write can land
     /// inside the rollback window and get clobbered by a stale snapshot.
     async fn native_exclusive_mutation(
@@ -888,13 +888,10 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
         .extend(tokenize_search_text(appended_content));
 }
 
-/// Persists the full native state to SQLite before truncating the journal.
-/// Several mutations (add_shelf, add_book, add_entry, append_to_entry,
-/// record_issued_cert) only append to the journal and never call
-/// `persist_snapshot` themselves; truncating the journal without first
-/// capturing a fresh snapshot would permanently drop any such write that
-/// hadn't yet been swept up by some other snapshot. If the snapshot persist
-/// fails, the journal is left untouched so those records remain replayable.
+/// Captures native state before retiring journal records. Callers hold the
+/// exclusive native guard through capture, persist and truncate; a failed
+/// persist leaves the journal untouched. Retirement is not ordered with the
+/// asynchronous journal queue, and recovery has no snapshot high-water mark.
 async fn checkpoint_journal(state: &ServerState) {
     let snapshot = database::Snapshot::capture(state).await;
     #[cfg(test)]
