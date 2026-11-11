@@ -3287,6 +3287,22 @@ async fn replay_after_snapshot_does_not_duplicate_append() {
         )
         .await
         .unwrap();
+    ctx.state
+        .append_to_entry(
+            sid,
+            "e",
+            Some("shelf"),
+            Some("book"),
+            &a,
+            " +twice",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
     ctx.journal.shutdown().unwrap();
     // checkpoint step 1 only (persist), then "crash" before truncate
     ctx.state.persist_snapshot_to_sqlite().await.unwrap();
@@ -3301,12 +3317,12 @@ async fn replay_after_snapshot_does_not_duplicate_append() {
         .get("shelf::book::e")
         .unwrap();
     assert_eq!(
-        entry.context, "base\n +once",
+        entry.context, "base\n +once\n +twice",
         "replay replaced persisted append context"
     );
     assert_eq!(
         entry.history.len(),
-        1,
+        2,
         "history rows after replay: {} ; context={:?}",
         entry.history.len(),
         entry.context
@@ -3341,4 +3357,213 @@ async fn import_and_delete_shelf_capture_one_snapshot_each() {
         1,
         "delete_shelf persisted a redundant full snapshot"
     );
+}
+
+async fn prepare_same_path_readd(ctx: &TestContext, sequence: &str, a: &ConnectionAuthContext) {
+    if sequence == "import" {
+        let mut bundle = rollback_test_bundle(ctx.session_id, &["victim"]);
+        bundle.entries[0].shelf_name = "main".into();
+        bundle.entries[0].book_name = "default".into();
+        bundle.bundle_sha256 = sha2::Sha256::digest(serde_json::to_vec(&bundle.entries).unwrap())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        ctx.state
+            .import_bundle(ctx.session_id, &bundle, &ConflictPolicy::Overwrite, a)
+            .await
+            .unwrap();
+    }
+    if sequence == "shelf" {
+        ctx.state
+            .delete_shelf(ctx.session_id, "main", a)
+            .await
+            .unwrap();
+        ctx.state
+            .add_shelf(ctx.session_id, "main", "", a)
+            .await
+            .unwrap();
+        ctx.state
+            .add_book(ctx.session_id, "main", "default", "", a)
+            .await
+            .unwrap();
+    } else {
+        let deleted = ctx
+            .state
+            .delete_entry(ctx.session_id, "victim", Some("main"), Some("default"), a)
+            .await
+            .unwrap();
+        if sequence == "restore" {
+            ctx.state
+                .restore_deleted_entry(ctx.session_id, &deleted.entry_key, a)
+                .await
+                .unwrap();
+            ctx.state
+                .delete_entry(ctx.session_id, "victim", Some("main"), Some("default"), a)
+                .await
+                .unwrap();
+        }
+    }
+}
+
+async fn assert_replay_preserves_readded_entry(sequence: &str) {
+    let ctx = TestContext::new("review-readd-generation").await.unwrap();
+    let a = writer(ctx.session_id, "client-a");
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    *ctx.journal.before_append.lock().unwrap() = Some((reached_tx, resume_rx));
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "victim",
+            "OLD DESCRIPTION",
+            &[],
+            "OLD",
+            "main",
+            "default",
+            &a,
+        )
+        .await
+        .unwrap();
+    reached_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .unwrap();
+    prepare_same_path_readd(&ctx, sequence, &a).await;
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "victim",
+            "NEW DESCRIPTION",
+            &[],
+            "NEW",
+            "main",
+            "default",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .append_to_entry(
+            ctx.session_id,
+            "victim",
+            Some("main"),
+            Some("default"),
+            &a,
+            "TAIL",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    let expected =
+        ctx.state.sessions.read().await[&ctx.session_id].entries["main::default::victim"]
+            .context
+            .clone();
+    resume_tx.send(()).unwrap();
+    ctx.journal.shutdown().unwrap();
+    let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    let sessions = reloaded.sessions.read().await;
+    let actual = &sessions[&ctx.session_id].entries["main::default::victim"];
+    println!(
+        "expected={expected:?}; actual={:?}; description={:?}; history_len={}",
+        actual.context,
+        actual.description,
+        actual.history.len()
+    );
+    println!("PPV_REACHED");
+    assert_eq!(
+        actual.context, expected,
+        "replay discarded the acknowledged replacement's content"
+    );
+    assert_eq!(actual.description, "NEW DESCRIPTION");
+    assert_eq!(actual.history.len(), 1);
+}
+
+#[tokio::test]
+async fn replay_delayed_old_create_preserves_readded_entry() {
+    assert_replay_preserves_readded_entry("entry").await;
+}
+
+#[tokio::test]
+async fn replay_readd_after_shelf_delete_preserves_new_entry() {
+    assert_replay_preserves_readded_entry("shelf").await;
+}
+
+#[tokio::test]
+async fn replay_readd_after_import_overwrite_preserves_new_entry() {
+    assert_replay_preserves_readded_entry("import").await;
+}
+
+#[tokio::test]
+async fn replay_readd_after_restore_preserves_new_entry() {
+    assert_replay_preserves_readded_entry("restore").await;
+}
+
+#[tokio::test]
+async fn replay_snapshot_with_only_append_record_keeps_context() {
+    let ctx = TestContext::new("review-replay-append").await.unwrap();
+    let a = writer(ctx.session_id, "client-a");
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "entry",
+            "",
+            &[],
+            "BASE",
+            "main",
+            "default",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.journal.shutdown().unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    ctx.journal.truncate_blocking().unwrap();
+    let journal = Arc::new(JournalHandle::start(crate::init::journal_path()).unwrap());
+    let state = ServerState::load_from_storage(Arc::clone(&journal))
+        .await
+        .unwrap();
+    state
+        .append_to_entry(
+            ctx.session_id,
+            "entry",
+            Some("main"),
+            Some("default"),
+            &a,
+            "APPEND",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    journal.shutdown().unwrap();
+    let expected = state.sessions.read().await[&ctx.session_id].entries["main::default::entry"]
+        .context
+        .clone();
+    // Exact durable image at checkpoint's crash boundary: snapshot committed,
+    // unchanged journal still present; no subsequent shutdown snapshot is run.
+    database::persist_snapshot(database::Snapshot::capture(&state).await).unwrap();
+    let reloaded = ServerState::load_from_storage(Arc::clone(&journal))
+        .await
+        .unwrap();
+    let sessions = reloaded.sessions.read().await;
+    let actual = &sessions[&ctx.session_id].entries["main::default::entry"];
+    println!(
+        "expected={expected:?}; actual={:?}; history_len={}",
+        actual.context,
+        actual.history.len()
+    );
+    println!("PPV_REACHED");
+    assert_eq!(
+        actual.context, expected,
+        "snapshot overlap replay duplicated append"
+    );
+    assert_eq!(actual.history.len(), 1);
 }

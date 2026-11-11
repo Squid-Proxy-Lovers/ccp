@@ -4,6 +4,10 @@
 
 use super::*;
 
+// Replay-local only: context may be rebuilt by a create even when the
+// snapshot already contains history rows for its subsequent appends.
+type ContextOperationIds = HashMap<(i64, String), HashSet<String>>;
+
 impl ServerState {
     pub async fn load_from_storage(journal: Arc<JournalHandle>) -> anyhow::Result<Self> {
         let connection = open_sqlite_connection()?;
@@ -15,6 +19,19 @@ impl ServerState {
         let auth_tokens = load_auth_tokens(&connection)?;
         let cert_grants = load_cert_grants(&connection)?;
         let revoked_cert_common_names = load_revoked_cert_common_names(&connection)?;
+
+        let mut context_operation_ids = ContextOperationIds::new();
+        for (session_id, session) in &sessions {
+            for (key, entry) in &session.entries {
+                let ids = entry
+                    .history
+                    .iter()
+                    .filter(|item| !item.operation_id.is_empty())
+                    .map(|item| item.operation_id.clone())
+                    .collect();
+                context_operation_ids.insert((*session_id, key.clone()), ids);
+            }
+        }
 
         let state = Self {
             sessions: RwLock::new(sessions),
@@ -29,7 +46,9 @@ impl ServerState {
         };
 
         for entry in load_entries(state.journal.path())? {
-            state.apply_journal_entry(entry).await;
+            state
+                .apply_journal_entry(entry, &mut context_operation_ids)
+                .await;
         }
 
         Ok(state)
@@ -47,7 +66,11 @@ impl ServerState {
         Ok(true)
     }
 
-    async fn apply_journal_entry(&self, entry: JournalEntry) {
+    async fn apply_journal_entry(
+        &self,
+        entry: JournalEntry,
+        context_operation_ids: &mut ContextOperationIds,
+    ) {
         match entry {
             JournalEntry::AuthTokenUsed {
                 token_hash,
@@ -116,12 +139,16 @@ impl ServerState {
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
                     let (path, key) = entry_path_for(&name, Some(&shelf_name), Some(&book_name));
-                    // A create already represented in the snapshot must not
-                    // replace its newer context before append deduplication.
-                    if session.entries.contains_key(&key) {
-                        return;
-                    }
-                    let history = Vec::new();
+                    // Keep baseline create-replacement order. A path and its
+                    // second-resolution timestamp do not identify a creation.
+                    let history = session
+                        .entries
+                        .get(&key)
+                        .map(|entry| entry.history.clone())
+                        .unwrap_or_default();
+                    // The create resets context, so subsequent journal appends
+                    // must rebuild it even if their history is already stored.
+                    context_operation_ids.insert((session_id, key.clone()), HashSet::new());
                     let entry = session.build_entry(
                         path,
                         description,
@@ -161,24 +188,31 @@ impl ServerState {
                 let Some(entry) = session.entries.get_mut(&key) else {
                     return;
                 };
-                if entry
-                    .history
-                    .iter()
-                    .any(|item| item.operation_id == operation_id)
-                {
-                    return;
+                let apply_context = operation_id.is_empty()
+                    || context_operation_ids
+                        .entry((session_id, key))
+                        .or_default()
+                        .insert(operation_id.clone());
+                if apply_context {
+                    SessionCache::refresh_appended_context(entry, &appended_content);
+                    entry.updated_at = created_at.clone();
                 }
-                SessionCache::refresh_appended_context(entry, &appended_content);
-                entry.updated_at = created_at.clone();
-                entry.history.push(MessageHistoryEntry {
-                    operation_id,
-                    client_common_name,
-                    agent_name,
-                    host_name,
-                    reason,
-                    appended_content,
-                    created_at,
-                });
+                if operation_id.is_empty()
+                    || !entry
+                        .history
+                        .iter()
+                        .any(|item| item.operation_id == operation_id)
+                {
+                    entry.history.push(MessageHistoryEntry {
+                        operation_id,
+                        client_common_name,
+                        agent_name,
+                        host_name,
+                        reason,
+                        appended_content,
+                        created_at,
+                    });
+                }
             }
         }
     }

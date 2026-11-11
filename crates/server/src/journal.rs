@@ -88,11 +88,16 @@ enum JournalCommand {
     Shutdown(mpsc::SyncSender<anyhow::Result<()>>),
 }
 
+#[cfg(test)]
+type AppendPause = Arc<Mutex<Option<(mpsc::Sender<()>, mpsc::Receiver<()>)>>>;
+
 #[derive(Clone)]
 pub struct JournalHandle {
     path: PathBuf,
     sender: mpsc::SyncSender<JournalCommand>,
     last_error: Arc<Mutex<Option<String>>>,
+    #[cfg(test)]
+    pub(crate) before_append: AppendPause,
 }
 
 impl JournalHandle {
@@ -110,12 +115,24 @@ impl JournalHandle {
             .with_context(|| format!("failed to open journal at {}", path.display()))?;
         let (sender, receiver) = mpsc::sync_channel(JOURNAL_QUEUE_CAPACITY);
         let last_error = Arc::new(Mutex::new(None));
+        #[cfg(test)]
+        let before_append = Arc::new(Mutex::new(None));
 
         thread::Builder::new()
             .name("ccp-journal-writer".to_string())
             .spawn({
                 let last_error = Arc::clone(&last_error);
-                move || run_journal_writer(file, receiver, last_error)
+                #[cfg(test)]
+                let before_append = Arc::clone(&before_append);
+                move || {
+                    run_journal_writer(
+                        file,
+                        receiver,
+                        last_error,
+                        #[cfg(test)]
+                        before_append,
+                    )
+                }
             })
             .context("failed to spawn journal writer thread")?;
 
@@ -123,6 +140,8 @@ impl JournalHandle {
             path,
             sender,
             last_error,
+            #[cfg(test)]
+            before_append,
         })
     }
 
@@ -201,10 +220,21 @@ fn run_journal_writer(
     mut file: File,
     receiver: mpsc::Receiver<JournalCommand>,
     last_error: Arc<Mutex<Option<String>>>,
+    #[cfg(test)] before_append: AppendPause,
 ) {
     while let Ok(command) = receiver.recv() {
         match command {
             JournalCommand::Append(entry) => {
+                #[cfg(test)]
+                {
+                    let pause = before_append.lock().unwrap().take();
+                    if let Some((reached, resume)) = pause {
+                        reached.send(()).unwrap();
+                        resume
+                            .recv_timeout(std::time::Duration::from_secs(5))
+                            .unwrap();
+                    }
+                }
                 // Batch: serialize this entry plus any pending entries, then flush once
                 let mut buf = match serde_json::to_vec(&entry) {
                     Ok(mut line) => {
