@@ -49,6 +49,8 @@ pub(super) fn publish(
     }
     options.open(&temporary)?.sync_all()?;
     let result = initialize(&temporary).and_then(|()| {
+        // Same-directory links stay on one volume, including on Windows NTFS.
+        // Keep no-replacement semantics; do not fall back to a replacing rename.
         fs::hard_link(&temporary, &target)
             .context("cannot publish workspace profile without replacement")
     });
@@ -348,6 +350,8 @@ impl WorkspaceProfile {
     }
 }
 
+// Windows material inherits the containing user-profile ACL. Callers choosing
+// another directory must secure its ACL themselves; Unix mode checks stay Unix-only.
 pub(super) fn private_directory(path: &Path, create: bool) -> anyhow::Result<()> {
     if create && !path.try_exists()? {
         let mut builder = fs::DirBuilder::new();
