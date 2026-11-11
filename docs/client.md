@@ -51,7 +51,12 @@ manifest record in stable and nightly releases; no Windows server is distributed
 Installation stages the executable beside its destination and renames it into
 `%LOCALAPPDATA%\ccp\bin\ccp-client.exe`. An available `ccp.exe` name is installed as
 well; an existing unrelated `ccp` command is retained. `-InstallDir` overrides the
-binary directory. The directory is added to the user PATH. Open a new terminal
+binary directory within `%USERPROFILE%`. The installer rejects reparse points
+(including junctions) in every component from that profile down to its install,
+MCP and configuration paths. Downloads and publication use private staging
+directories created with a protected ACL granting only the current user full
+control; their owner and ACL are checked again immediately before publication.
+The directory is added to the user PATH. Open a new terminal
 after installation; re-run the same installer command to update. Close running
 CCP processes before updating if Windows reports a file in use.
 

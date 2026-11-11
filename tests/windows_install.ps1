@@ -44,7 +44,6 @@ foreach ($nativeErrorPreference in @($false, $true)) { Test-CcpNativeExit $engin
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
 $CcpClientAsset = 'ccp-client-windows-x86_64.exe'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "ccp-installer-test-$([Guid]::NewGuid().ToString('N'))"
-$fixture = Join-Path $testRoot 'fixture'
 $profileDirectory = Join-Path $testRoot 'profile with spaces'
 $InstallDir = Join-Path $profileDirectory 'bin'
 $script:NativeCalls = [Collections.Generic.List[object]]::new()
@@ -109,7 +108,11 @@ function Set-CcpUserPath {
 }
 
 try {
-    New-Item -ItemType Directory -Force -Path $fixture, $profileDirectory | Out-Null
+    New-Item -ItemType Directory -Force -Path $profileDirectory | Out-Null
+    $env:USERPROFILE = $profileDirectory
+    $env:LOCALAPPDATA = $profileDirectory
+    $env:APPDATA = $profileDirectory
+    $fixture = New-CcpPrivateStage $profileDirectory
     $packagedAssets = @($CcpClientAsset, 'ccp-mcp.tar.gz')
     foreach ($platform in @('linux-x86_64', 'linux-aarch64', 'darwin-x86_64', 'darwin-aarch64')) {
         $packagedAssets += @("ccp-client-$platform", "ccp-server-$platform")
@@ -208,7 +211,7 @@ try {
     Confirm-TestFailure { Set-CcpCodexConfig $codexPath 'fixture' 'fixture' } 'Interrupted Codex update was accepted.'
     $script:RejectCodex = $false
     Confirm-TestCondition (([IO.File]::ReadAllText($codexPath)) -eq $beforeInterruptedConfig) 'Interrupted update replaced the existing Codex config.'
-    Confirm-TestCondition (@(Get-ChildItem -LiteralPath $codexDirectory -Filter 'ccp-codex-*').Count -eq 0) 'Interrupted update leaked staging files.'
+    Confirm-TestCondition (@(Get-ChildItem -LiteralPath $codexDirectory -Force -Filter '.ccp-stage-*').Count -eq 0) 'Interrupted update leaked staging files.'
     $pipCalls = @($script:NativeCalls | Where-Object { $_.Arguments -contains 'pip' })
     Confirm-TestCondition ($pipCalls[0].Executable.EndsWith((Join-Path 'Scripts' 'python.exe'))) 'MCP did not use the venv Python.'
     $downloadedClient = Join-Path $fixture $CcpClientAsset
@@ -235,10 +238,46 @@ try {
     Set-CcpJsonHost $cursorPath 'new' 'new'
     $cursor = Get-Content -LiteralPath $cursorPath -Raw | ConvertFrom-Json
     Confirm-TestCondition ($cursor.mcpServers.ccp.command -eq 'custom') 'Existing CCP host config was overwritten.'
+    $outside = Join-Path $testRoot 'outside-profile'
+    New-Item -ItemType Directory -Path $outside | Out-Null
+    $redirected = Join-Path $profileDirectory 'redirected'
+    $linkType = if ($savedEnvironment['OS'] -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }
+    New-Item -ItemType $linkType -Path $redirected -Target $outside | Out-Null
+    try {
+        Confirm-TestFailure { Publish-CcpFile (Join-Path $InstallDir 'ccp-client.exe') (Join-Path $redirected 'client.exe') } 'Linked publication parent was accepted.'
+        Confirm-TestFailure { Confirm-CcpPrivateStage $redirected } 'Linked staging directory was accepted.'
+        Confirm-TestCondition (-not (Test-Path -LiteralPath (Join-Path $outside 'client.exe'))) 'Linked parent redirected publication outside the user profile.'
+    } finally { (Get-Item -LiteralPath $redirected -Force).Delete() }
+    $interruptedTarget = Join-Path $InstallDir 'interrupted.exe'
+    [IO.File]::WriteAllText($interruptedTarget, 'retain old verified bytes')
+    $script:SavedStageCheck = ${function:Confirm-CcpPrivateStage}
+    $script:StageChecks = 0
+    Set-Item Function:Confirm-CcpPrivateStage {
+        param([string]$Path)
+        $script:StageChecks++
+        if ($script:StageChecks -eq 2) { throw 'Fixture interrupted before final publication.' }
+        & $script:SavedStageCheck $Path
+    }
+    try {
+        Confirm-TestFailure { Publish-CcpFile (Join-Path $InstallDir 'ccp-client.exe') $interruptedTarget } 'Interrupted publication was accepted.'
+        Confirm-TestCondition ($script:StageChecks -ge 3) 'Final staging recheck or cleanup did not run.'
+        Confirm-TestCondition ((Get-Content -LiteralPath $interruptedTarget -Raw) -eq 'retain old verified bytes') 'Interrupted publication replaced the old client.'
+    } finally { Set-Item Function:Confirm-CcpPrivateStage $script:SavedStageCheck }
+    if ($savedEnvironment['OS'] -eq 'Windows_NT') {
+        $private = New-CcpPrivateStage $profileDirectory
+        $originalAcl = Get-Acl -LiteralPath $private
+        $expandedAcl = Get-Acl -LiteralPath $private
+        $expandedAcl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new('S-1-1-0'), 'Read', 'Allow'))
+        Set-Acl -LiteralPath $private -AclObject $expandedAcl
+        Confirm-TestFailure { Confirm-CcpPrivateStage $private } 'Overly broad staging ACL was accepted.'
+        Set-Acl -LiteralPath $private -AclObject $originalAcl
+        Remove-CcpPrivateStage $private
+    }
     $directoryTarget = Join-Path $InstallDir 'directory'
     New-Item -ItemType Directory -Path $directoryTarget | Out-Null
     Confirm-TestFailure { Publish-CcpFile (Join-Path $fixture $CcpClientAsset) $directoryTarget } 'Directory destination accepted.'
-    Confirm-TestCondition (@(Get-ChildItem -LiteralPath $InstallDir -Filter '*.stage.*').Count -eq 0) 'Staging files leaked.'
+    Confirm-TestCondition (@(Get-ChildItem -LiteralPath $InstallDir -Force -Filter '.ccp-stage-*').Count -eq 0) 'Staging files leaked.'
     foreach ($url in $script:DownloadUrls) {
         Confirm-TestCondition ($url.StartsWith("https://github.com/$CcpRepository/releases/download/v0.2.0/")) 'Download used an unofficial or moving release URL.'
     }

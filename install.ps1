@@ -1,7 +1,7 @@
 #requires -Version 5.1
 # Copyright (C) 2026 Squid Proxy Lovers
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.ps1 | iex
+# Fetch this bootstrap from an immutable reviewed commit; see README.md.
 [CmdletBinding()]
 param(
     [ValidateSet('stable', 'nightly')][string]$Channel = 'stable',
@@ -27,6 +27,107 @@ function Invoke-CcpNative {
     & $tool.Source @ArgumentList *> $null
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) { throw 'A required external command failed.' }
+}
+
+function Confirm-CcpPath {
+    param([string]$Path, [switch]$AllowMissing)
+    $root = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+    $full = [IO.Path]::GetFullPath($Path)
+    $prefix = $root + [IO.Path]::DirectorySeparatorChar
+    if ($full -ne $root -and -not $full.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Installer paths must stay under the current user profile.'
+    }
+    $current = $root
+    $components = @('') + @($full.Substring($root.Length).Split([char[]]@('/', '\'), [StringSplitOptions]::RemoveEmptyEntries))
+    foreach ($component in $components) {
+        if ($component) { $current = Join-Path $current $component }
+        try { $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop }
+        catch [Management.Automation.ItemNotFoundException] {
+            if ($AllowMissing) { return }
+            throw
+        }
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+            throw 'Installer paths cannot contain reparse points.'
+        }
+    }
+}
+
+function Get-CcpUserSid {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    try { return $identity.User } finally { $identity.Dispose() }
+}
+
+function Confirm-CcpPrivateStage {
+    param([string]$Path)
+    Confirm-CcpPath $Path
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) { throw 'Private staging directory is missing.' }
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        # The installer itself is Windows-only; allow isolated host fixtures to
+        # exercise the same path checks with an owner-only Unix staging directory.
+        if ([IO.File]::GetUnixFileMode($Path) -ne [IO.UnixFileMode]448) { throw 'Staging directory is not private.' }
+        return
+    }
+    $sid = Get-CcpUserSid
+    $acl = Get-Acl -LiteralPath $Path
+    $rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))
+    if (-not $acl.AreAccessRulesProtected -or $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid.Value -or $rules.Count -ne 1) {
+        throw 'Staging ACL must be owned by and limited to the current user.'
+    }
+    $rule = $rules[0]
+    $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+    if ($rule.IdentityReference.Value -ne $sid.Value -or $rule.IsInherited -or
+        $rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow -or
+        $rule.FileSystemRights -ne [Security.AccessControl.FileSystemRights]::FullControl -or
+        $rule.InheritanceFlags -ne $inherit -or $rule.PropagationFlags -ne [Security.AccessControl.PropagationFlags]::None) {
+        throw 'Staging ACL must grant only the current user full control.'
+    }
+}
+
+function New-CcpPrivateStage {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Parent)
+    if (-not $PSCmdlet.ShouldProcess($Parent, 'Create private CCP staging directory')) { return }
+    Confirm-CcpPath $Parent
+    $path = Join-Path $Parent ".ccp-stage-$([Guid]::NewGuid().ToString('N'))"
+    if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+        $sid = Get-CcpUserSid
+        $acl = [Security.AccessControl.DirectorySecurity]::new()
+        $acl.SetOwner($sid)
+        $acl.SetAccessRuleProtection($true, $false)
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid,
+            [Security.AccessControl.FileSystemRights]::FullControl,
+            [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
+            [Security.AccessControl.PropagationFlags]::None,
+            [Security.AccessControl.AccessControlType]::Allow)
+        $acl.AddAccessRule($rule)
+        $directory = [IO.DirectoryInfo]::new($path)
+        if ($PSVersionTable.PSEdition -eq 'Desktop') { $directory.Create($acl) }
+        else {
+            Add-Type -AssemblyName System.IO.FileSystem.AccessControl
+            [IO.FileSystemAclExtensions]::Create($directory, $acl)
+        }
+    } else {
+        [IO.Directory]::CreateDirectory($path, [IO.UnixFileMode]448) | Out-Null
+    }
+    Confirm-CcpPrivateStage $path
+    return $path
+}
+
+function Remove-CcpPrivateStage {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Path)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Remove private CCP staging directory')) { return }
+    Confirm-CcpPrivateStage $Path
+    Remove-Item -LiteralPath $Path -Recurse -Force
+}
+
+function New-CcpDirectory {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Path)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Create CCP directory')) { return }
+    Confirm-CcpPath $Path -AllowMissing
+    [IO.Directory]::CreateDirectory($Path) | Out-Null
+    Confirm-CcpPath $Path
 }
 
 function Get-CcpReleaseResponse {
@@ -70,6 +171,7 @@ function Get-CcpReleaseTag {
 
 function Get-CcpReleaseFile {
     param([string]$Tag, [string]$Stage)
+    Confirm-CcpPrivateStage $Stage
     $base = "https://github.com/$CcpRepository/releases/download/$Tag"
     foreach ($name in @('ccp-release.json', 'ccp-provenance.json', $CcpClientAsset,
             'ccp-mcp.tar.gz', 'build-info.json')) {
@@ -79,6 +181,7 @@ function Get-CcpReleaseFile {
 
 function Confirm-CcpRelease {
     param([string]$Stage, [string]$ReleaseChannel, [string]$Tag)
+    Confirm-CcpPrivateStage $Stage
     $manifestPath = Join-Path $Stage 'ccp-release.json'
     if ((Get-Item -LiteralPath $manifestPath).Length -gt 65536 -or
         (Get-Item -LiteralPath (Join-Path $Stage 'ccp-provenance.json')).Length -gt 4194304) {
@@ -124,29 +227,31 @@ function Confirm-CcpRelease {
 
 function Publish-CcpFile {
     param([string]$Source, [string]$Destination)
-    if (Test-Path -LiteralPath $Destination) {
-        $item = Get-Item -LiteralPath $Destination -Force
-        if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-            throw 'Refusing to replace a directory or reparse point.'
-        }
-    }
-    $stage = "$Destination.stage.$([Guid]::NewGuid().ToString('N'))"
+    Confirm-CcpPath $Destination -AllowMissing
+    Confirm-CcpPath $Source
+    if (Test-Path -LiteralPath $Destination -PathType Container) { throw 'Refusing to replace a directory.' }
+    $stage = New-CcpPrivateStage (Split-Path -Parent $Destination)
     try {
-        [IO.File]::Copy($Source, $stage, $false)
+        $payload = Join-Path $stage 'payload'
+        [IO.File]::Copy($Source, $payload, $false)
+        # Recheck both names and the staging ACL immediately before publication.
+        Confirm-CcpPath $payload
+        Confirm-CcpPath $Destination -AllowMissing
+        Confirm-CcpPrivateStage $stage
         if ([IO.File]::Exists($Destination)) {
-            [IO.File]::Replace($stage, $Destination, [NullString]::Value)
+            [IO.File]::Replace($payload, $Destination, [NullString]::Value)
         } else {
-            [IO.File]::Move($stage, $Destination)
+            [IO.File]::Move($payload, $Destination)
         }
-    } finally {
-        if ([IO.File]::Exists($stage)) { [IO.File]::Delete($stage) }
-    }
+    } finally { Remove-CcpPrivateStage $stage }
 }
 
 function Install-CcpCommand {
     param([string]$Source, [string]$BinDirectory)
     $client = Join-Path $BinDirectory 'ccp-client.exe'
     $alias = Join-Path $BinDirectory 'ccp.exe'
+    Confirm-CcpPath $client -AllowMissing
+    Confirm-CcpPath $alias -AllowMissing
     # Refresh only our own alias: its bytes must match the previous client.
     $owned = (Test-Path -LiteralPath $alias -PathType Leaf) -and
         (Test-Path -LiteralPath $client -PathType Leaf) -and
@@ -179,22 +284,28 @@ function Set-CcpUserPath {
 function Install-CcpMcp {
     param([string]$Stage, [string]$ProfileDirectory)
     $venv = Join-Path $ProfileDirectory '.ccp-mcp\venv'
+    Confirm-CcpPath $venv -AllowMissing
     $python = Join-Path $venv 'Scripts\python.exe'
+    Confirm-CcpPath $python -AllowMissing
     if (-not (Test-Path -LiteralPath $python)) {
         Invoke-CcpNative 'python' @('-m', 'venv', $venv)
     }
+    Confirm-CcpPath $python
     Invoke-CcpNative $python @('-m', 'pip', 'install', '--quiet', '--upgrade',
         '--force-reinstall', (Join-Path $Stage 'ccp-mcp.tar.gz'))
     $command = Join-Path $venv 'Scripts\ccp-mcp-server.exe'
+    Confirm-CcpPath $command
     if (-not (Test-Path -LiteralPath $command -PathType Leaf)) { throw 'MCP entry point is missing.' }
     return $command
 }
 
 function Backup-CcpConfig {
     param([string]$Path)
+    Confirm-CcpPath $Path -AllowMissing
     if (-not (Test-Path -LiteralPath $Path)) { return }
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $backup = "$Path.backup.$stamp.$([Guid]::NewGuid().ToString('N'))"
+    Confirm-CcpPath $backup -AllowMissing
     [IO.File]::Copy($Path, $backup, $false)
 }
 
@@ -202,9 +313,9 @@ function Set-CcpCodexConfig {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Path, [string]$McpCommand, [string]$Client)
     if (-not $PSCmdlet.ShouldProcess($Path, 'Configure CCP')) { return }
-    $stage = Join-Path (Split-Path -Parent $Path) "ccp-codex-$([Guid]::NewGuid().ToString('N'))"
+    Confirm-CcpPath $Path
+    $stage = New-CcpPrivateStage (Split-Path -Parent $Path)
     $savedHome = $env:CODEX_HOME
-    New-Item -ItemType Directory -Path $stage | Out-Null
     try {
         $stagedConfig = Join-Path $stage 'config.toml'
         [IO.File]::Copy($Path, $stagedConfig, $false)
@@ -214,7 +325,7 @@ function Set-CcpCodexConfig {
         Publish-CcpFile $stagedConfig $Path
     } finally {
         [Environment]::SetEnvironmentVariable('CODEX_HOME', $savedHome, 'Process')
-        Remove-Item -LiteralPath $stage -Recurse -Force
+        Remove-CcpPrivateStage $stage
     }
 }
 
@@ -222,6 +333,7 @@ function Set-CcpJsonHost {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Path, [string]$McpCommand, [string]$Client)
     if (-not $PSCmdlet.ShouldProcess($Path, 'Configure CCP')) { return }
+    Confirm-CcpPath $Path -AllowMissing
     $config = [PSCustomObject]@{}
     if (Test-Path -LiteralPath $Path) {
         $config = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
@@ -237,15 +349,16 @@ function Set-CcpJsonHost {
         command = $McpCommand; env = @{ CCP_CLIENT_BIN = $Client }
     }
     $directory = Split-Path -Parent $Path
-    New-Item -ItemType Directory -Force -Path $directory | Out-Null
-    $stage = Join-Path $directory "ccp-config-$([Guid]::NewGuid().ToString('N')).json"
+    New-CcpDirectory $directory
+    $stageDirectory = New-CcpPrivateStage $directory
+    $stage = Join-Path $stageDirectory 'config.json'
     try {
         $json = $config | ConvertTo-Json -Depth 100 -WarningAction Stop
         [IO.File]::WriteAllText($stage, $json, [Text.UTF8Encoding]::new($false))
         Backup-CcpConfig $Path
         Publish-CcpFile $stage $Path
     } finally {
-        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage }
+        Remove-CcpPrivateStage $stageDirectory
     }
 }
 
@@ -269,6 +382,7 @@ function Set-CcpMcpHost {
         catch { Write-Warning "$name MCP not configured: configuration could not be updated." }
     }
     $codexConfig = Join-Path $ProfileDirectory '.codex\config.toml'
+    Confirm-CcpPath $codexConfig -AllowMissing
     if (-not (Test-Path -LiteralPath $codexConfig)) {
         Write-Warning 'Codex MCP not configured: no host configuration found.'
         return
@@ -296,14 +410,14 @@ function Install-CcpWindows {
     }
     Invoke-CcpNative 'python' @('-c', 'import sys; sys.exit(sys.version_info < (3, 10))')
     $tag = Get-CcpReleaseTag $ReleaseChannel $RequestedVersion
-    $stage = Join-Path $env:LOCALAPPDATA "ccp-download-$([Guid]::NewGuid().ToString('N'))"
-    New-Item -ItemType Directory -Path $stage | Out-Null
+    $bin = [IO.Path]::GetFullPath($BinDirectory)
+    Confirm-CcpPath $bin -AllowMissing
+    $stage = New-CcpPrivateStage $env:USERPROFILE
     try {
         Write-Information -InformationAction Continue 'Downloading and verifying the release; no software is installed until verification succeeds.'
         Get-CcpReleaseFile $tag $stage
         Confirm-CcpRelease $stage $ReleaseChannel $tag
-        $bin = [IO.Path]::GetFullPath($BinDirectory)
-        New-Item -ItemType Directory -Force -Path $bin | Out-Null
+        New-CcpDirectory $bin
         Install-CcpCommand (Join-Path $stage $CcpClientAsset) $bin
         Set-CcpUserPath $bin
         Write-Information -InformationAction Continue "Installed verified Windows client from $tag."
@@ -312,7 +426,7 @@ function Install-CcpWindows {
         Set-CcpMcpHost $env:USERPROFILE $mcp (Join-Path $bin 'ccp-client.exe')
         Write-Information -InformationAction Continue 'Installation complete. Open a new terminal and restart MCP hosts. Re-run the same command to update.'
     } finally {
-        Remove-Item -LiteralPath $stage -Recurse -Force
+        Remove-CcpPrivateStage $stage
     }
 }
 
