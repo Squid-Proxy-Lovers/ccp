@@ -1246,6 +1246,113 @@ async fn sibling_delete_rollback_preserves_concurrent_writes() {
     .unwrap();
 }
 
+fn duplicate_path_bundle(session_id: i64) -> TransferBundle {
+    let entry = |context: &str| BundleEntry {
+        name: "victim".to_string(),
+        description: String::new(),
+        labels: vec![],
+        context: context.to_string(),
+        shelf_name: "shelf".to_string(),
+        book_name: "book".to_string(),
+        shelf_description: String::new(),
+        book_description: String::new(),
+        history: vec![],
+    };
+    let entries = vec![
+        entry("FIRST-IMPORTED"),
+        entry("SECOND-IMPORTED"),
+        BundleEntry {
+            name: "poison".to_string(),
+            description: String::new(),
+            labels: vec![],
+            context: "x".to_string(),
+            shelf_name: "shelf".to_string(),
+            book_name: "book".to_string(),
+            shelf_description: String::new(),
+            book_description: String::new(),
+            history: vec![],
+        },
+    ];
+    let bundle_sha256: String = sha2::Sha256::digest(serde_json::to_vec(&entries).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    TransferBundle {
+        session: SessionMetadata {
+            session_name: "session-under-test".to_string(),
+            session_id,
+            description: String::new(),
+            owner: String::new(),
+            labels: vec![],
+            visibility: "private".to_string(),
+            purpose: String::new(),
+        },
+        selector: TransferSelector {
+            scope: TransferScope::Session,
+            include_history: false,
+        },
+        exported_at: "0".to_string(),
+        entries,
+        bundle_sha256,
+    }
+}
+
+#[tokio::test]
+async fn import_overwrite_rollback_restores_the_pre_import_value_despite_duplicate_paths() {
+    let ctx = TestContext::new("import-duplicate-path-rollback")
+        .await
+        .unwrap();
+    let actor = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_shelf(ctx.session_id, "shelf", "", &actor)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(ctx.session_id, "shelf", "book", "", &actor)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "victim",
+            "",
+            &[],
+            "ORIGINAL",
+            "shelf",
+            "book",
+            &actor,
+        )
+        .await
+        .unwrap();
+    poison_before("message_packs", "INSERT", "NEW.name = 'poison'");
+
+    let bundle = duplicate_path_bundle(ctx.session_id);
+    assert!(
+        ctx.state
+            .import_bundle(ctx.session_id, &bundle, &ConflictPolicy::Overwrite, &actor)
+            .await
+            .is_err()
+    );
+
+    let restored = ctx
+        .state
+        .get_entry(
+            ctx.session_id,
+            "victim",
+            Some("shelf"),
+            Some("book"),
+            &actor,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        restored.context, "ORIGINAL",
+        "a rolled-back import must restore the value that existed before the import, \
+         not an intermediate value written earlier in the same bundle"
+    );
+}
+
 async fn seed_doomed_and_safe_shelves(
     state: &ServerState,
     session_id: i64,

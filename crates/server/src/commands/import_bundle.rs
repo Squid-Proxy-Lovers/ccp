@@ -172,7 +172,10 @@ impl ServerState {
                         } else {
                             imported_entries += 1;
                         }
-                        previous_entries.insert(key.clone(), prior);
+                        // A bundle can list the same path twice; keep only the
+                        // value that existed before this import call, not an
+                        // intermediate value this same call already wrote.
+                        previous_entries.entry(key.clone()).or_insert(prior);
                         let imported = session.build_entry(
                             path,
                             entry.description.clone(),
