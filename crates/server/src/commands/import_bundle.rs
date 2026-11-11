@@ -312,7 +312,7 @@ impl ServerState {
             &auth_context.common_name,
         )?;
 
-        checkpoint_journal(&self.journal);
+        checkpoint_journal(self).await;
 
         Ok(ImportBundleResult {
             imported_entries,

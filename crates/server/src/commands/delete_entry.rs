@@ -89,7 +89,7 @@ impl ServerState {
         }
         self.remove_append_lock(session_id, &key).await;
 
-        checkpoint_journal(&self.journal);
+        checkpoint_journal(self).await;
         Ok(deleted_result)
     }
 }

@@ -107,7 +107,7 @@ impl ServerState {
             return Err(error);
         }
 
-        checkpoint_journal(&self.journal);
+        checkpoint_journal(self).await;
         Ok(RestoreResult {
             entry_key: deleted_entry.entry_key,
             restored_entry,

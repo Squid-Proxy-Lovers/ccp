@@ -844,6 +844,15 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
         .extend(tokenize_search_text(appended_content));
 }
 
-fn checkpoint_journal(journal: &JournalHandle) {
-    let _ = journal.truncate_blocking();
+/// Persists the full native state to SQLite before truncating the journal.
+/// Several mutations (add_shelf, add_book, add_entry, append_to_entry,
+/// record_issued_cert) only append to the journal and never call
+/// `persist_snapshot` themselves; truncating the journal without first
+/// capturing a fresh snapshot would permanently drop any such write that
+/// hadn't yet been swept up by some other snapshot. If the snapshot persist
+/// fails, the journal is left untouched so those records remain replayable.
+async fn checkpoint_journal(state: &ServerState) {
+    if database::persist_snapshot(database::Snapshot::capture(state).await).is_ok() {
+        let _ = state.journal.truncate_blocking();
+    }
 }
