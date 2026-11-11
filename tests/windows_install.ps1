@@ -14,16 +14,32 @@ $functions = $ast.FindAll({ param($node) $node -is [Management.Automation.Langua
 foreach ($definition in $functions) { . ([scriptblock]::Create($definition.Extent.Text)) }
 # Exercise native exit/stderr handling on the current PowerShell engine before
 # replacing release tools with mocks. No release code is executed by these tests.
+function Test-CcpNativeExit {
+    param([string]$Engine, [bool]$NativeErrorPreference)
+    $ErrorActionPreference = 'Stop'
+    $PSNativeCommandUseErrorActionPreference = $NativeErrorPreference
+    Invoke-CcpNative $Engine @('-NoProfile', '-NonInteractive', '-Command', "[Console]::Error.WriteLine('fixture stderr'); exit 0")
+    if ($LASTEXITCODE -ne 0) { throw 'Successful native command returned a failure exit code.' }
+    $nativeFailed = $false
+    try { Invoke-CcpNative $Engine @('-NoProfile', '-NonInteractive', '-Command', 'exit 5') }
+    catch {
+        $nativeFailed = $true
+        if ($_.Exception.Message -ne 'A required external command failed.') {
+            throw 'Native failure did not throw the installer error.'
+        }
+    }
+    if (-not $nativeFailed) { throw 'Native failure exit code was ignored.' }
+    if ($LASTEXITCODE -ne 5) { throw 'Expected native exit code 5 was not observed.' }
+    if ($PSNativeCommandUseErrorActionPreference -ne $NativeErrorPreference -or $ErrorActionPreference -ne 'Stop') {
+        throw 'Native command handling changed caller error preferences.'
+    }
+    $missingFailed = $false
+    try { Invoke-CcpNative 'ccp-fixture-missing-command-4ccac7' @() }
+    catch { $missingFailed = $true }
+    if (-not $missingFailed) { throw 'Missing native verifier was accepted.' }
+}
 $engine = (Get-Process -Id $PID).Path
-Invoke-CcpNative $engine @('-NoProfile', '-NonInteractive', '-Command', "[Console]::Error.WriteLine('fixture stderr'); exit 0")
-$nativeFailed = $false
-try { Invoke-CcpNative $engine @('-NoProfile', '-NonInteractive', '-Command', 'exit 5') }
-catch { $nativeFailed = $true }
-if (-not $nativeFailed) { throw 'Native failure exit code was ignored.' }
-$missingFailed = $false
-try { Invoke-CcpNative 'ccp-fixture-missing-command-4ccac7' @() }
-catch { $missingFailed = $true }
-if (-not $missingFailed) { throw 'Missing native verifier was accepted.' }
+foreach ($nativeErrorPreference in @($false, $true)) { Test-CcpNativeExit $engine $nativeErrorPreference }
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
 $CcpClientAsset = 'ccp-client-windows-x86_64.exe'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "ccp-installer-test-$([Guid]::NewGuid().ToString('N'))"
@@ -203,10 +219,13 @@ try {
             Confirm-TestCondition (@($entries | Where-Object { $_ -eq $InstallDir }).Count -eq 1) 'User PATH update was not idempotent.'
         } finally { [Environment]::SetEnvironmentVariable('Path', $savedPath, 'User') }
     }
-    Write-Information -InformationAction Continue 'Windows installer fixture regressions passed.'
 } finally {
     foreach ($name in $savedEnvironment.Keys) {
         [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
     }
     if (Test-Path -LiteralPath $testRoot) { Remove-Item -LiteralPath $testRoot -Recurse -Force }
 }
+# Expected native failures leave LASTEXITCODE nonzero. Report success only after
+# every assertion and cleanup completed; a terminating failure never reaches here.
+Write-Information -InformationAction Continue 'Windows installer fixture regressions passed.'
+exit 0

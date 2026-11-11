@@ -21,8 +21,12 @@ function Invoke-CcpNative {
     # on success. Suppress tool output (which may contain private details) and
     # use the exit code for success, with a function-local error preference.
     $ErrorActionPreference = 'Continue'
+    # Disable PowerShell 7's native-error conversion locally; the explicit
+    # exit-code check below always throws on failure, whatever the caller chose.
+    $PSNativeCommandUseErrorActionPreference = $false
     & $tool.Source @ArgumentList *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'A required external command failed.' }
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) { throw 'A required external command failed.' }
 }
 
 function Get-CcpReleaseResponse {
