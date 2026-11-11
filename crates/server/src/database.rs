@@ -193,6 +193,8 @@ pub(super) struct Snapshot {
 
 impl Snapshot {
     pub(super) async fn capture(state: &ServerState) -> Self {
+        #[cfg(test)]
+        state.test_event("snapshot_capture");
         Self {
             sessions: state.sessions.read().await.clone(),
             auth_tokens: state.auth_tokens.read().await.clone(),

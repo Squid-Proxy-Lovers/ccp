@@ -2293,7 +2293,9 @@ fn entry_exists(state: &ServerState, session_id: i64, key: &str) -> bool {
 fn observe_test_events(state: &ServerState) -> std::sync::mpsc::Receiver<&'static str> {
     let (events, observed) = std::sync::mpsc::channel();
     *state.test_hook.lock().unwrap() = Some(Arc::new(move |event| {
-        let _ = events.send(event);
+        if event != "snapshot_capture" {
+            let _ = events.send(event);
+        }
     }));
     observed
 }
@@ -3308,5 +3310,35 @@ async fn replay_after_snapshot_does_not_duplicate_append() {
         "history rows after replay: {} ; context={:?}",
         entry.history.len(),
         entry.context
+    );
+}
+
+#[tokio::test]
+async fn import_and_delete_shelf_capture_one_snapshot_each() {
+    let ctx = TestContext::new("single-snapshot").await.unwrap();
+    let sid = ctx.session_id;
+    let a = writer(sid, "client-a");
+    let captures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count = Arc::clone(&captures);
+    *ctx.state.test_hook.lock().unwrap() = Some(Arc::new(move |event| {
+        if event == "snapshot_capture" {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }));
+    let bundle = rollback_test_bundle(sid, &["victim"]);
+    ctx.state
+        .import_bundle(sid, &bundle, &ConflictPolicy::Overwrite, &a)
+        .await
+        .unwrap();
+    assert_eq!(
+        captures.swap(0, std::sync::atomic::Ordering::SeqCst),
+        1,
+        "import persisted a redundant full snapshot"
+    );
+    ctx.state.delete_shelf(sid, "shelf", &a).await.unwrap();
+    assert_eq!(
+        captures.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "delete_shelf persisted a redundant full snapshot"
     );
 }

@@ -72,7 +72,9 @@ impl ServerState {
             return Err(error);
         }
 
-        checkpoint_journal(self).await;
+        // The full snapshot above is already durable, and the exclusive
+        // native guard still excludes every state/journal producer.
+        let _ = self.journal.truncate_blocking();
         Ok(DeleteShelfResult {
             shelf_name,
             deleted_books,
