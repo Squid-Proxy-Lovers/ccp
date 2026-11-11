@@ -226,13 +226,21 @@ def prepare(root: Path, directory: Path, source_sha: str) -> None:
     (directory / MANIFEST).write_bytes(encoded)
 
 
+def tag_channel(tag: str) -> str:
+    if re.fullmatch("v" + VERSION_CORE, tag):
+        return "stable"
+    text(tag, "v" + RC_VERSION)
+    return "rc"
+
+
 def source_ref(channel: str, tag: str, manifest: Manifest) -> str:
     if channel == "nightly":
         text(tag, r"nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{12}")
         require(tag.endswith("-" + manifest.source_sha[:12]), "Nightly tag and source differ")
         return "refs/heads/main"
-    require(channel == "stable", "Unsupported release channel")
-    require(tag == "v" + manifest.package_version, "Stable tag and package version differ")
+    require(channel in {"stable", "rc"}, "Unsupported release channel")
+    require(tag_channel(tag) == channel, "Tag and release channel differ")
+    require(tag == "v" + manifest.package_version, "Tag and package version differ")
     return "refs/tags/" + tag
 
 
@@ -296,7 +304,7 @@ def verify(directory: Path, channel: str, tag: str, platform: str) -> Manifest:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", type=Path, required=True)
-    parser.add_argument("--channel", choices=("stable", "nightly"), required=True)
+    parser.add_argument("--channel", choices=("stable", "rc", "nightly"), required=True)
     parser.add_argument("--tag", required=True)
     parser.add_argument("--platform", choices=PLATFORMS, required=True)
     args = parser.parse_args()

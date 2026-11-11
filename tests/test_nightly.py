@@ -475,6 +475,196 @@ class ReleaseContractTests(unittest.TestCase):
                 self.assertNotIn("attestations: write", body)
 
 
+class ReleaseTagTests(unittest.TestCase):
+    def setUp(self):
+        from importlib import import_module
+
+        self.tags = import_module("release_tag")
+        self.contract = nightly.release_contract
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.jobs = dict(
+            re.findall(r"^  ([a-z-]+):\n(.*?)(?=^  [a-z-]+:\n|\Z)", self.workflow, re.M | re.S)
+        )
+
+    def source(self, rust="0.2.0-rc.1", python="0.2.0rc1"):
+        for name in ["client", "server", "protocol"]:
+            path = self.root / "crates" / name / "Cargo.toml"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f'version = "{rust}"\n')
+        path = self.root / "mcp/pyproject.toml"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f'version = "{python}"\n')
+
+    def test_classification_matches_source_and_preserves_stable_policy(self):
+        for version, python, channel, prerelease, latest in [
+            ("0.2.0", "0.2.0", "stable", "false", ""),
+            ("0.2.0-rc.1", "0.2.0rc1", "rc", "true", "false"),
+        ]:
+            self.source(version, python)
+            self.assertEqual(
+                self.tags.classify(self.root, "v" + version),
+                {
+                    "tag": "v" + version,
+                    "channel": channel,
+                    "prerelease": prerelease,
+                    "make_latest": latest,
+                },
+            )
+
+    def test_unsupported_tags_and_version_mismatches_fail_closed(self):
+        self.source()
+        for tag in [
+            "v0.2.0",
+            "v0.2.0-rc.2",
+            "v0.2.1-rc.1",
+            "v0.2.0rc1",
+            "v0.2.0-rc.01",
+            "v00.2.0-rc.1",
+            "v0.2.0-beta.1",
+            "v0.2.0+local",
+            "v0.2.0-rc.1+local",
+            "latest",
+            TAG,
+            "v0.2.0-rc.1\n",
+        ]:
+            with self.subTest(tag=tag), self.assertRaises(ValueError):
+                self.tags.classify(self.root, tag)
+        self.source(python="0.2.0rc2")
+        with self.assertRaises(ValueError):
+            self.tags.classify(self.root, "v0.2.0-rc.1")
+
+    def test_cli_emits_outputs_only_after_successful_validation(self):
+        self.source()
+        output = self.root / "outputs"
+        command = [
+            sys.executable,
+            str(ROOT / "scripts/release_tag.py"),
+            "--root",
+            str(self.root),
+            "--output",
+            str(output),
+            "--tag",
+        ]
+        # Fixed checkout CLI and owned temporary source/output paths.
+        success = subprocess.run([*command, "v0.2.0-rc.1"], capture_output=True, check=False)  # noqa: S603
+        self.assertEqual(success.returncode, 0, success.stderr)
+        self.assertEqual(
+            output.read_text(), "tag=v0.2.0-rc.1\nchannel=rc\nprerelease=true\nmake_latest=false\n"
+        )
+        output.unlink()
+        # Same CLI must not enable publication after a mismatch.
+        failure = subprocess.run([*command, "v0.2.0"], capture_output=True, check=False)  # noqa: S603
+        self.assertNotEqual(failure.returncode, 0)
+        self.assertFalse(output.exists())
+
+    def test_rc_source_manifest_and_verifier_contract(self):
+        self.source()
+        for filename in [
+            "crates/protocol/src/lib.rs",
+            "crates/protocol/src/workspace.rs",
+            "crates/client/src/workspace/store.rs",
+            "crates/server/src/init.rs",
+        ]:
+            path = self.root / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / filename, path)
+        dist = self.root / "dist"
+        dist.mkdir()
+        for name in self.contract.ASSETS:
+            (dist / name).write_bytes(name.encode())
+        self.contract.prepare(self.root, dist, SHA)
+        manifest = self.contract.decode((dist / self.contract.MANIFEST).read_bytes())
+        self.assertEqual(manifest.package_version, "0.2.0-rc.1")
+        (dist / self.contract.PROVENANCE).write_bytes(b"mocked verifier bundle")
+        with patch.object(self.contract.subprocess, "run") as verifier:
+            self.assertEqual(
+                self.contract.verify(dist, "rc", "v0.2.0-rc.1", "linux-x86_64"), manifest
+            )
+        command = verifier.call_args.args[0]
+        self.assertEqual(command[command.index("--source-ref") + 1], "refs/tags/v0.2.0-rc.1")
+        self.assertTrue(
+            command[command.index("--cert-identity") + 1].endswith("@refs/tags/v0.2.0-rc.1")
+        )
+        for channel, tag in [("stable", "v0.2.0-rc.1"), ("rc", "v0.2.0"), ("rc", "v0.2.0-rc.2")]:
+            with (
+                self.subTest(channel=channel, tag=tag),
+                patch.object(self.contract.subprocess, "run") as verifier,
+                self.assertRaises(ValueError),
+            ):
+                self.contract.verify(dist, channel, tag, "linux-x86_64")
+            verifier.assert_not_called()
+
+    def test_publication_jobs_require_identity_and_provenance_success(self):
+        for name in ["release", "docker-publish"]:
+            body = self.jobs[name]
+            self.assertIn("release-identity", body.splitlines()[0])
+            self.assertIn("provenance", body.splitlines()[0])
+            self.assertNotIn("always()", body)
+        self.assertIn("release-identity", self.jobs["provenance"].splitlines()[0])
+        self.assertIn(
+            'python scripts/release_tag.py --tag "${GITHUB_REF#refs/tags/}" --output "$GITHUB_OUTPUT"',
+            self.jobs["release-identity"],
+        )
+        self.assertIn(
+            "CHANNEL: ${{ needs.release-identity.outputs.channel }}", self.jobs["provenance"]
+        )
+        self.assertIn('--channel "$CHANNEL" --tag "$RELEASE_TAG"', self.jobs["provenance"])
+        self.assertIn(
+            "prerelease: ${{ needs.release-identity.outputs.prerelease == 'true' }}",
+            self.jobs["release"],
+        )
+        self.assertIn(
+            "make_latest: ${{ needs.release-identity.outputs.make_latest }}", self.jobs["release"]
+        )
+        self.assertIn("startsWith(github.ref, 'refs/tags/v')", self.jobs["docker-publish"])
+
+    def test_actual_docker_step_pushes_only_sha_and_channel_tag(self):
+        body = self.jobs["docker-publish"]
+        script = body.split("        run: |\n", 1)[1]
+        script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
+        docker = self.root / "docker"
+        docker.write_text(
+            "#!"
+            + sys.executable
+            + "\nimport json,os,sys\nwith open(os.environ['DOCKER_LOG'],'a') as stream: stream.write(json.dumps(sys.argv[1:])+'\\n')\n"
+        )
+        docker.chmod(0o700)
+        log = self.root / "docker-log"
+        for channel, tag, expected in [
+            ("stable", "v0.2.0", "latest"),
+            ("rc", "v0.2.0-rc.1", "v0.2.0-rc.1"),
+        ]:
+            log.write_text("")
+            environment = {
+                **os.environ,
+                "PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                "GITHUB_SHA": SHA,
+                "CHANNEL": channel,
+                "RELEASE_TAG": tag,
+                "DOCKER_LOG": str(log),
+            }
+            # Execute the workflow's real shell with an owned recording Docker stub.
+            result = subprocess.run(  # noqa: S603 -- fixed shell and checked-in workflow, with an owned Docker stub.
+                ["/bin/bash", "-euo", "pipefail", "-c", script],
+                env=environment,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            pushes = [call[1] for call in calls if call[0] == "push"]
+            self.assertEqual(
+                pushes,
+                [
+                    f"ghcr.io/squid-proxy-lovers/ccp:{SHA}",
+                    f"ghcr.io/squid-proxy-lovers/ccp:{expected}",
+                ],
+            )
+
+
 class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
