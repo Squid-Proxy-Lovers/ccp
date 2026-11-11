@@ -49,6 +49,7 @@ $profileDirectory = Join-Path $testRoot 'profile with spaces'
 $InstallDir = Join-Path $profileDirectory 'bin'
 $script:NativeCalls = [Collections.Generic.List[object]]::new()
 $script:RejectAttestation = $false
+$script:RejectCodex = $false
 $script:DownloadUrls = [Collections.Generic.List[string]]::new()
 $savedEnvironment = @{}
 foreach ($name in @('OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'Path')) {
@@ -69,6 +70,10 @@ function Invoke-CcpNative {
     param([string]$Executable, [string[]]$ArgumentList)
     $script:NativeCalls.Add(@{ Executable = $Executable; Arguments = $ArgumentList })
     if ($Executable -eq 'gh' -and $script:RejectAttestation) { throw 'Fixture attestation failure.' }
+    if ($Executable -eq 'codex') {
+        if ($script:RejectCodex) { throw 'Fixture interrupted Codex update.' }
+        [IO.File]::AppendAllText((Join-Path $env:CODEX_HOME 'config.toml'), "`n[mcp_servers.ccp]`ncommand = 'fixture'`n")
+    }
     if ($ArgumentList -contains 'venv') {
         $scripts = Join-Path $ArgumentList[-1] 'Scripts'
         New-Item -ItemType Directory -Force -Path $scripts | Out-Null
@@ -189,6 +194,21 @@ try {
     Confirm-TestCondition ($claude.other -eq 'keep') 'Unrelated host setting was lost.'
     Confirm-TestCondition ($claude.mcpServers.ccp.env.CCP_CLIENT_BIN -eq (Join-Path $InstallDir 'ccp-client.exe')) 'MCP client path was not encoded correctly.'
     Confirm-TestCondition ($script:NativeCalls.Executable -contains 'codex') 'Codex MCP command was not called.'
+    $claudeBackup = @(Get-ChildItem -LiteralPath $profileDirectory -Force -Filter '.claude.json.backup.*')
+    Confirm-TestCondition ($claudeBackup.Count -eq 1) 'Claude config backup was not written.'
+    Confirm-TestCondition (([IO.File]::ReadAllText($claudeBackup[0].FullName)) -eq '{"other":"keep"}') 'Claude backup differs from the original bytes.'
+    $codexDirectory = Join-Path $profileDirectory '.codex'
+    $codexPath = Join-Path $codexDirectory 'config.toml'
+    $codexBackup = @(Get-ChildItem -LiteralPath $codexDirectory -Filter 'config.toml.backup.*')
+    Confirm-TestCondition ($codexBackup.Count -eq 1) 'Codex config backup was not written.'
+    Confirm-TestCondition (([IO.File]::ReadAllText($codexBackup[0].FullName)) -eq '# keep') 'Codex backup differs from the original bytes.'
+    Confirm-TestCondition ((Get-Content -LiteralPath $codexPath -Raw).Contains('# keep')) 'Codex lost unrelated configuration.'
+    $beforeInterruptedConfig = [IO.File]::ReadAllText($codexPath)
+    $script:RejectCodex = $true
+    Confirm-TestFailure { Set-CcpCodexConfig $codexPath 'fixture' 'fixture' } 'Interrupted Codex update was accepted.'
+    $script:RejectCodex = $false
+    Confirm-TestCondition (([IO.File]::ReadAllText($codexPath)) -eq $beforeInterruptedConfig) 'Interrupted update replaced the existing Codex config.'
+    Confirm-TestCondition (@(Get-ChildItem -LiteralPath $codexDirectory -Filter 'ccp-codex-*').Count -eq 0) 'Interrupted update leaked staging files.'
     $pipCalls = @($script:NativeCalls | Where-Object { $_.Arguments -contains 'pip' })
     Confirm-TestCondition ($pipCalls[0].Executable.EndsWith((Join-Path 'Scripts' 'python.exe'))) 'MCP did not use the venv Python.'
     $downloadedClient = Join-Path $fixture $CcpClientAsset

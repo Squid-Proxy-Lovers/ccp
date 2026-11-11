@@ -190,6 +190,34 @@ function Install-CcpMcp {
     return $command
 }
 
+function Backup-CcpConfig {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+    $backup = "$Path.backup.$stamp.$([Guid]::NewGuid().ToString('N'))"
+    [IO.File]::Copy($Path, $backup, $false)
+}
+
+function Set-CcpCodexConfig {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Path, [string]$McpCommand, [string]$Client)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Configure CCP')) { return }
+    $stage = Join-Path (Split-Path -Parent $Path) "ccp-codex-$([Guid]::NewGuid().ToString('N'))"
+    $savedHome = $env:CODEX_HOME
+    New-Item -ItemType Directory -Path $stage | Out-Null
+    try {
+        $stagedConfig = Join-Path $stage 'config.toml'
+        [IO.File]::Copy($Path, $stagedConfig, $false)
+        $env:CODEX_HOME = $stage
+        Invoke-CcpNative 'codex' @('mcp', 'add', 'ccp', '--env', "CCP_CLIENT_BIN=$Client", '--', $McpCommand)
+        Backup-CcpConfig $Path
+        Publish-CcpFile $stagedConfig $Path
+    } finally {
+        [Environment]::SetEnvironmentVariable('CODEX_HOME', $savedHome, 'Process')
+        Remove-Item -LiteralPath $stage -Recurse -Force
+    }
+}
+
 function Set-CcpJsonHost {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Path, [string]$McpCommand, [string]$Client)
@@ -214,6 +242,7 @@ function Set-CcpJsonHost {
     try {
         $json = $config | ConvertTo-Json -Depth 100 -WarningAction Stop
         [IO.File]::WriteAllText($stage, $json, [Text.UTF8Encoding]::new($false))
+        Backup-CcpConfig $Path
         Publish-CcpFile $stage $Path
     } finally {
         if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage }
@@ -250,7 +279,7 @@ function Set-CcpMcpHost {
             return
         }
         # Let the host parse and write TOML; never interpolate Windows paths into it.
-        Invoke-CcpNative 'codex' @('mcp', 'add', 'ccp', '--env', "CCP_CLIENT_BIN=$Client", '--', $McpCommand)
+        Set-CcpCodexConfig $codexConfig $McpCommand $Client
         Write-Information -InformationAction Continue 'Codex MCP configured.'
     } catch { Write-Warning 'Codex MCP not configured: codex mcp add failed or is unavailable.' }
 }

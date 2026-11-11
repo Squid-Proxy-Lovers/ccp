@@ -61,7 +61,10 @@ configurations and to detected Cursor configurations. Codex configuration requir
 `codex mcp add` on PATH. Existing CCP host entries are retained with a reminder to
 check their paths. Missing hosts, configuration failures, and retained entries are
 reported honestly; restart configured MCP hosts to load the tools. Unrelated JSON
-host settings are preserved. A bridge installation failure can leave the already
+host settings are preserved. Before modifying an existing JSON or Codex config,
+the installer saves a timestamped `.backup.*` copy beside it. Codex edits use a
+staged `CODEX_HOME` and publish the result atomically; a failed edit retains the
+original config. A bridge installation failure can leave the already
 verified client installed; re-running retries bridge setup.
 
 Client state defaults to `%USERPROFILE%\.ccp-client` when `HOME` is absent. `HOME`
