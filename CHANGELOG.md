@@ -18,6 +18,14 @@
 - An optional WebSocket server carrier, off by default. Client support is not
   included, so treat it as experimental.
 
+### Release candidates
+
+- RC publication marks GitHub releases as prereleases and keeps stable downloads
+  and the Docker `:latest` tag unchanged. Docker publishing requires successful
+  version validation and provenance verification.
+- Testers can install matching verified client/MCP assets or pin an exact RC
+  Docker image; see [RC installation](docs/client-release-bundles.md#install-a-release-candidate).
+
 ### Security
 
 - Bundled SQLite is now 3.54.1 (rusqlite 0.41.1), fixing RUSTSEC-2026-0459.

@@ -34,13 +34,68 @@ python3 scripts/release_contract.py --directory release-stage \
 Supported platform names are `linux-x86_64`, `linux-aarch64`, `darwin-x86_64` and
 `darwin-aarch64`. For a dated nightly, use its exact
 `nightly-YYYY-MM-DD-<12-character-SHA>` tag and `--channel nightly`. The source
-commit in the manifest must match that tag's SHA prefix. A stable tag must equal
-`v` followed by the matching package version. No moving `latest` or `nightly`
-selector is accepted by this verification command.
+commit in the manifest must match that tag's SHA prefix. Stable and RC tags must
+equal `v` followed by the matching Rust/manifest version, with `--channel rc`
+required for an RC. No moving `latest` or `nightly` selector is accepted by this
+verification command.
 
 Successful output is public JSON metadata. A failed check exits nonzero without
 installing software. Keep the staged client, manifest, provenance and MCP archive
 together. This command verifies files; it does not activate a bundle.
+
+## Install a release candidate
+
+RCs require an explicit tag. Once `v0.2.0-rc.1` is published, run these commands
+from a checkout containing this verifier, with Python 3.10+ and GitHub CLI
+installed. This example selects macOS ARM64; change both platform occurrences
+for another supported client platform:
+
+```bash
+mkdir ccp-rc-stage
+gh release download v0.2.0-rc.1 --repo github.com/Squid-Proxy-Lovers/ccp \
+  --dir ccp-rc-stage --pattern ccp-release.json --pattern ccp-provenance.json \
+  --pattern ccp-client-darwin-aarch64 --pattern ccp-mcp.tar.gz \
+  --pattern build-info.json
+python3 scripts/release_contract.py --directory ccp-rc-stage \
+  --channel rc --tag v0.2.0-rc.1 --platform darwin-aarch64
+```
+
+Continue only if verification succeeds. Install the verified client and the MCP
+archive from that same release in a separate test directory:
+
+```bash
+mkdir -p "$HOME/.local/share/ccp-rc/v0.2.0-rc.1/bin"
+install -m 755 ccp-rc-stage/ccp-client-darwin-aarch64 \
+  "$HOME/.local/share/ccp-rc/v0.2.0-rc.1/bin/ccp"
+python3 -m venv "$HOME/.local/share/ccp-rc/v0.2.0-rc.1/venv"
+"$HOME/.local/share/ccp-rc/v0.2.0-rc.1/venv/bin/python" -m pip install \
+  ./ccp-rc-stage/ccp-mcp.tar.gz
+```
+
+Point the MCP host at
+`~/.local/share/ccp-rc/v0.2.0-rc.1/venv/bin/ccp-workspace-mcp` and set its
+`CCP_CLIENT_BIN` to the absolute path of the matching `bin/ccp`. Keep the host's
+workspace configuration as described in the [MCP guide](workspace-mcp.md).
+Rust binaries, the manifest and tag identify `0.2.0-rc.1`; Python package metadata
+identifies the exact corresponding version as `0.2.0rc1`.
+
+For a Docker server, pin the exact RC image:
+
+```bash
+docker pull ghcr.io/squid-proxy-lovers/ccp:v0.2.0-rc.1
+docker run --rm -it -p 127.0.0.1:8443:8443 -p 127.0.0.1:8444:8444 \
+  -v ccp-rc-data:/var/lib/ccp/server \
+  ghcr.io/squid-proxy-lovers/ccp:v0.2.0-rc.1
+```
+
+Follow the [first-boot setup](workspace-foundation.md#start-an-instance-in-one-command)
+using the setup URL printed by the container.
+
+RC publication creates a GitHub prerelease excluded from the default download,
+and publishes only the full commit-SHA image and exact RC image tag. Stable
+installers and managed stable discovery do not select RCs. RCs never move
+`:latest` or `:nightly`. The normal installer has no RC channel; use the explicit
+verified download above.
 
 ## Understand publisher verification
 
@@ -55,8 +110,8 @@ to the same manifest as the client binaries.
 The verifier invokes GitHub CLI using private copies of the exact parsed manifest
 and bundle. Policy fixes the GitHub hostname, canonical repository spelling,
 exact workflow certificate identity and OIDC issuer, source ref/commit, signer
-commit and GitHub-hosted runner requirement. Stable builds must come from their
-exact version tag; nightly builds must come from `refs/heads/main`.
+commit and GitHub-hosted runner requirement. Stable and RC builds must come from
+their exact version tag; nightly builds must come from `refs/heads/main`.
 GitHub documents the [attestation mechanism](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations)
 and [CLI policy flags](https://cli.github.com/manual/gh_attestation_verify).
 
@@ -78,14 +133,20 @@ contracts require a manual decision.
 
 ## Publication boundary
 
+Before attestation or publication, version tags must be exactly `vX.Y.Z` or
+`vX.Y.Z-rc.N` and match all source package versions. Docker version-tag
+publication also waits for identity validation and provenance; only validated
+stable tags move `:latest`. Main pushes run checks without moving that alias.
+
 Packaging produces the manifest beside the existing binaries, matching MCP
 archive, build metadata and checksums. A separate provenance job runs only for
 the official repository's version-tag pushes or approved main nightly triggers.
 PR packaging retains read-only permissions; only the event/ref-gated provenance job
 receives OIDC/attestation write permissions. The pinned official attestation
 action signs the manifest, and the job verifies publisher policy before making
-the bundle available to the publishers. Stable and nightly publication both wait
-for that job and attach its bundle. Failed verification leaves publication blocked.
+the bundle available to the publishers. Stable, RC and nightly publication all
+wait for that job and attach its bundle. Failed verification leaves publication
+blocked.
 
 This workflow configuration has local regression/lint coverage. A successful
 hosted attestation and publication must still be demonstrated when the approved
