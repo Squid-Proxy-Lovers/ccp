@@ -22,21 +22,22 @@ in [release bundle verification](client-release-bundles.md). Verification requir
 GitHub access and any GitHub CLI authentication needed by your environment.
 
 ```powershell
-irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/842bf6043fb9951734e7930513c9be50398bfc8c/install.ps1 | iex
+irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1 | iex
 ```
 
-The immutable URL pins the bootstrap bytes to the reviewed commit. Fetching and
-running that script trusts GitHub transport and the repository content at that
-commit; the bootstrap itself is not attestation-verified before it runs. The
-script then authenticates every installed release component as described below.
-Review a replacement bootstrap commit before changing this URL.
+The versioned URL pins the bootstrap bytes to a release tag, signed and immutable
+by project policy. Fetching and running that script trusts GitHub transport and
+the repository content at that tag; the bootstrap itself is not
+attestation-verified before it runs. The script then authenticates every installed
+release component as described below.
+Review a replacement release before changing this URL.
 
 This selects the latest stable release from the official GitHub repository.
 To select the latest published nightly, or pin a dated nightly, invoke the same
 script with parameters:
 
 ```powershell
-$installer = irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/842bf6043fb9951734e7930513c9be50398bfc8c/install.ps1
+$installer = irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1
 & ([scriptblock]::Create($installer)) -Channel nightly
 # Pinning also requires -Channel nightly:
 # & ([scriptblock]::Create($installer)) -Channel nightly -Version nightly-YYYY-MM-DD-<12-character-SHA>

@@ -181,6 +181,14 @@ compatibility with `PROTOCOL_VERSION` in `crates/protocol/src/lib.rs`, and datab
 compatibility with `SCHEMA_VERSION` in `crates/server/src/init.rs`. Change those
 when the corresponding contract changes, and document migration requirements.
 
+### Release bootstrap checklist
+
+When bumping the shared workspace and MCP version for a release, update the
+Windows bootstrap URLs in `README.md` and `docs/client.md` to the matching
+`vX.Y.Z` release tag in the same change. Release tags are signed and immutable
+by project policy. Keep the documented tag aligned with the source version;
+the installer fixture checks this relationship and rejects moving `main` URLs.
+
 ## Documentation changes
 
 Follow the [writing guide](docs/writing.md): task-first structure, clear headings,

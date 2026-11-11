@@ -52,13 +52,14 @@ On x86_64 Windows, use PowerShell 5.1 or newer with Python 3.10+ (`python` on
 PATH) and a recent GitHub CLI (`gh`) that supports attestation verification:
 
 ```powershell
-irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/842bf6043fb9951734e7930513c9be50398bfc8c/install.ps1 | iex
+irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1 | iex
 ```
 
-This URL pins the bootstrap to an immutable commit for review. The bootstrap
-script is trusted when fetched; its own execution precedes attestation checks.
+This URL pins the bootstrap to a release tag, signed and immutable by project
+policy. The bootstrap script is trusted when fetched; its own execution precedes
+attestation checks.
 Everything it installs is verified against the authenticated release manifest.
-Review a new bootstrap revision before changing the pinned URL.
+Review a new release before changing the pinned URL.
 
 The installer requires an official release containing the Windows client and
 signed manifest. It refuses older releases without those assets. The authenticated

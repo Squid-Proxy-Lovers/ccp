@@ -59,6 +59,11 @@ function Confirm-TestCondition {
     param([bool]$Condition, [string]$Message)
     if (-not $Condition) { throw $Message }
 }
+function Test-CcpBootstrapRef {
+    param([string]$Ref, [string]$SourceVersion)
+    return ($Ref -cmatch '^[0-9a-f]{40}$' -or
+        ($Ref -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and $Ref -ceq "v$SourceVersion"))
+}
 function Confirm-TestFailure {
     param([scriptblock]$Action, [string]$Message)
     $failed = $false
@@ -136,9 +141,17 @@ try {
     }
     Confirm-TestCondition ($manifest.artifacts.Count -eq 11) 'Fixture differs from the release producer inventory.'
     Confirm-TestCondition ($manifest.platforms.Count -eq 5) 'Fixture is missing real release platforms.'
+    Confirm-TestCondition (Test-CcpBootstrapRef ('a' * 40) '1.2.3') 'Full commit SHA was rejected.'
+    Confirm-TestCondition (Test-CcpBootstrapRef 'v1.2.3' '1.2.3') 'Matching release tag was rejected.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v1.2.3' '1.2.4')) 'Mismatched release tag was accepted.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'main' '1.2.3')) 'Moving main ref was accepted.'
     foreach ($document in @('README.md', 'docs/client.md')) {
         $instructions = Get-Content -LiteralPath (Join-Path $root $document) -Raw
-        Confirm-TestCondition ($instructions -cmatch 'https://raw.githubusercontent.com/squid-proxy-lovers/ccp/[0-9a-f]{40}/install.ps1') 'Bootstrap instructions are not pinned to an immutable commit.'
+        $urls = [regex]::Matches($instructions, 'https://raw\.githubusercontent\.com/squid-proxy-lovers/ccp/([^/\s]+)/install\.ps1')
+        Confirm-TestCondition ($urls.Count -gt 0) 'Bootstrap instructions are missing a pinned URL.'
+        foreach ($url in $urls) {
+            Confirm-TestCondition (Test-CcpBootstrapRef $url.Groups[1].Value $packaged.package_version) 'Bootstrap ref must be a full SHA or a release tag matching the source version.'
+        }
         Confirm-TestCondition (-not $instructions.Contains('/ccp/main/install.ps1')) 'Bootstrap instructions still execute the moving main branch.'
     }
     [IO.File]::WriteAllText((Join-Path $fixture 'ccp-provenance.json'), 'fixture attestation')
