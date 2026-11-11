@@ -104,6 +104,65 @@ jobs:
           python tests/mcp_smoke.py
           python tests/workspace_mcp_smoke.py
 
+  windows-client:
+    needs: [test]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      # The client's server dev-dependency embeds the panel during tests.
+      - name: Build embedded panel from locked source
+        shell: pwsh
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix crates/server/web run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CCP_PANEL_DIST=$env:GITHUB_WORKSPACE/crates/server/web/dist" >> $env:GITHUB_ENV
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          target: x86_64-pc-windows-msvc
+          build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Client tests
+        run: cargo test --package client --locked -- --test-threads=1
+      - name: Build Windows client only
+        run: cargo build --release --locked -p client --target x86_64-pc-windows-msvc
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Lint PowerShell installer and regressions
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          $issues = @(Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error)
+          $issues += @(Invoke-ScriptAnalyzer -Path tests/windows_install.ps1 -Severity Warning,Error)
+          if ($issues.Count) { $issues | Format-Table; throw 'PowerShell lint failed' }
+      - name: Isolated installer regressions on PowerShell 7
+        shell: pwsh
+        run: ./tests/windows_install.ps1
+      - name: Isolated installer regressions on Windows PowerShell 5.1
+        shell: powershell
+        run: ./tests/windows_install.ps1
+      - name: Package Windows client
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/client.exe dist/ccp-client-windows-x86_64.exe
+      # Keep separate from binaries-* until the release contract registers the
+      # client-only windows-x86_64 platform (manifest forward-compatibility PR).
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ccp-client-windows-x86_64
+          retention-days: 1
+          path: dist/ccp-client-windows-x86_64.exe
+          if-no-files-found: error
+
   clippy:
     runs-on: ubuntu-latest
     steps:
@@ -344,7 +403,7 @@ jobs:
           python tests/workspace_mcp_smoke.py
 
   build:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client, windows-client]
     strategy:
       matrix:
         include:
@@ -495,7 +554,7 @@ jobs:
           generate_release_notes: true
 
   docker:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client, windows-client]
     runs-on: ubuntu-latest
     permissions:
       contents: read
