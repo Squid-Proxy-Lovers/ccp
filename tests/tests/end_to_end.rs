@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+use anyhow::Context as _;
 use reqwest::StatusCode;
 use serde_json::Value;
 
@@ -251,18 +252,22 @@ async fn mtls_endpoint_rejects_requests_without_client_certificates() -> anyhow:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn repeated_revoke_over_mtls_keeps_the_client_refused() -> anyhow::Result<()> {
-    let server = TestServer::start().await?;
-    let victim = server.enroll_read_write().await?;
-    let admin_token = server.issue_token("admin")?;
-    let admin = server.redeem_token(&admin_token.token).await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let server = TestServer::start().await?;
+        let victim = server.enroll_read_write().await?;
+        let admin_token = server.issue_token("admin")?;
+        let admin = server.redeem_token(&admin_token.token).await?;
 
-    victim.list().await?;
-    admin.revoke(&victim.client_cn).await?;
-    assert!(victim.list().await.is_err());
+        victim.list().await?;
+        admin.revoke(&victim.client_cn).await?;
+        assert!(victim.list().await.is_err());
 
-    assert!(admin.revoke(&victim.client_cn).await.is_err());
-    assert!(victim.list().await.is_err());
-    Ok(())
+        assert!(admin.revoke(&victim.client_cn).await.is_err());
+        assert!(victim.list().await.is_err());
+        Ok(())
+    })
+    .await
+    .context("repeated revoke mTLS test exceeded its 30-second deadline")?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -287,8 +292,9 @@ async fn concurrent_self_revokes_over_mtls_leave_the_client_refused() -> anyhow:
             }
             let mut successes = 0;
             for task in tasks {
-                let response =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), task).await??;
+                let response = tokio::time::timeout(std::time::Duration::from_secs(5), task)
+                    .await
+                    .context("concurrent self-revoke task exceeded its 5-second deadline")??;
                 if matches!(response?, ServerResponse::CertRevoked(_)) {
                     successes += 1;
                 }
@@ -299,7 +305,8 @@ async fn concurrent_self_revokes_over_mtls_leave_the_client_refused() -> anyhow:
         }
         Ok(())
     })
-    .await?
+    .await
+    .context("concurrent self-revoke mTLS test exceeded its 30-second deadline")?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
