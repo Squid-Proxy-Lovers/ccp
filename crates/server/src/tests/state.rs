@@ -3281,3 +3281,59 @@ async fn export_audit_waits_for_checkpoint_boundary() {
     );
     assert_eq!(bundle.session.session_id, sid);
 }
+
+#[tokio::test]
+async fn replay_after_snapshot_does_not_duplicate_append() {
+    let ctx = TestContext::new("val-crash-dup").await.unwrap();
+    let sid = ctx.session_id;
+    let a = writer(sid, "client-a");
+    ctx.state.add_shelf(sid, "shelf", "", &a).await.unwrap();
+    ctx.state
+        .add_book(sid, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(sid, "e", "", &[], "base", "shelf", "book", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .append_to_entry(
+            sid,
+            "e",
+            Some("shelf"),
+            Some("book"),
+            &a,
+            " +once",
+            AppendMetadata {
+                agent_name: None,
+                host_name: None,
+                reason: None,
+            },
+        )
+        .await
+        .unwrap();
+    ctx.journal.shutdown().unwrap();
+    // checkpoint step 1 only (persist), then "crash" before truncate
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    let sessions = reloaded.sessions.read().await;
+    let entry = sessions
+        .get(&sid)
+        .unwrap()
+        .entries
+        .get("shelf::book::e")
+        .unwrap();
+    assert_eq!(
+        entry.context, "base\n +once",
+        "replay replaced persisted append context"
+    );
+    assert_eq!(
+        entry.history.len(),
+        1,
+        "history rows after replay: {} ; context={:?}",
+        entry.history.len(),
+        entry.context
+    );
+}

@@ -116,11 +116,12 @@ impl ServerState {
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
                     let (path, key) = entry_path_for(&name, Some(&shelf_name), Some(&book_name));
-                    let history = session
-                        .entries
-                        .get(&key)
-                        .map(|entry| entry.history.clone())
-                        .unwrap_or_default();
+                    // A create already represented in the snapshot must not
+                    // replace its newer context before append deduplication.
+                    if session.entries.contains_key(&key) {
+                        return;
+                    }
+                    let history = Vec::new();
                     let entry = session.build_entry(
                         path,
                         description,
@@ -160,6 +161,13 @@ impl ServerState {
                 let Some(entry) = session.entries.get_mut(&key) else {
                     return;
                 };
+                if entry
+                    .history
+                    .iter()
+                    .any(|item| item.operation_id == operation_id)
+                {
+                    return;
+                }
                 SessionCache::refresh_appended_context(entry, &appended_content);
                 entry.updated_at = created_at.clone();
                 entry.history.push(MessageHistoryEntry {
