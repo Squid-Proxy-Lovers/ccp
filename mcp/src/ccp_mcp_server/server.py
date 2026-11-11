@@ -4,16 +4,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
-import re
 import shutil
-import signal
-import socket
 import sqlite3
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,10 +30,7 @@ DEFAULT_CLIENT_HOME = Path.home() / ".ccp-client"
 DEFAULT_SERVER_HOME = Path.home() / ".ccp-mcp"
 ENROLLMENTS_DIR_NAME = "enrollments"
 SERVER_RUNTIME_DIR_NAME = "servers"
-SERVER_RUNTIME_LOG_NAME = "server.log"
 SERVER_RUNTIME_METADATA_NAME = "runtime.json"
-SERVER_READY_TIMEOUT_SECONDS = 15.0
-SERVER_STOP_TIMEOUT_SECONDS = 10.0
 
 mcp = FastMCP(
     "ccp",
@@ -185,22 +177,6 @@ def _server_runtime_root() -> Path:
     return _server_home() / SERVER_RUNTIME_DIR_NAME
 
 
-def _session_slug(session_name: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", "-", session_name.lower()).strip("-")
-    if not normalized:
-        normalized = "session"
-    digest = hashlib.sha256(session_name.encode("utf-8")).hexdigest()[:8]
-    return f"{normalized}-{digest}"
-
-
-def _runtime_dir_for_session(session_name: str) -> Path:
-    return _server_runtime_root() / _session_slug(session_name)
-
-
-def _runtime_metadata_path(session_name: str) -> Path:
-    return _runtime_dir_for_session(session_name) / SERVER_RUNTIME_METADATA_NAME
-
-
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -245,41 +221,6 @@ def _pid_is_running(pid: int | None) -> bool:
     return True
 
 
-def _reserve_local_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return int(sock.getsockname()[1])
-
-
-def _wait_for_tcp_listener(host: str, port: int, timeout_seconds: float) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return True
-        except OSError:
-            time.sleep(0.1)
-    return False
-
-
-def _parse_host_port(address: str) -> tuple[str, int]:
-    if address.startswith("["):
-        end = address.find("]")
-        if end == -1:
-            raise CCPServerError(f"invalid listener address: {address}")
-        host = address[1:end]
-        port_text = address[end + 1 :]
-        if not port_text.startswith(":"):
-            raise CCPServerError(f"invalid listener address: {address}")
-        return host, int(port_text[1:])
-
-    host, separator, port_text = address.rpartition(":")
-    if separator != ":" or not host or not port_text:
-        raise CCPServerError(f"invalid listener address: {address}")
-    return host, int(port_text)
-
-
 def _load_runtime_auth_info(record: dict[str, Any]) -> dict[str, Any]:
     data_dir = Path(record["data_dir"])
     db_path = data_dir / "ccp.sqlite3"
@@ -296,10 +237,6 @@ def _load_runtime_auth_info(record: dict[str, Any]) -> dict[str, Any]:
         "auth_redeem_url": f"{auth_base_url}/auth/redeem",
     }
     return info
-
-
-def _session_db_path(record: dict[str, Any]) -> Path:
-    return Path(record["data_dir"]) / "ccp.sqlite3"
 
 
 def _query_session_id(db_path: Path, session_name: str) -> int | None:
@@ -392,256 +329,11 @@ def _list_runtime_records() -> list[dict[str, Any]]:
     return records
 
 
-def _find_runtime_record_raw(session: str) -> dict[str, Any] | None:
-    root = _server_runtime_root()
-    if not root.exists():
-        return None
-    for child in sorted(root.iterdir()):
-        if not child.is_dir():
-            continue
-        record = _load_runtime_record(child / SERVER_RUNTIME_METADATA_NAME)
-        if record is None:
-            continue
-        if record["session_name"] == session or record["session_slug"] == session:
-            return _refresh_runtime_record(record)
-    return None
-
-
-def _find_runtime_record(session: str) -> dict[str, Any] | None:
-    for record in _list_runtime_records():
-        if record["session_name"] == session or record["session_slug"] == session:
-            return record
-    return None
-
-
 def _filter_records(records: list[dict[str, Any]], filter_text: str | None) -> list[dict[str, Any]]:
     if not filter_text:
         return records
     needle = filter_text.lower()
     return [record for record in records if needle in json.dumps(record, sort_keys=True).lower()]
-
-
-def _rename_session_metadata(record: dict[str, Any], new_session_name: str) -> None:
-    db_path = _session_db_path(record)
-    if not db_path.exists():
-        raise CCPServerError(f"missing session database at {db_path}")
-
-    with sqlite3.connect(db_path) as connection:
-        row = connection.execute("SELECT id FROM sessions ORDER BY id LIMIT 1").fetchone()
-        if row is None:
-            raise CCPServerError(f"no session row found in {db_path}")
-        connection.execute(
-            "UPDATE sessions SET name = ? WHERE id = ?",
-            (new_session_name, int(row[0])),
-        )
-        connection.commit()
-
-    binding_path = Path(record["data_dir"]) / "active_session.json"
-    if binding_path.exists():
-        binding = json.loads(binding_path.read_text(encoding="utf-8"))
-        binding["session_name"] = new_session_name
-        binding_path.write_text(
-            json.dumps(binding, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-
-
-def _read_log_tail(log_path: Path, lines: int) -> str:
-    if lines <= 0:
-        raise CCPServerError("lines must be greater than zero")
-    if not log_path.exists():
-        return ""
-    content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return "\n".join(content[-lines:])
-
-
-def _build_runtime_record(
-    session_name: str,
-    auth_listener_addr: str | None = None,
-    mtls_listener_addr: str | None = None,
-    auth_base_url: str | None = None,
-    mtls_base_url: str | None = None,
-) -> dict[str, Any]:
-    runtime_dir = _runtime_dir_for_session(session_name)
-    data_dir = runtime_dir / "data"
-    log_path = runtime_dir / SERVER_RUNTIME_LOG_NAME
-    metadata_path = runtime_dir / SERVER_RUNTIME_METADATA_NAME
-    if auth_listener_addr is None:
-        auth_port = _reserve_local_port()
-        auth_listener_addr = f"127.0.0.1:{auth_port}"
-    else:
-        _, auth_port = _parse_host_port(auth_listener_addr)
-
-    if mtls_listener_addr is None:
-        mtls_port = _reserve_local_port()
-        while mtls_port == auth_port:
-            mtls_port = _reserve_local_port()
-        mtls_listener_addr = f"127.0.0.1:{mtls_port}"
-    else:
-        _, mtls_port = _parse_host_port(mtls_listener_addr)
-
-    if auth_base_url is None:
-        auth_base_url = f"http://127.0.0.1:{auth_port}"
-    if mtls_base_url is None:
-        mtls_base_url = f"https://localhost:{mtls_port}"
-
-    return {
-        "session_name": session_name,
-        "session_slug": _session_slug(session_name),
-        "status": "starting",
-        "pid": None,
-        "started_at": _utc_now(),
-        "auth_port": auth_port,
-        "mtls_port": mtls_port,
-        "auth_listener_addr": auth_listener_addr,
-        "mtls_listener_addr": mtls_listener_addr,
-        "auth_base_url": auth_base_url,
-        "mtls_base_url": mtls_base_url,
-        "runtime_dir": str(runtime_dir),
-        "data_dir": str(data_dir),
-        "log_path": str(log_path),
-        "metadata_path": str(metadata_path),
-    }
-
-
-def _start_subprocess(
-    command: LocalCommand, session_name: str, record: dict[str, Any]
-) -> subprocess.Popen[str]:
-    runtime_dir = Path(record["runtime_dir"])
-    runtime_dir.mkdir(parents=True, exist_ok=True)
-    Path(record["data_dir"]).mkdir(parents=True, exist_ok=True)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "CCP_SERVER_DATA_DIR": record["data_dir"],
-            "CCP_AUTH_BASE_URL": record["auth_base_url"],
-            "CCP_MTLS_BASE_URL": record["mtls_base_url"],
-            "CCP_AUTH_LISTENER_ADDR": record["auth_listener_addr"],
-            "CCP_MTLS_LISTENER_ADDR": record["mtls_listener_addr"],
-            "CCP_AUTO_ISSUE_INITIAL_TOKENS": "0",
-        }
-    )
-
-    kwargs: dict[str, Any] = {
-        "args": [*command.argv, session_name],
-        "cwd": str(SERVER_DIR),
-        "env": env,
-        "stderr": subprocess.STDOUT,
-        "text": True,
-    }
-    if sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-    else:
-        kwargs["start_new_session"] = True
-
-    with Path(record["log_path"]).open("a", encoding="utf-8") as log_handle:
-        kwargs["stdout"] = log_handle
-        return subprocess.Popen(**kwargs)
-
-
-def _run_server_admin(record: dict[str, Any], *args: str) -> dict[str, Any]:
-    command = _resolve_server_command()
-    env = os.environ.copy()
-    env.update(
-        {
-            "CCP_SERVER_DATA_DIR": record["data_dir"],
-            "CCP_AUTH_BASE_URL": record["auth_base_url"],
-            "CCP_MTLS_BASE_URL": record["mtls_base_url"],
-            "CCP_AUTH_LISTENER_ADDR": record["auth_listener_addr"],
-            "CCP_MTLS_LISTENER_ADDR": record["mtls_listener_addr"],
-            "CCP_AUTO_ISSUE_INITIAL_TOKENS": "0",
-        }
-    )
-    # Execute trusted local command argv without a shell; tool text stays in arguments.
-    process = subprocess.run(  # noqa: S603
-        [*command.argv, *args],
-        cwd=str(SERVER_DIR),
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if process.returncode != 0:
-        detail = (process.stderr or process.stdout).strip() or "unknown server admin failure"
-        raise CCPServerError(detail)
-    output = process.stdout.strip()
-    if not output:
-        return {}
-    result: dict[str, Any] = json.loads(output)
-    return result
-
-
-def _wait_for_server_ready(
-    record: dict[str, Any], timeout_seconds: float = SERVER_READY_TIMEOUT_SECONDS
-) -> None:
-    pid = record.get("pid")
-    deadline = time.monotonic() + timeout_seconds
-    auth_host = "127.0.0.1"
-    auth_port = int(record["auth_port"])
-    db_path = Path(record["data_dir"]) / "ccp.sqlite3"
-
-    while time.monotonic() < deadline:
-        if not _pid_is_running(pid if isinstance(pid, int) else None):
-            log_tail = _read_log_tail(Path(record["log_path"]), 40)
-            raise CCPServerError(
-                "managed CCP server exited during startup"
-                + (f"\n\nRecent log output:\n{log_tail}" if log_tail else "")
-            )
-        if db_path.exists() and _wait_for_tcp_listener(auth_host, auth_port, 0.25):
-            return
-        time.sleep(0.1)
-
-    raise CCPServerError(f"managed CCP server did not become ready within {timeout_seconds:.1f}s")
-
-
-def _signal_process(pid: int, signum: int) -> None:
-    try:
-        os.kill(pid, signum)
-    except ProcessLookupError:
-        return
-
-
-def _wait_for_process_exit(pid: int, timeout_seconds: float) -> bool:
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        if not _pid_is_running(pid):
-            return True
-        time.sleep(0.1)
-    return not _pid_is_running(pid)
-
-
-def _stop_runtime_record(record: dict[str, Any], force: bool = False) -> dict[str, Any]:
-    pid = record.get("pid")
-    if not isinstance(pid, int) or pid <= 0:
-        record["status"] = "stopped"
-        record.setdefault("stopped_at", _utc_now())
-        _write_runtime_record(Path(record["metadata_path"]), record)
-        return _describe_runtime_record(record)
-
-    if not _pid_is_running(pid):
-        record["status"] = "stopped"
-        record.setdefault("stopped_at", _utc_now())
-        _write_runtime_record(Path(record["metadata_path"]), record)
-        return _describe_runtime_record(record)
-
-    if force:
-        _signal_process(pid, signal.SIGKILL)
-        _wait_for_process_exit(pid, 2.0)
-    else:
-        _signal_process(pid, signal.SIGINT)
-        _wait_for_process_exit(pid, SERVER_STOP_TIMEOUT_SECONDS)
-        if _pid_is_running(pid):
-            _signal_process(pid, signal.SIGTERM)
-            _wait_for_process_exit(pid, 3.0)
-        if _pid_is_running(pid):
-            _signal_process(pid, signal.SIGKILL)
-            _wait_for_process_exit(pid, 2.0)
-
-    record["status"] = "stopped"
-    record["stopped_at"] = _utc_now()
-    _write_runtime_record(Path(record["metadata_path"]), record)
-    return _describe_runtime_record(record)
 
 
 def _load_session_summaries() -> list[dict[str, Any]]:
@@ -771,161 +463,11 @@ def sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
     return _filter_records(_load_session_summaries(), filter_text)
 
 
-def server_sessions(filter_text: str | None = None) -> list[dict[str, Any]]:
-    """List managed CCP server sessions, including stopped sessions."""
-    _require_server_admin()
-
-    return _filter_records(_list_runtime_records(), filter_text)
-
-
-def start_server(
-    session_name: str,
-    auth_listener_addr: str | None = None,
-    mtls_listener_addr: str | None = None,
-    auth_base_url: str | None = None,
-    mtls_base_url: str | None = None,
-) -> dict[str, Any]:
-    """Start or reuse a managed local CCP server for the named session."""
-    _require_server_admin()
-
-    existing = _find_runtime_record(session_name)
-    if existing is not None and existing.get("is_running"):
-        return existing
-
-    command = _resolve_server_command()
-    record = _build_runtime_record(
-        session_name,
-        auth_listener_addr=auth_listener_addr,
-        mtls_listener_addr=mtls_listener_addr,
-        auth_base_url=auth_base_url,
-        mtls_base_url=mtls_base_url,
-    )
-    process = _start_subprocess(command, session_name, record)
-    record["pid"] = process.pid
-    record["status"] = "running"
-    record["command"] = [*command.argv, session_name]
-    _write_runtime_record(Path(record["metadata_path"]), record)
-
-    try:
-        _wait_for_server_ready(record)
-    except Exception:
-        _stop_runtime_record(record, force=True)
-        raise
-    described = _describe_runtime_record(record)
-    return described
-
-
-def stop_server(session: str, force: bool = False) -> dict[str, Any]:
-    """Stop a managed local CCP server by session name or session slug."""
-    _require_server_admin()
-
-    record = _find_runtime_record(session)
-    if record is None:
-        raise CCPServerError(f"no managed CCP server found for session '{session}'")
-    return _stop_runtime_record(record, force=force)
-
-
-def restart_server(session: str, force: bool = False) -> dict[str, Any]:
-    """Restart a managed CCP server by session name or session slug."""
-    _require_server_admin()
-
-    record = _find_runtime_record_raw(session)
-    if record is None:
-        raise CCPServerError(f"no managed CCP server found for session '{session}'")
-    if record.get("is_running"):
-        _stop_runtime_record(record, force=force)
-    return start_server(
-        str(record["session_name"]),
-        auth_listener_addr=record.get("auth_listener_addr"),
-        mtls_listener_addr=record.get("mtls_listener_addr"),
-        auth_base_url=record.get("auth_base_url"),
-        mtls_base_url=record.get("mtls_base_url"),
-    )
-
-
 def running_servers() -> list[dict[str, Any]]:
     """List CCP server processes managed by this MCP bridge."""
     _require_server_admin()
 
     return _list_runtime_records()
-
-
-def tail_server_logs(session: str, lines: int = 200) -> str:
-    """Return the most recent log lines for a managed CCP server."""
-    _require_server_admin()
-
-    record = _find_runtime_record(session)
-    if record is None:
-        raise CCPServerError(f"no managed CCP server found for session '{session}'")
-    return _read_log_tail(Path(record["log_path"]), lines)
-
-
-def rename_session(session: str, new_session_name: str, force: bool = False) -> dict[str, Any]:
-    """Rename a managed CCP session and its runtime directory."""
-    _require_server_admin()
-
-    if not new_session_name.strip():
-        raise CCPServerError("new_session_name must not be empty")
-    if _find_runtime_record_raw(new_session_name) is not None:
-        raise CCPServerError(f"a managed CCP session named '{new_session_name}' already exists")
-
-    record = _find_runtime_record_raw(session)
-    if record is None:
-        raise CCPServerError(f"no managed CCP server found for session '{session}'")
-
-    if record.get("is_running"):
-        _stop_runtime_record(record, force=force)
-
-    _rename_session_metadata(record, new_session_name)
-
-    current_runtime_dir = Path(record["runtime_dir"])
-    target_runtime_dir = _runtime_dir_for_session(new_session_name)
-    if target_runtime_dir.exists() and current_runtime_dir != target_runtime_dir:
-        raise CCPServerError(
-            f"target runtime directory already exists for session '{new_session_name}'"
-        )
-
-    if current_runtime_dir != target_runtime_dir:
-        target_runtime_dir.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(current_runtime_dir), str(target_runtime_dir))
-
-    updated = dict(record)
-    updated["session_name"] = new_session_name
-    updated["session_slug"] = _session_slug(new_session_name)
-    updated["runtime_dir"] = str(target_runtime_dir)
-    updated["data_dir"] = str(target_runtime_dir / "data")
-    updated["log_path"] = str(target_runtime_dir / SERVER_RUNTIME_LOG_NAME)
-    updated["metadata_path"] = str(target_runtime_dir / SERVER_RUNTIME_METADATA_NAME)
-    command = updated.get("command")
-    if isinstance(command, list) and command:
-        command[-1] = new_session_name
-
-    _write_runtime_record(Path(updated["metadata_path"]), updated)
-    return _describe_runtime_record(updated)
-
-
-def delete_session(session: str, force: bool = False) -> dict[str, Any]:
-    """Delete a managed CCP session and remove its local runtime directory."""
-    _require_server_admin()
-
-    record = _find_runtime_record_raw(session)
-    if record is None:
-        raise CCPServerError(f"no managed CCP server found for session '{session}'")
-
-    if record.get("is_running"):
-        _stop_runtime_record(record, force=force)
-
-    runtime_dir = Path(record["runtime_dir"])
-    if runtime_dir.exists():
-        shutil.rmtree(runtime_dir)
-
-    return {
-        "session_name": record["session_name"],
-        "session_slug": record["session_slug"],
-        "runtime_dir": str(runtime_dir),
-        "data_dir": record["data_dir"],
-        "deleted": True,
-    }
 
 
 @mcp.tool()
@@ -1112,34 +654,6 @@ def append_entry(  # noqa: PLR0913
     raise CCPClientError("client returned a non-object payload for append")
 
 
-def delete_entry(
-    session: str,
-    entry_name: str,
-    shelf_name: str | None = None,
-    book_name: str | None = None,
-) -> dict[str, Any]:
-    """Delete a message entry from a session using a read_write enrollment."""
-
-    args = ["delete", session, entry_name]
-    if shelf_name is not None:
-        args.extend(["--shelf", shelf_name])
-    if book_name is not None:
-        args.extend(["--book", book_name])
-    data = _run_client_json(*args)
-    if isinstance(data, dict):
-        return _attach_session_warning(session, data)
-    raise CCPClientError("client returned a non-object payload for delete")
-
-
-def restore_entry(session: str, entry_key: str) -> dict[str, Any]:
-    """Restore a deleted message entry by deleted primary key."""
-
-    data = _run_client_json("restore", session, entry_key)
-    if isinstance(data, dict):
-        return _attach_session_warning(session, data)
-    raise CCPClientError("client returned a non-object payload for restore")
-
-
 @mcp.tool()
 def get_history(
     session: str,
@@ -1196,32 +710,6 @@ def export_bundle(  # noqa: PLR0913
 
     output = _run_client(*args)
     return _attach_session_warning(session, json.loads(output))
-
-
-def import_bundle(
-    session: str,
-    bundle_path: str,
-    policy: str = "error",
-) -> dict[str, Any]:
-    """Import a JSON bundle into a session.
-
-    policy controls collision handling: error (default), overwrite, skip, merge-history.
-    """
-
-    args = ["import", session, bundle_path, "--policy", policy]
-    data = _run_client_json(*args)
-    if isinstance(data, dict):
-        return _attach_session_warning(session, data)
-    raise CCPClientError("client returned a non-object payload for import")
-
-
-def revoke_certificate(session: str, client_common_name: str) -> dict[str, Any]:
-    """Revoke a previously issued client certificate for a session."""
-
-    data = _run_client_json("revoke-cert", session, client_common_name)
-    if isinstance(data, dict):
-        return _attach_session_warning(session, data)
-    raise CCPClientError("client returned a non-object payload for revoke-cert")
 
 
 @mcp.tool()
