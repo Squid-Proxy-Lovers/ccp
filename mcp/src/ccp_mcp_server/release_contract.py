@@ -11,7 +11,7 @@ import re
 import stat
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 
@@ -99,16 +99,22 @@ def platform_names(value: object) -> tuple[str, ...]:
     return names
 
 
-def artifact_entries(value: object) -> dict[str, Artifact]:
+def artifact_entries(value: object) -> tuple[dict[str, Artifact], dict[str, str]]:
     require(isinstance(value, dict), "Invalid release artifacts")
     artifacts: dict[str, Artifact] = {}
+    unknown: dict[str, str] = {}
     for name, entry in cast(dict[str, object], value).items():
         text(name, r"[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*")
+        if name not in ASSETS:
+            # Opaque metadata never supplies a download URL, size limit or executable.
+            # Canonical JSON also distinguishes opaque true/1 and 1/1.0 during equality checks.
+            unknown[name] = json.dumps(entry, sort_keys=True)
+            continue
         item = fields(entry, {"size", "sha256"})
         artifacts[name] = Artifact(
             number(item["size"], MAX_ARTIFACT), text(item["sha256"], "[0-9a-f]{64}")
         )
-    return artifacts
+    return artifacts, unknown
 
 
 @dataclass(frozen=True)
@@ -124,6 +130,7 @@ class Manifest:
     contracts: dict[str, int]
     artifacts: dict[str, Artifact]
     platforms: tuple[str, ...] = PLATFORMS
+    unknown_artifacts: dict[str, str] = field(default_factory=dict)
 
     def value(self) -> dict[str, object]:
         return {
@@ -134,8 +141,11 @@ class Manifest:
             "platforms": list(self.platforms),
             "contracts": self.contracts,
             "artifacts": {
-                name: {"size": item.size, "sha256": item.sha256}
-                for name, item in self.artifacts.items()
+                **{
+                    name: {"size": item.size, "sha256": item.sha256}
+                    for name, item in self.artifacts.items()
+                },
+                **{name: json.loads(raw) for name, raw in self.unknown_artifacts.items()},
             },
         }
 
@@ -185,12 +195,14 @@ def decode(raw: bytes) -> Manifest:
         contracts["client_profile_read_min"] <= contracts["client_profile_write"],
         "Invalid client profile range",
     )
+    artifacts, unknown = artifact_entries(data["artifacts"])
     return Manifest(
         text(data["source_sha"], "[0-9a-f]{40}"),
         text(data["package_version"], r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?"),
         contracts,
-        artifact_entries(data["artifacts"]),
+        artifacts,
         platforms,
+        unknown,
     )
 
 

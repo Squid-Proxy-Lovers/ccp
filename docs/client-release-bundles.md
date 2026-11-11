@@ -61,17 +61,42 @@ GitHub documents the [attestation mechanism](https://docs.github.com/en/actions/
 and [CLI policy flags](https://cli.github.com/manual/gh_attestation_verify).
 
 After publisher verification, the tool checks the chosen client, MCP archive and
-build metadata against the authenticated sizes/hashes. Malformed, duplicate,
-future-format, foreign-repository or unexpected artifact fields fail. Platform
-names use lowercase OS and architecture components separated by a hyphen; asset
-names use lowercase letters, digits, underscores and hyphens, with single dots
-separating nonempty components. Duplicate platforms or artifact names fail.
-Additional well-formed platforms and assets are accepted as metadata, but cannot
-expand the verifier's supported platform list and are never downloaded or run.
+build metadata against the authenticated sizes/hashes. Format 1 keeps an exact
+top-level key set: `format`, `repository`, `source_sha`, `package_version`,
+`platforms`, `contracts` and `artifacts`. The `contracts` object must contain
+exactly the five named contracts above, each an integer from 1 through 2^32 - 1;
+the profile read minimum must not exceed its write format. Future producers must
+keep this envelope and contract set to remain compatible with format-1 clients.
+Adding top-level or compatibility-contract fields requires an explicit verifier
+upgrade. Unsupported formats, foreign repositories and missing fields fail.
+
+Names are ASCII only. A platform's OS component starts with `[a-z]`, followed by
+zero or more `[a-z0-9]` characters and a hyphen. The rest consists of nonempty
+`[a-z0-9]+` components separated by single hyphens or underscores. More than two
+parts are allowed, for example `futureos-x86_64-v3-musl`. An asset name starts with
+`[a-z0-9]` and otherwise uses lowercase letters, digits, underscores and hyphens;
+single dots may separate nonempty components that each start with `[a-z0-9]`.
+Paths, non-ASCII characters, leading dots and consecutive dots are rejected.
+Duplicate platform names and duplicate JSON keys anywhere, including inside
+ignored metadata, are rejected.
+
+All recognized artifact names (the current eight client/server binaries,
+`ccp-mcp.tar.gz` and `build-info.json`) retain strict entries: exactly `size` and
+`sha256`, a positive integer size no greater than 256 MiB, and a lowercase
+64-character hexadecimal SHA-256. Malformed recognized entries fail even when
+not selected for installation. Unknown artifact names may carry opaque JSON
+payloads, including zero or larger declared sizes and extra `url` or `signature`
+fields. Those payloads are retained for manifest-integrity comparisons but never
+interpreted, fetched or executed; URLs never influence download locations. The
+whole manifest remains limited to 64 KiB and covered by publisher attestation.
+
+Additional platforms cannot expand the verifier's supported platform list.
 Platforms may provide a client without a server. The selected platform must be
 listed and its client, MCP archive and build metadata must all be present and
-verified. Current producers still emit the four platforms and both binaries for
-each, with identical manifest, build metadata and checksum bytes.
+verified. Current producers still emit exactly the four platforms, in the same
+order, and both binaries for each. Their manifest, build metadata and checksum
+bytes are identical to the pre-change output for the same source values and
+artifact bytes. Publication rejects any other platform order or artifact set.
 
 Symlink inputs, excessive sizes, missing provenance, unavailable verification tools,
 timeouts and signature/policy failures also fail. There is no checksum fallback.

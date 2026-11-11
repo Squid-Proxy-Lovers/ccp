@@ -118,6 +118,20 @@ class ManagedBundleTests(unittest.TestCase):
                 self.store.activate(generation.generation_id, self.store.pointer().revision)
                 self.assertEqual(self.store.launch("client", ())[0], generation.path / "client")
 
+    def test_stage_never_copies_or_builds_opaque_future_assets(self):
+        data = self.future_manifest()
+        future = "ccp-client-windows-x86_64.exe"
+        data["artifacts"][future] = {"size": contract.MAX_ARTIFACT + 1, "url": "file:///outside"}
+        data["artifacts"]["release-notes.txt"] = {"size": 0, "signature": "future-format"}
+        (self.inputs / contract.MANIFEST).write_text(json.dumps(data))
+        generation = self.stage()
+        self.assertEqual(generation.manifest.value(), data)
+        self.assertEqual(set(generation.manifest.artifacts), set(contract.ASSETS))
+        self.assertFalse((generation.path / "release" / future).exists())
+        self.assertFalse((generation.path / "release/release-notes.txt").exists())
+        self.store.activate(generation.generation_id, 0)
+        self.assertEqual(self.store.launch("client", ())[0], generation.path / "client")
+
     def test_invalid_future_manifest_never_builds_or_replaces_active_generation(self):
         active = self.stage()
         self.store.activate(active.generation_id, 0)

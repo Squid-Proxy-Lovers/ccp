@@ -443,6 +443,121 @@ class ReleaseContractTests(unittest.TestCase):
                 self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
             proof.assert_not_called()
 
+    def test_future_asset_payloads_are_opaque_and_never_verified_as_installable_files(self):
+        future = "ccp-client-windows-x86_64.exe"
+        for payload in (
+            {"size": self.contract.MAX_ARTIFACT + 1, "sha256": "a" * 64},
+            {"size": 0, "sha256": "a" * 64},
+            {"url": "https://attacker.invalid/client", "signature": {"future-format": 2}},
+            {"size": "unknown", "sha256": None, "url": "file:///outside"},
+            None,
+        ):
+            data = self.future_manifest()
+            data["artifacts"][future] = payload
+            (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+            with (
+                self.subTest(payload=payload),
+                patch.object(self.contract.subprocess, "run") as proof,
+            ):
+                manifest = self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+                self.assertEqual(manifest.value(), data)
+                self.assertNotIn(future, manifest.artifacts)
+                self.assertEqual(proof.call_count, 1)
+                with self.assertRaisesRegex(ValueError, "^Unexpected release artifact$"):
+                    manifest.verify_files(self.dist, (future,))
+
+    def test_known_asset_payloads_and_format_one_envelope_remain_strict(self):
+        for name in self.contract.ASSETS:
+            for payload, reason in (
+                ({"size": 0, "sha256": "a" * 64}, "Release integer out of bounds"),
+                (
+                    {"size": self.contract.MAX_ARTIFACT + 1, "sha256": "a" * 64},
+                    "Release integer out of bounds",
+                ),
+                (
+                    {"size": 1, "sha256": "a" * 64, "url": "https://attacker.invalid"},
+                    "Invalid release fields",
+                ),
+                ({"size": 1, "sha256": "a" * 64, "signature": "unused"}, "Invalid release fields"),
+                ({"size": 1, "sha256": "bad"}, "Invalid release identity"),
+            ):
+                data = self.future_manifest()
+                data["artifacts"][name] = payload
+                with (
+                    self.subTest(name=name, payload=payload),
+                    self.assertRaisesRegex(ValueError, "^" + reason + "$"),
+                ):
+                    self.contract.decode(json.dumps(data).encode())
+        for scope in ("top-level", "contracts"):
+            data = self.future_manifest()
+            parent = data if scope == "top-level" else data["contracts"]
+            parent["future_key"] = {"url": "https://attacker.invalid"}
+            with (
+                self.subTest(scope=scope),
+                self.assertRaisesRegex(ValueError, "^Invalid release fields$"),
+            ):
+                self.contract.decode(json.dumps(data).encode())
+
+    def test_opaque_future_metadata_stays_bound_to_manifest_integrity_and_duplicate_checks(self):
+        data = self.future_manifest()
+        data["artifacts"]["release-notes.txt"] = {"url": "https://attacker.invalid/first"}
+        raw = json.dumps(data).encode()
+        manifest = self.contract.decode(raw)
+        data["artifacts"]["release-notes.txt"]["url"] = "https://attacker.invalid/second"
+        (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+        with (
+            patch.object(self.contract.subprocess, "run") as proof,
+            self.assertRaisesRegex(ValueError, "^Release manifest changed$"),
+        ):
+            self.contract.verify_provenance(self.dist, manifest, "refs/heads/main")
+        proof.assert_not_called()
+        for duplicate in (
+            raw.replace(b'"url":', b'"url": null, "url":'),
+            raw.replace(b'"release-notes.txt":', b'"ccp-mcp.tar.gz":'),
+            raw.replace(b'"release-notes.txt":', b'"ccp-client-windows-x86_64.exe":'),
+        ):
+            with (
+                self.subTest(raw=duplicate),
+                self.assertRaisesRegex(ValueError, "^Duplicate release field$"),
+            ):
+                self.contract.decode(duplicate)
+
+    def test_opaque_metadata_type_substitution_cannot_bypass_manifest_integrity(self):
+        for before, after in ((True, 1), (1, 1.0), ({"flag": False}, {"flag": 0})):
+            data = self.future_manifest()
+            data["artifacts"]["release-notes.txt"] = before
+            manifest = self.contract.decode(json.dumps(data).encode())
+            data["artifacts"]["release-notes.txt"] = after
+            (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+            with (
+                self.subTest(before=before, after=after),
+                patch.object(self.contract.subprocess, "run") as proof,
+                self.assertRaisesRegex(ValueError, "^Release manifest changed$"),
+            ):
+                self.contract.verify_provenance(self.dist, manifest, "refs/heads/main")
+            proof.assert_not_called()
+
+    def test_ascii_multicomponent_platform_names_and_non_ascii_rejection(self):
+        data = self.future_manifest()
+        data["platforms"].append("futureos-x86_64-v3-musl")
+        self.assertEqual(self.contract.decode(json.dumps(data).encode()).value(), data)
+        for platform in ("9os-x86_64", "línux-x86_64", "linux-ｘ86_64", "linux-x86__64"):
+            data = self.future_manifest()
+            data["platforms"].append(platform)
+            with (
+                self.subTest(platform=platform),
+                self.assertRaisesRegex(ValueError, "^Invalid release identity$"),
+            ):
+                self.contract.decode(json.dumps(data).encode())
+        for name in ("rélease.txt", "ccp-client-ｗindows.exe"):
+            data = self.future_manifest()
+            data["artifacts"][name] = None
+            with (
+                self.subTest(asset=name),
+                self.assertRaisesRegex(ValueError, "^Invalid release identity$"),
+            ):
+                self.contract.decode(json.dumps(data).encode())
+
     def test_client_assets_directly_refuses_a_declared_future_platform(self):
         manifest = self.contract.decode(json.dumps(self.future_manifest()).encode())
         with self.assertRaisesRegex(ValueError, "^Unsupported client platform$"):
