@@ -14,7 +14,7 @@ from . import release_contract as contract
 
 def tag(value: object, channel: str) -> str:
     pattern = (
-        r"v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?"
+        "v" + contract.VERSION_CORE
         if channel == "stable"
         else r"nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{12}"
     )
@@ -31,6 +31,8 @@ def eligible(value: object, channel: str) -> str | None:
     )
     name = contract.text(row.get("tag_name"), r"[0-9A-Za-z.+-]{1,128}")
     if row["draft"] or (channel == "stable" and row["prerelease"]):
+        return None
+    if channel == "stable" and not re.fullmatch("v" + contract.VERSION_CORE, name):
         return None
     if channel == "nightly" and not re.fullmatch(
         r"nightly-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9a-f]{12}", name

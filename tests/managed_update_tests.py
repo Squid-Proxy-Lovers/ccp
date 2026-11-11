@@ -600,6 +600,24 @@ class ManagedNetworkTests(unittest.TestCase):
             )
         )
 
+    def test_stable_discovery_rejects_prerelease_tags_even_with_wrong_github_flags(self):
+        for tag in ["v0.2.0-rc.1", "v0.2.0-beta.1", "v0.2.0-alpha", "v0.2.0rc1", "v0.2.0+build"]:
+            row = {"tag_name": tag, "draft": False, "prerelease": False}
+            with self.subTest(tag=tag):
+                self.assertIsNone(release.eligible(row, "stable"))
+                with (
+                    patch.object(net, "api", return_value=row) as api,
+                    self.assertRaisesRegex(ValueError, "Stable release is unavailable"),
+                ):
+                    release.discover("stable", None)
+                api.assert_called_once_with("releases/latest")
+                with patch.object(net, "api") as api, self.assertRaises(ValueError):
+                    release.discover("stable", tag)
+                api.assert_not_called()
+        stable = {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
+        with patch.object(net, "api", return_value=stable):
+            self.assertEqual(release.discover("stable", None), "v0.2.0")
+
     def test_discovery_honors_channel_pin_bounds_and_never_uses_dates_for_ordering(self):
         stable = {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
         nightly = {"tag_name": "nightly-1900-01-01-" + "b" * 12, "draft": False, "prerelease": True}
