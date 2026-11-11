@@ -167,7 +167,7 @@ class ManagedBundleTests(unittest.TestCase):
                 patch.object(build_module, "build") as builder,
                 self.assertRaisesRegex(ValueError, "^" + reason + "$"),
             ):
-                self.store.stage(self.inputs, "stable", "v0.1.0")
+                self.store.stage(self.inputs, "stable", "v" + contract.source_version(ROOT))
             builder.assert_not_called()
             self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
             self.assertEqual(
@@ -182,7 +182,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module, "build") as builder,
             self.assertRaisesRegex(ValueError, "^Unsupported managed client platform$"),
         ):
-            self.store.stage(self.inputs, "stable", "v0.1.0")
+            self.store.stage(self.inputs, "stable", "v" + contract.source_version(ROOT))
         builder.assert_not_called()
 
     def test_reopened_store_checks_host_and_manifest_platform_before_client_lookup(self):

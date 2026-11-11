@@ -346,7 +346,7 @@ class ReleaseContractTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             raw = (ROOT / name).read_text()
             raw = raw.replace(
-                'version = "' + self.contract.source_version(ROOT) + '"', 'version = "0.2.0"'
+                'version = "' + self.contract.source_version(ROOT) + '"', 'version = "0.3.0"'
             )
             raw = re.sub(
                 r"(const (?:PROTOCOL_VERSION|API_VERSION|PROFILE_MIN_FORMAT|PROFILE_FORMAT|SCHEMA_VERSION): u32 = )([0-9]+)",
@@ -358,7 +358,7 @@ class ReleaseContractTests(unittest.TestCase):
             nightly.prepare(self.dist, SHA)
         self.assertEqual(
             self.contract.decode((self.dist / self.contract.MANIFEST).read_bytes()).package_version,
-            "0.2.0",
+            "0.3.0",
         )
         for name, expected in self.pre_compatibility_output(source).items():
             with self.subTest(name=name):
@@ -418,7 +418,7 @@ class ReleaseContractTests(unittest.TestCase):
         ):
             self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
         for channel, tag, reason in (
-            ("stable", "v0.2.0", "Stable tag and package version differ"),
+            ("stable", "v0.3.0", "Stable tag and package version differ"),
             ("nightly", TAG.replace("a" * 12, "b" * 12), "Nightly tag and source differ"),
             ("custom", TAG, "Unsupported release channel"),
         ):
