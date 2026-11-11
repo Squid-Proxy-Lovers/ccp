@@ -13,7 +13,9 @@ impl ServerState {
         book_name: Option<&str>,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<DeleteResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
 
         let deleted_at = current_precise_timestamp_string()?;
         let (_path, key) = entry_path_for(name, shelf_name, book_name);

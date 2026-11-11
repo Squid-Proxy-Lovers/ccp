@@ -18,7 +18,9 @@ impl ServerState {
         policy: &ConflictPolicy,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<ImportBundleResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
 
         // Verify bundle integrity.
         let entries_bytes = serde_json::to_vec(&bundle.entries)

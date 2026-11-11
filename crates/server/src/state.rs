@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use anyhow::{Context, bail};
 use protocol::{
@@ -572,6 +572,12 @@ pub struct ServerState {
     revoked_cert_common_names: RwLock<HashSet<String>>,
     append_locks: Mutex<HashMap<(i64, String), Arc<Mutex<()>>>>,
     journal: Arc<JournalHandle>,
+    // Guards against another native mutation's rollback clobbering an
+    // in-flight write. Ordinary mutations take a shared (read) guard so they
+    // can run concurrently with each other; commands that snapshot state,
+    // persist outside the session lock and may roll back on failure take the
+    // exclusive (write) guard for their entire duration.
+    native_checkpoint: RwLock<()>,
 }
 
 fn message_entry_from(entry: &CachedMessagePack) -> MessageEntry {
@@ -713,6 +719,37 @@ impl ServerState {
             bail!("client does not have write access for this session");
         }
         Ok(())
+    }
+
+    /// Shared guard for ordinary native mutations (add/append). Multiple
+    /// holders can run concurrently, but all are blocked out while an
+    /// exclusive mutation (see below) is in progress.
+    async fn native_mutation(
+        &self,
+        session_id: i64,
+        auth_context: &ConnectionAuthContext,
+    ) -> anyhow::Result<RwLockReadGuard<'_, ()>> {
+        self.ensure_write_access(session_id, auth_context).await?;
+        let guard = self.native_checkpoint.read().await;
+        // Re-check in case access was revoked while we were waiting on the guard.
+        self.ensure_write_access(session_id, auth_context).await?;
+        Ok(guard)
+    }
+
+    /// Exclusive guard for native mutations that snapshot state, persist
+    /// outside the session lock and may roll back on failure
+    /// (`import_bundle`, `restore_deleted_entry`, `delete_entry`). Held for
+    /// the whole operation so no other native mutation's write can land
+    /// inside the rollback window and get clobbered by a stale snapshot.
+    async fn native_exclusive_mutation(
+        &self,
+        session_id: i64,
+        auth_context: &ConnectionAuthContext,
+    ) -> anyhow::Result<RwLockWriteGuard<'_, ()>> {
+        self.ensure_write_access(session_id, auth_context).await?;
+        let guard = self.native_checkpoint.write().await;
+        self.ensure_write_access(session_id, auth_context).await?;
+        Ok(guard)
     }
 }
 fn current_timestamp_string() -> anyhow::Result<String> {

@@ -23,6 +23,7 @@ impl ServerState {
             revoked_cert_common_names: RwLock::new(revoked_cert_common_names),
             append_locks: Mutex::new(HashMap::new()),
             journal,
+            native_checkpoint: RwLock::new(()),
         };
 
         for entry in load_entries(state.journal.path())? {
