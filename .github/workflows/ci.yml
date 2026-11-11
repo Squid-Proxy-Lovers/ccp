@@ -154,11 +154,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path dist | Out-Null
           Copy-Item target/x86_64-pc-windows-msvc/release/client.exe dist/ccp-client-windows-x86_64.exe
-      # Keep separate from binaries-* until the release contract registers the
-      # client-only windows-x86_64 platform (manifest forward-compatibility PR).
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ccp-client-windows-x86_64
+          name: binaries-windows-x86_64
           retention-days: 1
           path: dist/ccp-client-windows-x86_64.exe
           if-no-files-found: error

@@ -32,7 +32,8 @@ python3 scripts/release_contract.py --directory release-stage \
 ```
 
 Supported platform names are `linux-x86_64`, `linux-aarch64`, `darwin-x86_64` and
-`darwin-aarch64`. For a dated nightly, use its exact
+`darwin-aarch64`, plus client-only `windows-x86_64`
+(`ccp-client-windows-x86_64.exe`). For a dated nightly, use its exact
 `nightly-YYYY-MM-DD-<12-character-SHA>` tag and `--channel nightly`. The source
 commit in the manifest must match that tag's SHA prefix. A stable tag must equal
 `v` followed by the matching package version. No moving `latest` or `nightly`

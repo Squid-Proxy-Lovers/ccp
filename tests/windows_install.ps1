@@ -38,6 +38,7 @@ function Test-CcpNativeExit {
     catch { $missingFailed = $true }
     if (-not $missingFailed) { throw 'Missing native verifier was accepted.' }
 }
+$nativeRunner = ${function:Invoke-CcpNative}
 $engine = (Get-Process -Id $PID).Path
 foreach ($nativeErrorPreference in @($false, $true)) { Test-CcpNativeExit $engine $nativeErrorPreference }
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
@@ -104,18 +105,29 @@ function Set-CcpUserPath {
 
 try {
     New-Item -ItemType Directory -Force -Path $fixture, $profileDirectory | Out-Null
-    $artifacts = @{}
-    foreach ($name in @($CcpClientAsset, 'ccp-mcp.tar.gz', 'build-info.json')) {
+    $packagedAssets = @($CcpClientAsset, 'ccp-mcp.tar.gz')
+    foreach ($platform in @('linux-x86_64', 'linux-aarch64', 'darwin-x86_64', 'darwin-aarch64')) {
+        $packagedAssets += @("ccp-client-$platform", "ccp-server-$platform")
+    }
+    foreach ($name in $packagedAssets) {
         $path = Join-Path $fixture $name
         [IO.File]::WriteAllText($path, "fixture bytes for $name")
-        $artifacts[$name] = @{ size = (Get-Item $path).Length; sha256 = (Get-FileHash $path).Hash.ToLowerInvariant() }
     }
-    $manifest = @{
-        format = 1; repository = $CcpRepository; source_sha = ('a' * 40)
-        package_version = '0.2.0'; platforms = @('windows-x86_64'); artifacts = $artifacts
-    }
+    # Use the actual release producer, then retain mutable records for fault cases.
+    & $nativeRunner 'python' @((Join-Path $root 'scripts/nightly.py'), 'prepare', '--dist', $fixture, '--sha', ('a' * 40))
+    Confirm-TestCondition ($LASTEXITCODE -eq 0) 'Release fixture packaging failed.'
     $manifestPath = Join-Path $fixture 'ccp-release.json'
-    $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath
+    $packaged = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $manifest = @{
+        format = $packaged.format; repository = $packaged.repository; source_sha = $packaged.source_sha
+        package_version = $packaged.package_version; platforms = $packaged.platforms
+        contracts = $packaged.contracts; artifacts = @{}
+    }
+    foreach ($property in $packaged.artifacts.PSObject.Properties) {
+        $manifest.artifacts[$property.Name] = @{ size = $property.Value.size; sha256 = $property.Value.sha256 }
+    }
+    Confirm-TestCondition ($manifest.artifacts.Count -eq 11) 'Fixture differs from the release producer inventory.'
+    Confirm-TestCondition ($manifest.platforms.Count -eq 5) 'Fixture is missing real release platforms.'
     [IO.File]::WriteAllText((Join-Path $fixture 'ccp-provenance.json'), 'fixture attestation')
     Confirm-TestCondition ((Get-CcpReleaseTag stable '') -eq 'v0.2.0') 'Stable selection failed.'
     Confirm-TestCondition ((Get-CcpReleaseTag nightly '') -eq 'nightly-2026-01-02-aaaaaaaaaaaa') 'Nightly selection included a draft.'

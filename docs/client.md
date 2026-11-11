@@ -44,11 +44,9 @@ Missing assets, unavailable verification tools, and verification failures stop
 installation. There is no unverified fallback. Older releases without Windows
 assets and the signed manifest cannot be installed this way.
 
-Windows publication still needs the manifest forward-compatibility change and
-registration of `windows-x86_64` as a client-only platform, mapped to
-`ccp-client-windows-x86_64.exe`. CI keeps this executable in a separate artifact
-until packaging can include it in the authenticated release. Nightly publishing
-and the current release contract are unchanged by Windows client support.
+The release manifest registers `windows-x86_64` as client-only, mapped to
+`ccp-client-windows-x86_64.exe`. Packaging includes its checksum and authenticated
+manifest record in stable and nightly releases; no Windows server is distributed.
 
 Installation stages the executable beside its destination and renames it into
 `%LOCALAPPDATA%\ccp\bin\ccp-client.exe`. An available `ccp.exe` name is installed as

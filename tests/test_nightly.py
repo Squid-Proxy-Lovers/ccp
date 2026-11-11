@@ -101,7 +101,7 @@ class PublicationTests(unittest.TestCase):
             if change == "order":
                 data["platforms"].reverse()
             elif change == "platform":
-                data["platforms"].append("windows-x86_64")
+                data["platforms"].append("freebsd-x86_64")
             elif change == "extra-asset":
                 data["artifacts"]["release-notes.txt"] = {"size": 1, "sha256": "a" * 64}
             else:
@@ -266,9 +266,9 @@ class ReleaseContractTests(unittest.TestCase):
 
     def future_manifest(self):
         data = json.loads(self.raw)
-        data["platforms"].append("windows-x86_64")
+        data["platforms"].append("freebsd-x86_64")
         item = {"size": 1, "sha256": "a" * 64}
-        data["artifacts"]["ccp-client-windows-x86_64.exe"] = item
+        data["artifacts"]["ccp-client-freebsd-x86_64.exe"] = item
         data["artifacts"]["release-notes.txt"] = item
         return data
 
@@ -323,7 +323,27 @@ class ReleaseContractTests(unittest.TestCase):
         ).encode()
         return output
 
+    def prepare_legacy_inventory(self, root=ROOT):
+        # Retain the original byte-identity regression for the old producer inventory.
+        platforms = ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64")
+        assets = tuple(
+            f"ccp-{binary}-{platform}" for platform in platforms for binary in ("client", "server")
+        ) + ("ccp-mcp.tar.gz",)
+        with (
+            patch.object(nightly, "ROOT", root),
+            patch.object(nightly, "PLATFORMS", platforms),
+            patch.object(nightly, "ASSETS", assets),
+            patch.object(self.contract, "PLATFORMS", platforms),
+            patch.object(self.contract, "ASSETS", (*assets, "build-info.json")),
+            patch.object(sys.modules[self.contract.decode.__module__], "PLATFORMS", platforms),
+            patch.object(
+                sys.modules[self.contract.decode.__module__], "ASSETS", (*assets, "build-info.json")
+            ),
+        ):
+            nightly.prepare(self.dist, SHA)
+
     def test_producer_bytes_match_pre_forward_compatibility_output(self):
+        self.prepare_legacy_inventory()
         for name, expected in self.pre_compatibility_output().items():
             with self.subTest(name=name):
                 self.assertEqual((self.dist / name).read_bytes(), expected)
@@ -354,8 +374,7 @@ class ReleaseContractTests(unittest.TestCase):
                 raw,
             )
             target.write_text(raw)
-        with patch.object(nightly, "ROOT", source):
-            nightly.prepare(self.dist, SHA)
+        self.prepare_legacy_inventory(source)
         self.assertEqual(
             self.contract.decode((self.dist / self.contract.MANIFEST).read_bytes()).package_version,
             "0.2.0",
@@ -363,6 +382,35 @@ class ReleaseContractTests(unittest.TestCase):
         for name, expected in self.pre_compatibility_output(source).items():
             with self.subTest(name=name):
                 self.assertEqual((self.dist / name).read_bytes(), expected)
+
+    def test_packaged_windows_client_verifies_and_remains_opaque_to_an_older_consumer(self):
+        name = "ccp-client-windows-x86_64.exe"
+        self.assertIn(name, nightly.ASSETS)
+        self.assertNotIn("ccp-server-windows-x86_64.exe", self.manifest.artifacts)
+        self.assertIn(name, (self.dist / "SHA256SUMS").read_text())
+        nightly.verify(self.dist, SHA)
+        with patch.object(self.contract.subprocess, "run"):
+            result = self.contract.verify(self.dist, "stable", "v0.2.0", "windows-x86_64")
+        self.assertEqual(result.client_assets("windows-x86_64")[0], name)
+        platforms = tuple(p for p in self.contract.PLATFORMS if p != "windows-x86_64")
+        assets = tuple(a for a in self.contract.ASSETS if a != name)
+        with (
+            patch.object(self.contract, "PLATFORMS", platforms),
+            patch.object(self.contract, "ASSETS", assets),
+            patch.object(sys.modules[self.contract.decode.__module__], "PLATFORMS", platforms),
+            patch.object(sys.modules[self.contract.decode.__module__], "ASSETS", assets),
+            patch.object(self.contract.subprocess, "run"),
+        ):
+            older = self.contract.verify(self.dist, "stable", "v0.2.0", "linux-x86_64")
+            self.assertEqual(older.value(), self.manifest.value())
+            self.assertNotIn(name, older.artifacts)
+            self.assertIn(name, older.unknown_artifacts)
+            with self.assertRaisesRegex(ValueError, "Unsupported client platform"):
+                older.client_assets("windows-x86_64")
+        data = json.loads(self.raw)
+        data["artifacts"][name] = {"url": "https://untrusted.invalid/windows"}
+        with self.assertRaisesRegex(ValueError, "Invalid release fields"):
+            self.contract.decode(json.dumps(data).encode())
 
     def test_future_client_only_platform_and_assets_verify_for_every_known_platform(self):
         data = self.future_manifest()
@@ -380,7 +428,7 @@ class ReleaseContractTests(unittest.TestCase):
             patch.object(self.contract.subprocess, "run") as proof,
             self.assertRaisesRegex(ValueError, "^Unsupported client platform$"),
         ):
-            self.contract.verify(self.dist, "nightly", TAG, "windows-x86_64")
+            self.contract.verify(self.dist, "nightly", TAG, "freebsd-x86_64")
         proof.assert_not_called()
 
     def test_checkout_cli_preserves_future_platforms_in_verified_output(self):
@@ -418,7 +466,7 @@ class ReleaseContractTests(unittest.TestCase):
         ):
             self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
         for channel, tag, reason in (
-            ("stable", "v0.2.0", "Stable tag and package version differ"),
+            ("stable", "v0.3.0", "Stable tag and package version differ"),
             ("nightly", TAG.replace("a" * 12, "b" * 12), "Nightly tag and source differ"),
             ("custom", TAG, "Unsupported release channel"),
         ):
@@ -444,7 +492,7 @@ class ReleaseContractTests(unittest.TestCase):
             proof.assert_not_called()
 
     def test_future_asset_payloads_are_opaque_and_never_verified_as_installable_files(self):
-        future = "ccp-client-windows-x86_64.exe"
+        future = "ccp-client-freebsd-x86_64.exe"
         for payload in (
             {"size": self.contract.MAX_ARTIFACT + 1, "sha256": "a" * 64},
             {"size": 0, "sha256": "a" * 64},
@@ -514,7 +562,7 @@ class ReleaseContractTests(unittest.TestCase):
         for duplicate in (
             raw.replace(b'"url":', b'"url": null, "url":'),
             raw.replace(b'"release-notes.txt":', b'"ccp-mcp.tar.gz":'),
-            raw.replace(b'"release-notes.txt":', b'"ccp-client-windows-x86_64.exe":'),
+            raw.replace(b'"release-notes.txt":', b'"ccp-client-freebsd-x86_64.exe":'),
         ):
             with (
                 self.subTest(raw=duplicate),
@@ -561,7 +609,7 @@ class ReleaseContractTests(unittest.TestCase):
     def test_client_assets_directly_refuses_a_declared_future_platform(self):
         manifest = self.contract.decode(json.dumps(self.future_manifest()).encode())
         with self.assertRaisesRegex(ValueError, "^Unsupported client platform$"):
-            manifest.client_assets("windows-x86_64")
+            manifest.client_assets("freebsd-x86_64")
 
     def test_client_only_known_platform_does_not_require_a_server(self):
         data = json.loads(self.raw)
@@ -572,7 +620,11 @@ class ReleaseContractTests(unittest.TestCase):
 
     def test_future_manifest_still_rejects_missing_local_assets_and_tampered_hashes(self):
         for platform in self.contract.PLATFORMS:
-            for name in (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json"):
+            for name in (
+                self.contract.client_filename(platform),
+                "ccp-mcp.tar.gz",
+                "build-info.json",
+            ):
                 for change in ("missing", "hash"):
                     data = self.future_manifest()
                     if change == "missing":
@@ -593,7 +645,7 @@ class ReleaseContractTests(unittest.TestCase):
                         self.contract.verify(self.dist, "nightly", TAG, platform)
 
     def test_future_manifest_rejects_duplicate_and_malformed_entries(self):
-        for name in ("../windows-x86_64", "Windows-x86_64", "windows", "windows-x86_64\n", 1):
+        for name in ("../freebsd-x86_64", "Windows-x86_64", "windows", "freebsd-x86_64\n", 1):
             data = self.future_manifest()
             data["platforms"].append(name)
             with (

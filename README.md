@@ -56,11 +56,10 @@ irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.ps1 | 
 ```
 
 The installer requires an official release containing the Windows client and
-signed manifest. It refuses older releases without those assets. Windows release
-publication is pending registration of the client-only `windows-x86_64` platform;
-CI currently produces a separate client artifact.
+signed manifest. It refuses older releases without those assets. The authenticated
+release includes the client-only `windows-x86_64` platform.
 
-Once available, the installer verifies provenance and SHA-256, installs under
+The installer verifies provenance and SHA-256, installs under
 `%LOCALAPPDATA%\ccp\bin`, adds the user PATH, and sets up the MCP bridge. Re-run the
 same command to update. Use `ccp-client` if another program owns `ccp`. See the
 [Windows installation guide](docs/client.md#windows-installation) for nightlies,
