@@ -19,7 +19,50 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from ccp_mcp_server.server import mcp
+from fastmcp import Client
+
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class NativeMCPDiscoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_registered_native_tools(self):
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+        self.assertCountEqual(
+            [tool.name for tool in tools],
+            [
+                "add_book",
+                "add_entry",
+                "add_shelf",
+                "append_entry",
+                "brief_me",
+                "enroll",
+                "export_bundle",
+                "find_books",
+                "find_entries",
+                "find_shelves",
+                "get_entry",
+                "get_entry_at",
+                "get_history",
+                "list_entries",
+                "search_context",
+                "search_deleted_entries",
+                "server_health",
+                "server_status",
+                "sessions",
+            ],
+        )
+
+    async def test_registered_native_resources(self):
+        async with Client(mcp) as client:
+            resources = await client.list_resources()
+            templates = await client.list_resource_templates()
+        self.assertCountEqual(
+            [(resource.name, str(resource.uri)) for resource in resources],
+            [("help_resource", "ccp://help"), ("sessions_resource", "ccp://sessions")],
+        )
+        self.assertEqual(templates, [])
 
 
 def load_script(filename):
