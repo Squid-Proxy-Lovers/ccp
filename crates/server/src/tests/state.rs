@@ -2797,47 +2797,39 @@ async fn revoke_does_not_block_unrelated_reads_while_persisting() {
     let bystander = writer(session_id, "bystander");
     let operator = admin(session_id, "writer");
     let blocker = block_sqlite_writes();
+    let observed = observe_test_events(&ctx.state);
     let handle = tokio::runtime::Handle::current();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
-    let (revoke_result, bystander_elapsed) = tokio::task::block_in_place(|| {
-        {
-            let revoke = {
-                let state = Arc::clone(&ctx.state);
-                let handle = handle.clone();
-                let operator = operator.clone();
-                spawn_worker(move || {
-                    handle.block_on(state.revoke_client_cert(session_id, &operator, "victim"))
-                })
-            };
-            // Wait for the revoke to mark the CN revoked (its first observable
-            // effect) before measuring how long an unrelated read waits.
-            wait_until(deadline, "revoke to mark the CN revoked", || {
-                ctx.state
-                    .revoked_cert_common_names
-                    .try_read()
-                    .map(|revoked| revoked.contains("victim"))
-                    .unwrap_or(false)
-            });
-            let start = std::time::Instant::now();
-            handle
-                .block_on(ctx.state.ensure_ping_access(&bystander))
-                .expect("unrelated client should not be affected by someone else's revoke");
-            let elapsed = start.elapsed();
-            blocker.execute_batch("COMMIT;").unwrap();
-            let revoke_result = join_within(revoke, deadline, "revoke");
-            (revoke_result, elapsed)
-        }
+    let (revoke_result, bystander_elapsed, bystander_result) = tokio::task::block_in_place(|| {
+        let revoke = {
+            let state = Arc::clone(&ctx.state);
+            let handle = handle.clone();
+            let operator = operator.clone();
+            spawn_worker(move || {
+                handle.block_on(state.revoke_client_cert(session_id, &operator, "victim"))
+            })
+        };
+        expect_test_event(&observed, &["revoke_marked"]);
+        let start = std::time::Instant::now();
+        let state = Arc::clone(&ctx.state);
+        let read = spawn_worker(move || handle.block_on(state.ensure_ping_access(&bystander)));
+        let result = read.recv_timeout(std::time::Duration::from_millis(500));
+        let elapsed = start.elapsed();
+        blocker.execute_batch("COMMIT;").unwrap();
+        let revoke_result = join_within(revoke, deadline, "revoke");
+        (revoke_result, elapsed, result)
     });
     assert!(
         revoke_result.is_ok(),
         "revoke should succeed once unblocked"
     );
     assert!(
-        bystander_elapsed < std::time::Duration::from_millis(500),
+        bystander_result.is_ok() && bystander_elapsed < std::time::Duration::from_millis(500),
         "an unrelated read waited {bystander_elapsed:?} behind revoke's blocked persist; \
          the revoked-set lock must be released before that blocking call"
     );
+    bystander_result.unwrap().unwrap();
 }
 
 // --- checkpoint must persist journal-only writes before truncating ---

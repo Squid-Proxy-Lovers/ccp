@@ -44,6 +44,8 @@ impl ServerState {
                 .await
                 .insert(target_client_common_name.to_string());
             grants.remove(target_client_common_name);
+            #[cfg(test)]
+            self.test_event("revoke_marked");
 
             if let Err(error) = super::super::database::persist_revoked_cert(
                 session_id,
