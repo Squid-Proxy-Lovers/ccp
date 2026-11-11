@@ -111,7 +111,7 @@ impl ServerState {
                 updated_at,
                 Vec::new(),
             );
-            session.insert_entry(key, entry);
+            session.insert_entry_deferred(key, entry);
         }
     }
     pub(super) async fn replay_append(&self, record: JournalEntry, replay: &mut ReplayProgress) {

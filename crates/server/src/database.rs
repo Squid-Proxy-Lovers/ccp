@@ -37,6 +37,11 @@ impl ServerState {
             }
         }
 
+        // SQLite and journal replay defer derived caches until all records apply.
+        for session in state.sessions.write().await.values_mut() {
+            session.finish_bulk_load();
+        }
+
         Ok(state)
     }
 
@@ -80,7 +85,7 @@ impl ServerState {
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
                     session.add_shelf(&shelf_name, Some(&description));
-                    session.refresh_library_metadata(&shelf_name, None);
+                    // Entry summaries pick up descriptions in finish_bulk_load.
                 }
             }
             JournalEntry::AddBook {
@@ -95,7 +100,7 @@ impl ServerState {
                         reason = "pre-existing replay behaviour: an already-present book is not a replay failure"
                     )]
                     let _ = session.add_book(&shelf_name, &book_name, Some(&description));
-                    session.refresh_library_metadata(&shelf_name, Some(&book_name));
+                    // Entry summaries pick up descriptions in finish_bulk_load.
                 }
             }
             record @ JournalEntry::AddEntry { .. } => self.replay_add(record).await,
@@ -780,7 +785,7 @@ fn load_message_packs(
                 updated_at,
                 Vec::new(),
             );
-            session.insert_entry(key, entry);
+            session.insert_entry_deferred(key, entry);
         }
     }
     Ok(())
