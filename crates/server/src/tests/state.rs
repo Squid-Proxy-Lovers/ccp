@@ -2154,8 +2154,10 @@ async fn persist_failure_does_not_unrevoke_already_revoked_client() {
     let ctx = TestContext::new("persist-fail")
         .await
         .expect("test context should initialize");
-    // Constructed state: CN already in the revoked set while a grant exists
-    // (as if a first revoke had marked it but not yet removed the grant).
+    // Constructed state: CN already in the revoked set while a grant exists.
+    // In practice this happens when a common name is reused for a newly
+    // issued certificate (record_issued_cert inserts a fresh grant but never
+    // touches the revoked set) after that same CN was revoked earlier.
     revoke_grant(&ctx, "victim").await;
     ctx.state
         .revoked_cert_common_names
@@ -2255,6 +2257,71 @@ fn block_sqlite_writes() -> rusqlite::Connection {
     blocker
 }
 
+/// Spin-waits on a predicate instead of guessing a sleep duration for a
+/// handoff with a concurrently spawned thread. The predicate should check
+/// for a persistent, observable effect of the other thread's in-memory
+/// mutation (e.g. an entry's new content), not a lock's transient state:
+/// the mutate-then-release of the sessions lock inside import_bundle /
+/// restore_deleted_entry / delete_entry can take microseconds, which a
+/// lock-polling loop can miss outright, while the mutation's effect stays
+/// observable until the (later, still-blocked) rollback undoes it.
+fn wait_until(deadline: std::time::Instant, what: &str, mut condition: impl FnMut() -> bool) {
+    while !condition() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for {what}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Reads an entry's `context` field without blocking, for use from a
+/// polling loop running on a plain OS thread.
+fn entry_context(state: &ServerState, session_id: i64, key: &str) -> Option<String> {
+    state
+        .sessions
+        .try_read()
+        .ok()?
+        .get(&session_id)?
+        .entries
+        .get(key)
+        .map(|entry| entry.context.clone())
+}
+
+/// Checks whether an entry exists without blocking, for use from a polling
+/// loop running on a plain OS thread.
+fn entry_exists(state: &ServerState, session_id: i64, key: &str) -> bool {
+    state
+        .sessions
+        .try_read()
+        .ok()
+        .and_then(|sessions| {
+            sessions
+                .get(&session_id)
+                .map(|s| s.entries.contains_key(key))
+        })
+        .unwrap_or(false)
+}
+
+/// Joins a scoped thread, panicking instead of hanging forever if it does
+/// not finish before `deadline`.
+fn join_within<T>(
+    handle: std::thread::ScopedJoinHandle<'_, T>,
+    deadline: std::time::Instant,
+    what: &str,
+) -> T {
+    while !handle.is_finished() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} did not finish before the test timeout"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    handle
+        .join()
+        .unwrap_or_else(|_| panic!("{what} thread panicked"))
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
     let ctx = TestContext::new("rollback-import")
@@ -2288,6 +2355,7 @@ async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
     let blocker = block_sqlite_writes();
     let bundle = rollback_test_bundle(session_id, &["victim", "poison"]);
     let handle = tokio::runtime::Handle::current();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let import_result = tokio::task::block_in_place(|| {
         std::thread::scope(|scope| {
@@ -2299,8 +2367,12 @@ async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
                     &a,
                 ))
             });
-            // Let the import park inside its persist step before client B writes.
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            // Wait for the import to apply its in-memory mutation (observable
+            // as "victim"'s content changing) before client B writes.
+            wait_until(deadline, "import to apply its mutation", || {
+                entry_context(&ctx.state, session_id, "shelf::book::victim").as_deref()
+                    == Some("IMPORTED")
+            });
             let writes = scope.spawn(|| {
                 handle.block_on(async {
                     ctx.state
@@ -2338,10 +2410,12 @@ async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
                         .unwrap();
                 });
             });
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            // Client B's writes may themselves be blocked out until the
+            // import finishes (if native mutations are now serialized), so
+            // release the blocked persist before joining either thread.
             blocker.execute_batch("COMMIT;").unwrap();
-            let import_result = import.join().expect("import thread");
-            writes.join().expect("writes thread");
+            let import_result = join_within(import, deadline, "import");
+            join_within(writes, deadline, "concurrent writes");
             import_result
         })
     });
@@ -2409,12 +2483,17 @@ async fn restore_rollback_does_not_clobber_concurrent_sibling_writes() {
     let blocker = block_sqlite_writes();
     let key = deleted.entry_key.clone();
     let handle = tokio::runtime::Handle::current();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let restore_result = tokio::task::block_in_place(|| {
         std::thread::scope(|scope| {
             let restore = scope
                 .spawn(|| handle.block_on(ctx.state.restore_deleted_entry(session_id, &key, &a)));
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            // Wait for the restore to apply its in-memory mutation
+            // (observable as "victim" reappearing) before client B writes.
+            wait_until(deadline, "restore to apply its mutation", || {
+                entry_exists(&ctx.state, session_id, "shelf::book::victim")
+            });
             let writes = scope.spawn(|| {
                 handle.block_on(async {
                     ctx.state
@@ -2436,10 +2515,9 @@ async fn restore_rollback_does_not_clobber_concurrent_sibling_writes() {
                         .unwrap();
                 });
             });
-            std::thread::sleep(std::time::Duration::from_millis(300));
             blocker.execute_batch("COMMIT;").unwrap();
-            let restore_result = restore.join().expect("restore thread");
-            writes.join().expect("writes thread");
+            let restore_result = join_within(restore, deadline, "restore");
+            join_within(writes, deadline, "concurrent writes");
             restore_result
         })
     });
@@ -2495,6 +2573,7 @@ async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
     let blocker = block_sqlite_writes();
     let bundle = rollback_test_bundle(session_id, &["victim", "poison"]);
     let handle = tokio::runtime::Handle::current();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 
     let (import_result, delete_result) = tokio::task::block_in_place(|| {
         std::thread::scope(|scope| {
@@ -2506,8 +2585,12 @@ async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
                     &a,
                 ))
             });
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            // Client B deletes the entry while A's import is parked in its persist step.
+            // Wait for the import to apply its in-memory mutation (observable
+            // as "victim"'s content changing) before client B deletes it.
+            wait_until(deadline, "import to apply its mutation", || {
+                entry_context(&ctx.state, session_id, "shelf::book::victim").as_deref()
+                    == Some("IMPORTED")
+            });
             let delete = scope.spawn(|| {
                 handle.block_on(ctx.state.delete_entry(
                     session_id,
@@ -2517,10 +2600,12 @@ async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
                     &b,
                 ))
             });
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            // Client B's delete may itself be blocked out until the import
+            // finishes (if native mutations are now serialized), so release
+            // the blocked persist before joining either thread.
             blocker.execute_batch("COMMIT;").unwrap();
-            let import_result = import.join().expect("import thread");
-            let delete_result = delete.join().expect("delete thread");
+            let import_result = join_within(import, deadline, "import");
+            let delete_result = join_within(delete, deadline, "concurrent delete");
             (import_result, delete_result)
         })
     });
@@ -2537,5 +2622,360 @@ async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
     assert!(
         !readable,
         "import rollback resurrected an entry that was concurrently deleted"
+    );
+}
+
+// --- delete_shelf must participate in native mutation exclusion ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn import_rollback_does_not_resurrect_entry_whose_shelf_was_concurrently_deleted() {
+    let ctx = TestContext::new("rollback-delete-shelf")
+        .await
+        .expect("test context should initialize");
+    let a = writer(ctx.session_id, "client-a");
+    let b = writer(ctx.session_id, "client-b");
+    let session_id = ctx.session_id;
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "SECRET-TO-DELETE",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    poison_message_pack_insert("poison");
+    let blocker = block_sqlite_writes();
+    let bundle = rollback_test_bundle(session_id, &["victim", "poison"]);
+    let handle = tokio::runtime::Handle::current();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
+    let (import_result, delete_shelf_result) = tokio::task::block_in_place(|| {
+        std::thread::scope(|scope| {
+            let import = scope.spawn(|| {
+                handle.block_on(ctx.state.import_bundle(
+                    session_id,
+                    &bundle,
+                    &ConflictPolicy::Overwrite,
+                    &a,
+                ))
+            });
+            // Wait for the import to apply its in-memory mutation (observable
+            // as "victim"'s content changing) before client B deletes the shelf.
+            wait_until(deadline, "import to apply its mutation", || {
+                entry_context(&ctx.state, session_id, "shelf::book::victim").as_deref()
+                    == Some("IMPORTED")
+            });
+            let delete_shelf =
+                scope.spawn(|| handle.block_on(ctx.state.delete_shelf(session_id, "shelf", &b)));
+            blocker.execute_batch("COMMIT;").unwrap();
+            let import_result = join_within(import, deadline, "import");
+            let delete_shelf_result =
+                join_within(delete_shelf, deadline, "concurrent delete_shelf");
+            (import_result, delete_shelf_result)
+        })
+    });
+    assert!(import_result.is_err(), "poisoned import should fail");
+    assert!(
+        delete_shelf_result.is_ok(),
+        "concurrent delete_shelf should succeed"
+    );
+
+    let readable = ctx
+        .state
+        .list_entries(session_id, &b)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.name == "victim");
+    assert!(
+        !readable,
+        "import rollback resurrected an entry whose shelf was concurrently deleted"
+    );
+
+    // The resurrection, if any, must not survive a restart either.
+    let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .expect("state should reload from sqlite");
+    let readable_after_restart = reloaded
+        .list_entries(session_id, &b)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.name == "victim");
+    assert!(
+        !readable_after_restart,
+        "import rollback resurrected an entry across a restart"
+    );
+}
+
+// --- revoke must not hold the revoked-set lock across its blocking persist ---
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoke_does_not_block_unrelated_reads_while_persisting() {
+    let ctx = TestContext::new("revoke-lock-scope")
+        .await
+        .expect("test context should initialize");
+    let session_id = ctx.session_id;
+    ctx.state.cert_grants.write().await.insert(
+        "victim".to_string(),
+        CertGrant {
+            session_id,
+            access_level: "read_write".to_string(),
+            cert_pem: String::new(),
+            created_at: "1".to_string(),
+            expires_at: "4102444800".to_string(),
+        },
+    );
+    let bystander = writer(session_id, "bystander");
+    let operator = admin(session_id, "writer");
+    let blocker = block_sqlite_writes();
+    let handle = tokio::runtime::Handle::current();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
+    let (revoke_result, bystander_elapsed) = tokio::task::block_in_place(|| {
+        std::thread::scope(|scope| {
+            let revoke = scope.spawn(|| {
+                handle.block_on(
+                    ctx.state
+                        .revoke_client_cert(session_id, &operator, "victim"),
+                )
+            });
+            // Wait for the revoke to mark the CN revoked (its first observable
+            // effect) before measuring how long an unrelated read waits.
+            wait_until(deadline, "revoke to mark the CN revoked", || {
+                ctx.state
+                    .revoked_cert_common_names
+                    .try_read()
+                    .map(|revoked| revoked.contains("victim"))
+                    .unwrap_or(false)
+            });
+            let start = std::time::Instant::now();
+            handle
+                .block_on(ctx.state.ensure_ping_access(&bystander))
+                .expect("unrelated client should not be affected by someone else's revoke");
+            let elapsed = start.elapsed();
+            blocker.execute_batch("COMMIT;").unwrap();
+            let revoke_result = join_within(revoke, deadline, "revoke");
+            (revoke_result, elapsed)
+        })
+    });
+    assert!(
+        revoke_result.is_ok(),
+        "revoke should succeed once unblocked"
+    );
+    assert!(
+        bystander_elapsed < std::time::Duration::from_millis(500),
+        "an unrelated read waited {bystander_elapsed:?} behind revoke's blocked persist; \
+         the revoked-set lock must be released before that blocking call"
+    );
+}
+
+// --- checkpoint must persist journal-only writes before truncating ---
+
+#[tokio::test]
+async fn checkpoint_does_not_drop_a_pending_journal_only_write() {
+    let ctx = TestContext::new("checkpoint-data-loss")
+        .await
+        .expect("test context should initialize");
+    let session_id = ctx.session_id;
+    let a = writer(session_id, "client-a");
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    // add_entry only appends to the journal; it never calls persist_snapshot.
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "JOURNAL-ONLY",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+
+    // An unrelated operation that calls checkpoint_journal on success.
+    ctx.state.cert_grants.write().await.insert(
+        "bystander".to_string(),
+        CertGrant {
+            session_id,
+            access_level: "read_write".to_string(),
+            cert_pem: String::new(),
+            created_at: "1".to_string(),
+            expires_at: "4102444800".to_string(),
+        },
+    );
+    ctx.state
+        .revoke_client_cert(session_id, &admin(session_id, "writer"), "bystander")
+        .await
+        .expect("unrelated revoke should succeed");
+
+    // Reload from durable storage only: the journal-only write must have
+    // been captured by the checkpoint before the journal was truncated.
+    let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .expect("state should reload from sqlite");
+    let recovered = reloaded
+        .list_entries(session_id, &a)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.name == "victim");
+    assert!(
+        recovered,
+        "an unrelated checkpoint truncated the journal without first persisting \
+         a pending journal-only write, permanently dropping it"
+    );
+}
+
+// --- import_bundle must keep only the first original for a duplicated path ---
+
+#[tokio::test]
+async fn import_rollback_restores_true_original_when_bundle_lists_same_path_twice() {
+    let ctx = TestContext::new("import-dup-path")
+        .await
+        .expect("test context should initialize");
+    let session_id = ctx.session_id;
+    let a = writer(session_id, "client-a");
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "ORIGINAL",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+
+    poison_message_pack_insert("poison");
+    // The bundle lists "victim" twice before a poisoned entry, so the second
+    // occurrence's "prior" would be the first occurrence's already-imported
+    // value, not the true pre-import original, unless that is guarded against.
+    let bundle = rollback_test_bundle(session_id, &["victim", "victim", "poison"]);
+    let result = ctx
+        .state
+        .import_bundle(session_id, &bundle, &ConflictPolicy::Overwrite, &a)
+        .await;
+    assert!(result.is_err(), "poisoned import should fail");
+
+    let sessions = ctx.state.sessions.read().await;
+    let context = sessions
+        .get(&session_id)
+        .unwrap()
+        .entries
+        .get("shelf::book::victim")
+        .unwrap()
+        .context
+        .clone();
+    assert_eq!(
+        context, "ORIGINAL",
+        "import rollback restored the first bundle occurrence's value instead of the true original"
+    );
+}
+
+// --- delete_shelf must roll back its in-memory mutation if persist fails ---
+
+#[tokio::test]
+async fn delete_shelf_restores_memory_when_persist_fails() {
+    let ctx = TestContext::new("delete-shelf-persist-fail")
+        .await
+        .expect("test context should initialize");
+    let session_id = ctx.session_id;
+    let a = writer(session_id, "client-a");
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "ORIGINAL",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.state
+        .add_shelf(session_id, "other-shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "other-shelf", "other-book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "bystander",
+            "",
+            &[],
+            "x",
+            "other-shelf",
+            "other-book",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+
+    // Poison an unrelated entry's re-insert so delete_shelf's own full
+    // snapshot persist fails, even though "shelf" was already removed from
+    // memory by that point.
+    poison_message_pack_insert("bystander");
+
+    let result = ctx.state.delete_shelf(session_id, "shelf", &a).await;
+    assert!(result.is_err(), "poisoned snapshot persist should fail");
+
+    let sessions = ctx.state.sessions.read().await;
+    let session = sessions.get(&session_id).unwrap();
+    assert!(
+        session.shelves.contains_key("shelf"),
+        "delete_shelf dropped the shelf from memory despite a failed persist"
+    );
+    assert!(
+        session.entries.contains_key("shelf::book::victim"),
+        "delete_shelf dropped the entry from memory despite a failed persist"
     );
 }
