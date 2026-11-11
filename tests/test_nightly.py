@@ -93,6 +93,36 @@ class PublicationTests(unittest.TestCase):
             self.publish()
         self.assertEqual(self.calls, [])
 
+    def test_publication_requires_exact_producer_platforms_and_assets(self):
+        path = self.dist / nightly.release_contract.MANIFEST
+        original = json.loads(path.read_bytes())
+        for change in ("order", "platform", "extra-asset", "missing-asset"):
+            data = json.loads(json.dumps(original))
+            if change == "order":
+                data["platforms"].reverse()
+            elif change == "platform":
+                data["platforms"].append("windows-x86_64")
+            elif change == "extra-asset":
+                data["artifacts"]["release-notes.txt"] = {"size": 1, "sha256": "a" * 64}
+            else:
+                del data["artifacts"]["ccp-server-linux-x86_64"]
+            path.write_text(json.dumps(data))
+            names = (*nightly.ASSETS, "build-info.json", nightly.release_contract.MANIFEST)
+            (self.dist / "SHA256SUMS").write_text(
+                "".join(f"{nightly.digest(self.dist / name)}  {name}\n" for name in names)
+            )
+            reason = (
+                "Producer release platforms differ"
+                if change in ("order", "platform")
+                else "Producer release artifacts differ"
+            )
+            with (
+                self.subTest(change=change),
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
+            ):
+                self.publish()
+            self.assertEqual(self.calls, [])
+
     def test_complete_assets_and_pinned_image_precede_release_visibility(self):
         self.publish()
         create = next(call for call in self.calls if call[:3] == ("gh", "release", "create"))
@@ -242,17 +272,97 @@ class ReleaseContractTests(unittest.TestCase):
         data["artifacts"]["release-notes.txt"] = item
         return data
 
+    def pre_compatibility_output(self, root=ROOT):
+        # Independent reconstruction of 2b945c1's inventory and encoding rules.
+        platforms = ["linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64"]
+        assets = [
+            f"ccp-{binary}-{platform}" for platform in platforms for binary in ("client", "server")
+        ] + ["ccp-mcp.tar.gz"]
+        toolchain = re.search(
+            r'^channel\s*=\s*"([^"]+)"', (root / "rust-toolchain.toml").read_text(), re.M
+        ).group(1)
+        build = {
+            "source_sha": SHA,
+            "rust_toolchain": toolchain,
+            "platforms": platforms,
+            "artifacts": assets,
+        }
+        output = {"build-info.json": (json.dumps(build, indent=2) + "\n").encode()}
+        numbers = {
+            "native_wire": ("crates/protocol/src/lib.rs", "PROTOCOL_VERSION"),
+            "workspace_api": ("crates/protocol/src/workspace.rs", "API_VERSION"),
+            "client_profile_read_min": (
+                "crates/client/src/workspace/store.rs",
+                "PROFILE_MIN_FORMAT",
+            ),
+            "client_profile_write": ("crates/client/src/workspace/store.rs", "PROFILE_FORMAT"),
+            "server_schema_write": ("crates/server/src/init.rs", "SCHEMA_VERSION"),
+        }
+        bodies = {name: (self.dist / name).read_bytes() for name in assets}
+        bodies.update(output)
+        manifest = {
+            "format": 1,
+            "repository": "Squid-Proxy-Lovers/ccp",
+            "source_sha": SHA,
+            "package_version": self.contract.source_version(root),
+            "platforms": platforms,
+            "contracts": {
+                key: self.contract.source_number(root, *source) for key, source in numbers.items()
+            },
+            "artifacts": {
+                name: {"size": len(body), "sha256": hashlib.sha256(body).hexdigest()}
+                for name, body in bodies.items()
+            },
+        }
+        output["ccp-release.json"] = (
+            json.dumps(manifest, sort_keys=True, indent=2) + "\n"
+        ).encode()
+        bodies["ccp-release.json"] = output["ccp-release.json"]
+        output["SHA256SUMS"] = "".join(
+            f"{hashlib.sha256(body).hexdigest()}  {name}\n" for name, body in bodies.items()
+        ).encode()
+        return output
+
     def test_producer_bytes_match_pre_forward_compatibility_output(self):
-        # Captured from 2b945c1 for the fixed exact-source artifacts in setUp.
-        for name, expected in {
-            "ccp-release.json": "9351675a1d41978b27198d78ea287738847e8b4d152b9a4904eda99f2e0da463",
-            "build-info.json": "795254df0b64fbca84910ebca64e75ffeaac048ac5ffd875ff9b96c816b87cd1",
-            "SHA256SUMS": "11565985731ea6db895cd21522da6bc66d5de7b7955eea2c001f56fbc81d1be0",
-        }.items():
+        for name, expected in self.pre_compatibility_output().items():
             with self.subTest(name=name):
-                self.assertEqual(
-                    hashlib.sha256((self.dist / name).read_bytes()).hexdigest(), expected
-                )
+                self.assertEqual((self.dist / name).read_bytes(), expected)
+
+    def test_producer_byte_identity_survives_package_and_contract_version_bumps(self):
+        source = self.dist / "release-source"
+        files = {
+            "crates/client/Cargo.toml",
+            "crates/server/Cargo.toml",
+            "crates/protocol/Cargo.toml",
+            "mcp/pyproject.toml",
+            "rust-toolchain.toml",
+            "crates/protocol/src/lib.rs",
+            "crates/protocol/src/workspace.rs",
+            "crates/client/src/workspace/store.rs",
+            "crates/server/src/init.rs",
+        }
+        for name in files:
+            target = source / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            raw = (ROOT / name).read_text()
+            raw = raw.replace(
+                'version = "' + self.contract.source_version(ROOT) + '"', 'version = "0.2.0"'
+            )
+            raw = re.sub(
+                r"(const (?:PROTOCOL_VERSION|API_VERSION|PROFILE_MIN_FORMAT|PROFILE_FORMAT|SCHEMA_VERSION): u32 = )([0-9]+)",
+                lambda match: match[1] + str(int(match[2]) + 1),
+                raw,
+            )
+            target.write_text(raw)
+        with patch.object(nightly, "ROOT", source):
+            nightly.prepare(self.dist, SHA)
+        self.assertEqual(
+            self.contract.decode((self.dist / self.contract.MANIFEST).read_bytes()).package_version,
+            "0.2.0",
+        )
+        for name, expected in self.pre_compatibility_output(source).items():
+            with self.subTest(name=name):
+                self.assertEqual((self.dist / name).read_bytes(), expected)
 
     def test_future_client_only_platform_and_assets_verify_for_every_known_platform(self):
         data = self.future_manifest()
@@ -266,7 +376,10 @@ class ReleaseContractTests(unittest.TestCase):
                 result = self.contract.verify(self.dist, "nightly", TAG, platform)
                 self.assertEqual(result.value(), data)
                 self.assertEqual(proof.call_count, 1)
-        with patch.object(self.contract.subprocess, "run") as proof, self.assertRaises(ValueError):
+        with (
+            patch.object(self.contract.subprocess, "run") as proof,
+            self.assertRaisesRegex(ValueError, "^Unsupported client platform$"),
+        ):
             self.contract.verify(self.dist, "nightly", TAG, "windows-x86_64")
         proof.assert_not_called()
 
@@ -304,31 +417,36 @@ class ReleaseContractTests(unittest.TestCase):
             self.assertRaisesRegex(ValueError, "provenance"),
         ):
             self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
-        for channel, tag in (
-            ("stable", "v0.2.0"),
-            ("nightly", TAG.replace("a" * 12, "b" * 12)),
-            ("custom", TAG),
+        for channel, tag, reason in (
+            ("stable", "v0.2.0", "Stable tag and package version differ"),
+            ("nightly", TAG.replace("a" * 12, "b" * 12), "Nightly tag and source differ"),
+            ("custom", TAG, "Unsupported release channel"),
         ):
             with (
                 self.subTest(channel=channel),
                 patch.object(self.contract.subprocess, "run") as proof,
-                self.assertRaises(ValueError),
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
             ):
                 self.contract.verify(self.dist, channel, tag, "linux-x86_64")
             proof.assert_not_called()
-        for key, value in (
-            ("repository", "attacker/repo"),
-            ("source_sha", "b" * 40),
-            ("package_version", "malformed"),
+        for key, value, reason in (
+            ("repository", "attacker/repo", "Unexpected release source"),
+            ("source_sha", "b" * 40, "Nightly tag and source differ"),
+            ("package_version", "malformed", "Invalid release identity"),
         ):
             path.write_text(json.dumps({**data, key: value}))
             with (
                 self.subTest(key=key),
                 patch.object(self.contract.subprocess, "run") as proof,
-                self.assertRaises(ValueError),
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
             ):
                 self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
             proof.assert_not_called()
+
+    def test_client_assets_directly_refuses_a_declared_future_platform(self):
+        manifest = self.contract.decode(json.dumps(self.future_manifest()).encode())
+        with self.assertRaisesRegex(ValueError, "^Unsupported client platform$"):
+            manifest.client_assets("windows-x86_64")
 
     def test_client_only_known_platform_does_not_require_a_server(self):
         data = json.loads(self.raw)
@@ -350,7 +468,12 @@ class ReleaseContractTests(unittest.TestCase):
                     with (
                         self.subTest(platform=platform, name=name, change=change),
                         patch.object(self.contract.subprocess, "run"),
-                        self.assertRaises(ValueError),
+                        self.assertRaisesRegex(
+                            ValueError,
+                            "^Missing client release artifact$"
+                            if change == "missing"
+                            else "^Release artifact differs from manifest$",
+                        ),
                     ):
                         self.contract.verify(self.dist, "nightly", TAG, platform)
 
@@ -358,16 +481,27 @@ class ReleaseContractTests(unittest.TestCase):
         for name in ("../windows-x86_64", "Windows-x86_64", "windows", "windows-x86_64\n", 1):
             data = self.future_manifest()
             data["platforms"].append(name)
-            with self.subTest(platform=name), self.assertRaises(ValueError):
+            with (
+                self.subTest(platform=name),
+                self.assertRaisesRegex(
+                    ValueError,
+                    "^Invalid release text$"
+                    if isinstance(name, int)
+                    else "^Invalid release identity$",
+                ),
+            ):
                 self.contract.decode(json.dumps(data).encode())
         data = self.future_manifest()
         data["platforms"].append("linux-x86_64")
-        with self.assertRaises(ValueError):
+        with self.assertRaisesRegex(ValueError, "^Duplicate release platform$"):
             self.contract.decode(json.dumps(data).encode())
         for name in ("../client", ".client", "client..exe", "client/extra", "client\n", ""):
             data = self.future_manifest()
             data["artifacts"][name] = {"size": 1, "sha256": "a" * 64}
-            with self.subTest(asset=name), self.assertRaises(ValueError):
+            with (
+                self.subTest(asset=name),
+                self.assertRaisesRegex(ValueError, "^Invalid release identity$"),
+            ):
                 self.contract.decode(json.dumps(data).encode())
         raw = json.dumps(self.future_manifest()).encode()
         for key, value in (

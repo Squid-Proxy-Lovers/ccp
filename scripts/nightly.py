@@ -80,6 +80,10 @@ def verify(dist: Path, sha: str) -> None:
     )
     if manifest.source_sha != sha:
         raise ValueError("Release contract belongs to another commit")
+    if manifest.platforms != PLATFORMS:
+        raise ValueError("Producer release platforms differ")
+    if set(manifest.artifacts) != set((*ASSETS, "build-info.json")):
+        raise ValueError("Producer release artifacts differ")
     manifest.verify_files(dist, release_contract.ASSETS)
 
 

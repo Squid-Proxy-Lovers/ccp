@@ -123,7 +123,15 @@ class ManagedBundleTests(unittest.TestCase):
         self.store.activate(active.generation_id, 0)
         pointer = (self.store.root / "current.json").read_bytes()
         local = "ccp-client-" + build_module.host_platform()
-        for change in ("missing", "platform", "duplicate", "asset-name", "platform-name", "hash"):
+        reasons = {
+            "missing": "Missing client release artifact",
+            "platform": "Missing client platform",
+            "duplicate": "Duplicate release platform",
+            "asset-name": "Invalid release identity",
+            "platform-name": "Invalid release identity",
+            "hash": "Release artifact differs from manifest",
+        }
+        for change, reason in reasons.items():
             self.prepare()
             data = self.future_manifest()
             if change == "missing":
@@ -143,7 +151,7 @@ class ManagedBundleTests(unittest.TestCase):
                 self.subTest(change=change),
                 patch.object(contract, "verify_provenance"),
                 patch.object(build_module, "build") as builder,
-                self.assertRaises(ValueError),
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
             ):
                 self.store.stage(self.inputs, "stable", "v0.1.0")
             builder.assert_not_called()
@@ -158,10 +166,45 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module.platform, "system", return_value="Windows"),
             patch.object(build_module.platform, "machine", return_value="x86_64"),
             patch.object(build_module, "build") as builder,
-            self.assertRaises(ValueError),
+            self.assertRaisesRegex(ValueError, "^Unsupported managed client platform$"),
         ):
             self.store.stage(self.inputs, "stable", "v0.1.0")
         builder.assert_not_called()
+
+    def test_reopened_store_checks_host_and_manifest_platform_before_client_lookup(self):
+        generation = self.stage()
+        release_path = generation.path / "release" / contract.MANIFEST
+        ready_path = generation.path / "ready.json"
+        original = json.loads(release_path.read_bytes())
+        ready = fs.load(ready_path)
+        local = build_module.host_platform()
+        for change, reason in (
+            ("host", "Stored bundle belongs to another platform"),
+            ("platform", "Missing client platform"),
+            ("client", "Missing client release artifact"),
+            ("future-host", "Unsupported client platform"),
+        ):
+            data = json.loads(json.dumps(original))
+            row = dict(ready)
+            if change in ("host", "future-host"):
+                row["platform"] = "windows-x86_64"
+            elif change == "platform":
+                data["platforms"].remove(local)
+            else:
+                del data["artifacts"]["ccp-client-" + local]
+            fs.atomic(release_path, data)
+            row["manifest_sha256"] = hashlib.sha256(release_path.read_bytes()).hexdigest()
+            fs.atomic(ready_path, row)
+            with (
+                self.subTest(change=change),
+                patch.object(
+                    build_module,
+                    "host_platform",
+                    return_value="windows-x86_64" if change == "future-host" else local,
+                ),
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
+            ):
+                self.store.generation(generation.generation_id)
 
     def test_private_stage_reopen_activation_noop_and_software_only_rollback(self):
         first = self.stage()
