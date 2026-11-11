@@ -1662,3 +1662,203 @@ async fn revoke_of_another_certificate_does_not_drop_unrelated_journaled_writes(
     );
     loaded.journal.shutdown().unwrap();
 }
+
+fn history_row(operation_id: &str, content: &str) -> MessageHistoryEntry {
+    MessageHistoryEntry {
+        operation_id: operation_id.to_string(),
+        client_common_name: "writer".to_string(),
+        agent_name: None,
+        host_name: None,
+        reason: None,
+        appended_content: content.to_string(),
+        created_at: "1".to_string(),
+    }
+}
+
+fn merge_history_bundle(session_id: i64, histories: &[&[(&str, &str)]]) -> TransferBundle {
+    let entries: Vec<BundleEntry> = histories
+        .iter()
+        .map(|rows| BundleEntry {
+            name: "victim".to_string(),
+            description: String::new(),
+            labels: vec![],
+            context: "IMPORTED".to_string(),
+            shelf_name: "shelf".to_string(),
+            book_name: "book".to_string(),
+            shelf_description: String::new(),
+            book_description: String::new(),
+            history: rows
+                .iter()
+                .map(|(op, content)| history_row(op, content))
+                .collect(),
+        })
+        .collect();
+    let bundle_sha256: String = sha2::Sha256::digest(serde_json::to_vec(&entries).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    TransferBundle {
+        session: SessionMetadata {
+            session_name: "session-under-test".to_string(),
+            session_id,
+            description: String::new(),
+            owner: String::new(),
+            labels: vec![],
+            visibility: "private".to_string(),
+            purpose: String::new(),
+        },
+        selector: TransferSelector {
+            scope: TransferScope::Session,
+            include_history: true,
+        },
+        exported_at: "0".to_string(),
+        entries,
+        bundle_sha256,
+    }
+}
+
+#[tokio::test]
+async fn merge_history_rollback_removes_a_newly_imported_duplicate_path() {
+    let ctx = TestContext::new("merge-history-new-path-rollback")
+        .await
+        .unwrap();
+    let actor = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_shelf(ctx.session_id, "shelf", "", &actor)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(ctx.session_id, "shelf", "book", "", &actor)
+        .await
+        .unwrap();
+    poison_before("message_packs", "INSERT", "NEW.name = 'victim'");
+
+    let bundle = merge_history_bundle(
+        ctx.session_id,
+        &[&[("op-1", "first")], &[("op-2", "second")]],
+    );
+    assert!(
+        ctx.state
+            .import_bundle(
+                ctx.session_id,
+                &bundle,
+                &ConflictPolicy::MergeHistory,
+                &actor
+            )
+            .await
+            .is_err()
+    );
+
+    assert!(
+        ctx.state
+            .get_entry(
+                ctx.session_id,
+                "victim",
+                Some("shelf"),
+                Some("book"),
+                &actor
+            )
+            .await
+            .unwrap()
+            .is_none(),
+        "a rolled-back merge-history import must not leave a newly imported \
+         duplicate path in memory"
+    );
+}
+
+#[tokio::test]
+async fn merge_history_rollback_restores_the_pre_import_entry_despite_duplicate_paths() {
+    let ctx = TestContext::new("merge-history-existing-path-rollback")
+        .await
+        .unwrap();
+    let actor = writer(ctx.session_id, "writer");
+    ctx.state
+        .add_shelf(ctx.session_id, "shelf", "", &actor)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(ctx.session_id, "shelf", "book", "", &actor)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            ctx.session_id,
+            "victim",
+            "",
+            &[],
+            "ORIGINAL",
+            "shelf",
+            "book",
+            &actor,
+        )
+        .await
+        .unwrap();
+    poison_before("message_packs", "INSERT", "NEW.name = 'poison'");
+
+    let mut bundle = merge_history_bundle(
+        ctx.session_id,
+        &[&[("op-1", "first")], &[("op-2", "second")]],
+    );
+    bundle.entries.push(BundleEntry {
+        name: "poison".to_string(),
+        description: String::new(),
+        labels: vec![],
+        context: "x".to_string(),
+        shelf_name: "shelf".to_string(),
+        book_name: "book".to_string(),
+        shelf_description: String::new(),
+        book_description: String::new(),
+        history: vec![],
+    });
+    let bundle_sha256: String = sha2::Sha256::digest(serde_json::to_vec(&bundle.entries).unwrap())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    bundle.bundle_sha256 = bundle_sha256;
+
+    assert!(
+        ctx.state
+            .import_bundle(
+                ctx.session_id,
+                &bundle,
+                &ConflictPolicy::MergeHistory,
+                &actor
+            )
+            .await
+            .is_err()
+    );
+
+    let restored = ctx
+        .state
+        .get_entry(
+            ctx.session_id,
+            "victim",
+            Some("shelf"),
+            Some("book"),
+            &actor,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        restored.context, "ORIGINAL",
+        "a rolled-back merge-history import must restore the pre-import entry, \
+         not an intermediate value written earlier in the same bundle"
+    );
+    assert_eq!(
+        ctx.state
+            .get_history(
+                ctx.session_id,
+                "victim",
+                Some("shelf"),
+                Some("book"),
+                &actor
+            )
+            .await
+            .unwrap()
+            .len(),
+        0,
+        "a rolled-back merge-history import must not retain history merged \
+         earlier in the same bundle"
+    );
+}

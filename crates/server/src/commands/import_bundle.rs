@@ -217,7 +217,11 @@ impl ServerState {
                     ConflictPolicy::MergeHistory => {
                         if let Some(existing) = session.entries.get_mut(&key) {
                             // Keep existing context/description/labels; union history rows.
-                            previous_entries.insert(key.clone(), Some(existing.clone()));
+                            // A bundle can list the same path twice; keep only the
+                            // value that existed before this import call.
+                            previous_entries
+                                .entry(key.clone())
+                                .or_insert_with(|| Some(existing.clone()));
                             let known_op_ids: HashSet<_> = existing
                                 .history
                                 .iter()
@@ -249,7 +253,7 @@ impl ServerState {
                                 path.shelf_name(),
                                 Some(path.book_name()),
                             );
-                            previous_entries.insert(key.clone(), None);
+                            previous_entries.entry(key.clone()).or_insert(None);
                             let imported = session.build_entry(
                                 path,
                                 entry.description.clone(),
