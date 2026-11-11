@@ -163,7 +163,15 @@ class ManagedBundleTests(unittest.TestCase):
         import asyncio
         import importlib.metadata
         from dataclasses import replace
+        from types import SimpleNamespace
 
+        # The coroutine is closed below; its health-only imports need no real MCP stack.
+        dependencies = {
+            "fastmcp": SimpleNamespace(Client=object),
+            "ccp_mcp_server.workspace": SimpleNamespace(build_server=object),
+            "ccp_mcp_server.workspace_config": SimpleNamespace(WorkspaceConfig=object),
+            "ccp_mcp_server.workspace_runtime": SimpleNamespace(WorkspaceRuntime=object),
+        }
         generation = self.root / "rc-candidate"
         generation.mkdir()
         manifest = replace(
@@ -194,6 +202,7 @@ class ManagedBundleTests(unittest.TestCase):
         self.assertEqual(arguments[4], "0.2.0rc1")
         for installed in ["0.2.0rc1", "0.2.0rc2", "0.2.0", "0.2.0-rc.1", "0.2.1rc1"]:
             with (
+                patch.dict(sys.modules, dependencies),
                 patch.object(sys, "argv", ["-c", *arguments[4:]]),
                 patch.object(importlib.metadata, "version", return_value=installed),
                 patch.object(asyncio, "run", side_effect=lambda coroutine: coroutine.close()),
