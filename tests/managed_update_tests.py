@@ -123,6 +123,27 @@ class ManagedUpdateTests(unittest.TestCase):
         self.assertFalse((self.store.root / policy.NAME).exists())
         self.assertEqual((self.store.root / policy.MARKER).read_bytes(), marker)
 
+    def test_future_manifest_update_downloads_only_local_assets_and_activates(self):
+        self.configure(True)
+        self.f.prepare("b" * 40)
+        data = self.f.future_manifest()
+        with self.boundaries(), patch.object(net, "asset", side_effect=self.asset) as download:
+            result = updater.update(self.store, 1)
+        self.assertEqual(result["result"], "updated")
+        generation = self.store.generation(self.store.pointer().current)
+        self.assertEqual(generation.manifest.value(), data)
+        self.assertEqual(
+            {call.args[1] for call in download.call_args_list},
+            {
+                contract.MANIFEST,
+                contract.PROVENANCE,
+                "ccp-client-" + build_module.host_platform(),
+                "ccp-mcp.tar.gz",
+                "build-info.json",
+            },
+        )
+        self.assertEqual(self.store.pointer().previous, self.first.generation_id)
+
     def test_verified_update_checks_both_aliases_preserves_config_and_retains_old_pair(self):
         self.configure()
         self.f.prepare("b" * 40)

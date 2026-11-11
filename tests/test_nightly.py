@@ -234,6 +234,161 @@ class ReleaseContractTests(unittest.TestCase):
         self.raw = (self.dist / self.contract.MANIFEST).read_bytes()
         self.manifest = self.contract.decode(self.raw)
 
+    def future_manifest(self):
+        data = json.loads(self.raw)
+        data["platforms"].append("windows-x86_64")
+        item = {"size": 1, "sha256": "a" * 64}
+        data["artifacts"]["ccp-client-windows-x86_64.exe"] = item
+        data["artifacts"]["release-notes.txt"] = item
+        return data
+
+    def test_producer_bytes_match_pre_forward_compatibility_output(self):
+        # Captured from 2b945c1 for the fixed exact-source artifacts in setUp.
+        for name, expected in {
+            "ccp-release.json": "9351675a1d41978b27198d78ea287738847e8b4d152b9a4904eda99f2e0da463",
+            "build-info.json": "795254df0b64fbca84910ebca64e75ffeaac048ac5ffd875ff9b96c816b87cd1",
+            "SHA256SUMS": "11565985731ea6db895cd21522da6bc66d5de7b7955eea2c001f56fbc81d1be0",
+        }.items():
+            with self.subTest(name=name):
+                self.assertEqual(
+                    hashlib.sha256((self.dist / name).read_bytes()).hexdigest(), expected
+                )
+
+    def test_future_client_only_platform_and_assets_verify_for_every_known_platform(self):
+        data = self.future_manifest()
+        raw = json.dumps(data).encode()
+        (self.dist / self.contract.MANIFEST).write_bytes(raw)
+        for platform in self.contract.PLATFORMS:
+            with (
+                self.subTest(platform=platform),
+                patch.object(self.contract.subprocess, "run") as proof,
+            ):
+                result = self.contract.verify(self.dist, "nightly", TAG, platform)
+                self.assertEqual(result.value(), data)
+                self.assertEqual(proof.call_count, 1)
+        with patch.object(self.contract.subprocess, "run") as proof, self.assertRaises(ValueError):
+            self.contract.verify(self.dist, "nightly", TAG, "windows-x86_64")
+        proof.assert_not_called()
+
+    def test_checkout_cli_preserves_future_platforms_in_verified_output(self):
+        data = self.future_manifest()
+        (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "release_contract.py",
+                    "--directory",
+                    str(self.dist),
+                    "--channel",
+                    "nightly",
+                    "--tag",
+                    TAG,
+                    "--platform",
+                    "linux-x86_64",
+                ],
+            ),
+            patch.object(self.contract.subprocess, "run"),
+            patch("builtins.print") as output,
+        ):
+            self.contract.main()
+        self.assertEqual(json.loads(output.call_args.args[0]), data)
+
+    def test_future_manifest_keeps_provenance_source_and_version_policy_strict(self):
+        data = self.future_manifest()
+        path = self.dist / self.contract.MANIFEST
+        path.write_text(json.dumps(data))
+        with (
+            patch.object(self.contract.subprocess, "run", side_effect=FileNotFoundError),
+            self.assertRaisesRegex(ValueError, "provenance"),
+        ):
+            self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+        for channel, tag in (
+            ("stable", "v0.2.0"),
+            ("nightly", TAG.replace("a" * 12, "b" * 12)),
+            ("custom", TAG),
+        ):
+            with (
+                self.subTest(channel=channel),
+                patch.object(self.contract.subprocess, "run") as proof,
+                self.assertRaises(ValueError),
+            ):
+                self.contract.verify(self.dist, channel, tag, "linux-x86_64")
+            proof.assert_not_called()
+        for key, value in (
+            ("repository", "attacker/repo"),
+            ("source_sha", "b" * 40),
+            ("package_version", "malformed"),
+        ):
+            path.write_text(json.dumps({**data, key: value}))
+            with (
+                self.subTest(key=key),
+                patch.object(self.contract.subprocess, "run") as proof,
+                self.assertRaises(ValueError),
+            ):
+                self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+            proof.assert_not_called()
+
+    def test_client_only_known_platform_does_not_require_a_server(self):
+        data = json.loads(self.raw)
+        del data["artifacts"]["ccp-server-linux-x86_64"]
+        (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+        with patch.object(self.contract.subprocess, "run"):
+            self.contract.verify(self.dist, "nightly", TAG, "linux-x86_64")
+
+    def test_future_manifest_still_rejects_missing_local_assets_and_tampered_hashes(self):
+        for platform in self.contract.PLATFORMS:
+            for name in (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json"):
+                for change in ("missing", "hash"):
+                    data = self.future_manifest()
+                    if change == "missing":
+                        del data["artifacts"][name]
+                    else:
+                        data["artifacts"][name]["sha256"] = "0" * 64
+                    (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+                    with (
+                        self.subTest(platform=platform, name=name, change=change),
+                        patch.object(self.contract.subprocess, "run"),
+                        self.assertRaises(ValueError),
+                    ):
+                        self.contract.verify(self.dist, "nightly", TAG, platform)
+
+    def test_future_manifest_rejects_duplicate_and_malformed_entries(self):
+        for name in ("../windows-x86_64", "Windows-x86_64", "windows", "windows-x86_64\n", 1):
+            data = self.future_manifest()
+            data["platforms"].append(name)
+            with self.subTest(platform=name), self.assertRaises(ValueError):
+                self.contract.decode(json.dumps(data).encode())
+        data = self.future_manifest()
+        data["platforms"].append("linux-x86_64")
+        with self.assertRaises(ValueError):
+            self.contract.decode(json.dumps(data).encode())
+        for name in ("../client", ".client", "client..exe", "client/extra", "client\n", ""):
+            data = self.future_manifest()
+            data["artifacts"][name] = {"size": 1, "sha256": "a" * 64}
+            with self.subTest(asset=name), self.assertRaises(ValueError):
+                self.contract.decode(json.dumps(data).encode())
+        raw = json.dumps(self.future_manifest()).encode()
+        for key, value in (
+            (b'"size": 1', b'"size": 1, "size": 1'),
+            (b'"release-notes.txt":', b'"ccp-mcp.tar.gz":'),
+        ):
+            with self.assertRaisesRegex(ValueError, "Duplicate"):
+                self.contract.decode(raw.replace(key, value))
+
+    def test_platform_list_changes_remain_part_of_manifest_integrity(self):
+        manifest = self.contract.decode(self.raw)
+        data = json.loads(self.raw)
+        data["platforms"].reverse()
+        (self.dist / self.contract.MANIFEST).write_text(json.dumps(data))
+        with (
+            patch.object(self.contract.subprocess, "run") as proof,
+            self.assertRaisesRegex(ValueError, "manifest changed"),
+        ):
+            self.contract.verify_provenance(self.dist, manifest, "refs/heads/main")
+        proof.assert_not_called()
+
     def test_producer_binds_all_bytes_and_actual_source_versions_contracts(self):
         value = self.manifest.value()
         self.assertEqual(value["repository"], "Squid-Proxy-Lovers/ccp")

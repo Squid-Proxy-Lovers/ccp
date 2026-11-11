@@ -45,7 +45,7 @@ together. This command verifies files; it does not activate a bundle.
 ## Understand publisher verification
 
 `ccp-release.json` contains format 1, the official repository identity, full source
-commit, matching client/server/MCP package version, fixed platforms and each
+commit, matching client/server/MCP package version, declared platforms and each
 artifact's exact byte count and SHA-256. Contract numbers identify native wire,
 workspace API, client profile read minimum/write format and server schema write
 format from the producing source. The MCP archive and `build-info.json` are bound
@@ -62,8 +62,18 @@ and [CLI policy flags](https://cli.github.com/manual/gh_attestation_verify).
 
 After publisher verification, the tool checks the chosen client, MCP archive and
 build metadata against the authenticated sizes/hashes. Malformed, duplicate,
-future-format, foreign-repository or unexpected artifact fields fail. Symlink
-inputs, excessive sizes, missing provenance, unavailable verification tools,
+future-format, foreign-repository or unexpected artifact fields fail. Platform
+names use lowercase OS and architecture components separated by a hyphen; asset
+names use lowercase letters, digits, underscores and hyphens, with single dots
+separating nonempty components. Duplicate platforms or artifact names fail.
+Additional well-formed platforms and assets are accepted as metadata, but cannot
+expand the verifier's supported platform list and are never downloaded or run.
+Platforms may provide a client without a server. The selected platform must be
+listed and its client, MCP archive and build metadata must all be present and
+verified. Current producers still emit the four platforms and both binaries for
+each, with identical manifest, build metadata and checksum bytes.
+
+Symlink inputs, excessive sizes, missing provenance, unavailable verification tools,
 timeouts and signature/policy failures also fail. There is no checksum fallback.
 GitHub CLI must support the required policy flags; local verification was checked
 with version 2.100.0. Trust-root/network prerequisites follow GitHub CLI's

@@ -89,6 +89,28 @@ def digest(path: Path) -> tuple[int, str]:
     return total, hashed.hexdigest()
 
 
+def platform_names(value: object) -> tuple[str, ...]:
+    require(isinstance(value, list) and bool(value), "Invalid release platforms")
+    names = tuple(
+        text(name, r"[a-z][a-z0-9]*-(?:[a-z0-9]+[_-])*[a-z0-9]+")
+        for name in cast(list[object], value)
+    )
+    require(len(names) == len(set(names)), "Duplicate release platform")
+    return names
+
+
+def artifact_entries(value: object) -> dict[str, Artifact]:
+    require(isinstance(value, dict), "Invalid release artifacts")
+    artifacts: dict[str, Artifact] = {}
+    for name, entry in cast(dict[str, object], value).items():
+        text(name, r"[a-z0-9][a-z0-9_-]*(?:\.[a-z0-9][a-z0-9_-]*)*")
+        item = fields(entry, {"size", "sha256"})
+        artifacts[name] = Artifact(
+            number(item["size"], MAX_ARTIFACT), text(item["sha256"], "[0-9a-f]{64}")
+        )
+    return artifacts
+
+
 @dataclass(frozen=True)
 class Artifact:
     size: int
@@ -101,6 +123,7 @@ class Manifest:
     package_version: str
     contracts: dict[str, int]
     artifacts: dict[str, Artifact]
+    platforms: tuple[str, ...] = PLATFORMS
 
     def value(self) -> dict[str, object]:
         return {
@@ -108,13 +131,21 @@ class Manifest:
             "repository": REPOSITORY,
             "source_sha": self.source_sha,
             "package_version": self.package_version,
-            "platforms": list(PLATFORMS),
+            "platforms": list(self.platforms),
             "contracts": self.contracts,
             "artifacts": {
                 name: {"size": item.size, "sha256": item.sha256}
                 for name, item in self.artifacts.items()
             },
         }
+
+    def client_assets(self, platform: str) -> tuple[str, ...]:
+        # The manifest cannot expand the platforms this installed verifier can run.
+        require(platform in PLATFORMS, "Unsupported client platform")
+        require(platform in self.platforms, "Missing client platform")
+        names = (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json")
+        require(all(name in self.artifacts for name in names), "Missing client release artifact")
+        return names
 
     def verify_files(self, directory: Path, names: tuple[str, ...]) -> None:
         for name in names:
@@ -147,26 +178,19 @@ def decode(raw: bytes) -> Manifest:
     require(
         type(data["format"]) is int and data["format"] == 1, "Unsupported release manifest format"
     )
-    require(
-        data["repository"] == REPOSITORY and data["platforms"] == list(PLATFORMS),
-        "Unexpected release source or platforms",
-    )
+    require(data["repository"] == REPOSITORY, "Unexpected release source")
+    platforms = platform_names(data["platforms"])
     contracts = {key: number(value) for key, value in fields(data["contracts"], CONTRACTS).items()}
     require(
         contracts["client_profile_read_min"] <= contracts["client_profile_write"],
         "Invalid client profile range",
     )
-    artifacts: dict[str, Artifact] = {}
-    for name, value in fields(data["artifacts"], set(ASSETS)).items():
-        item = fields(value, {"size", "sha256"})
-        artifacts[name] = Artifact(
-            number(item["size"], MAX_ARTIFACT), text(item["sha256"], "[0-9a-f]{64}")
-        )
     return Manifest(
         text(data["source_sha"], "[0-9a-f]{40}"),
         text(data["package_version"], r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?"),
         contracts,
-        artifacts,
+        artifact_entries(data["artifacts"]),
+        platforms,
     )
 
 
@@ -274,9 +298,7 @@ def verify(directory: Path, channel: str, tag: str, platform: str) -> Manifest:
     manifest = decode(read_file(directory / MANIFEST, 64 * 1024))
     ref = source_ref(channel, tag, manifest)
     verify_provenance(directory, manifest, ref)
-    manifest.verify_files(
-        directory, (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json")
-    )
+    manifest.verify_files(directory, manifest.client_assets(platform))
     return manifest
 
 

@@ -83,6 +83,86 @@ class ManagedBundleTests(unittest.TestCase):
         ):
             return self.store.stage(self.inputs, "stable", "v0.1.0")
 
+    def future_manifest(self):
+        path = self.inputs / contract.MANIFEST
+        data = json.loads(path.read_bytes())
+        data["platforms"].append("windows-x86_64")
+        for name in ("ccp-client-windows-x86_64.exe", "release-notes.txt"):
+            data["artifacts"][name] = {"size": 1, "sha256": "a" * 64}
+        path.write_text(json.dumps(data))
+        return data
+
+    def test_future_manifest_stages_only_selected_platform_and_shared_assets(self):
+        data = self.future_manifest()
+        for platform in contract.PLATFORMS:
+            with (
+                self.subTest(platform=platform),
+                patch.object(build_module, "host_platform", return_value=platform),
+            ):
+                generation = self.stage()
+                self.assertEqual(generation.manifest.value(), data)
+                self.assertEqual(
+                    (generation.path / "client").read_bytes(),
+                    (self.inputs / f"ccp-client-{platform}").read_bytes(),
+                )
+                self.assertEqual(
+                    {p.name for p in (generation.path / "release").iterdir()},
+                    {
+                        contract.MANIFEST,
+                        contract.PROVENANCE,
+                        f"ccp-client-{platform}",
+                        "ccp-mcp.tar.gz",
+                        "build-info.json",
+                    },
+                )
+                self.store.activate(generation.generation_id, self.store.pointer().revision)
+                self.assertEqual(self.store.launch("client", ())[0], generation.path / "client")
+
+    def test_invalid_future_manifest_never_builds_or_replaces_active_generation(self):
+        active = self.stage()
+        self.store.activate(active.generation_id, 0)
+        pointer = (self.store.root / "current.json").read_bytes()
+        local = "ccp-client-" + build_module.host_platform()
+        for change in ("missing", "platform", "duplicate", "asset-name", "platform-name", "hash"):
+            self.prepare()
+            data = self.future_manifest()
+            if change == "missing":
+                del data["artifacts"][local]
+            elif change == "platform":
+                data["platforms"].remove(build_module.host_platform())
+            elif change == "duplicate":
+                data["platforms"].append("windows-x86_64")
+            elif change == "asset-name":
+                data["artifacts"]["../escape"] = data["artifacts"][local]
+            elif change == "platform-name":
+                data["platforms"].append("../escape")
+            else:
+                data["artifacts"][local]["sha256"] = "0" * 64
+            (self.inputs / contract.MANIFEST).write_text(json.dumps(data))
+            with (
+                self.subTest(change=change),
+                patch.object(contract, "verify_provenance"),
+                patch.object(build_module, "build") as builder,
+                self.assertRaises(ValueError),
+            ):
+                self.store.stage(self.inputs, "stable", "v0.1.0")
+            builder.assert_not_called()
+            self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
+            self.assertEqual(
+                [p.name for p in (self.store.root / "bundles").iterdir()], [active.generation_id]
+            )
+
+    def test_future_platform_is_never_selected_by_host_detection(self):
+        self.future_manifest()
+        with (
+            patch.object(build_module.platform, "system", return_value="Windows"),
+            patch.object(build_module.platform, "machine", return_value="x86_64"),
+            patch.object(build_module, "build") as builder,
+            self.assertRaises(ValueError),
+        ):
+            self.store.stage(self.inputs, "stable", "v0.1.0")
+        builder.assert_not_called()
+
     def test_private_stage_reopen_activation_noop_and_software_only_rollback(self):
         first = self.stage()
         self.assertEqual(self.store.status()["pointer"]["revision"], 0)
