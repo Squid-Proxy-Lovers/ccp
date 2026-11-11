@@ -32,9 +32,17 @@ impl ServerState {
                 })?;
 
             // Mark revoked before removing the grant (fail-closed: deny access
-            // before removing the grant that authorizes it).
-            let mut revoked = self.revoked_cert_common_names.write().await;
-            let newly_revoked = revoked.insert(target_client_common_name.to_string());
+            // before removing the grant that authorizes it). Release the
+            // revoked-set lock before the blocking persist below — every
+            // ping, read and write takes a brief read lock on this same set,
+            // and the cert_grants lock above already serializes concurrent
+            // revokes, so holding it across the persist isn't needed for
+            // correctness and only stalls unrelated requests behind SQLite.
+            let newly_revoked = self
+                .revoked_cert_common_names
+                .write()
+                .await
+                .insert(target_client_common_name.to_string());
             grants.remove(target_client_common_name);
 
             if let Err(error) = super::super::database::persist_revoked_cert(
@@ -47,13 +55,23 @@ impl ServerState {
                 // revocation mark if this call is the one that set it.
                 grants.insert(target_client_common_name.to_string(), grant);
                 if newly_revoked {
-                    revoked.remove(target_client_common_name);
+                    self.revoked_cert_common_names
+                        .write()
+                        .await
+                        .remove(target_client_common_name);
                 }
                 return Err(error);
             }
         }
 
-        checkpoint_journal(&self.journal);
+        // Take the shared native guard just for the checkpoint: it captures
+        // a full snapshot of session state, which must not happen while an
+        // exclusive mutation (import_bundle, delete_entry, ...) has mutated
+        // memory but not yet persisted or rolled back.
+        {
+            let _snapshot_guard = self.native_checkpoint.read().await;
+            checkpoint_journal(self).await;
+        }
         Ok(RevokeCertResult {
             client_common_name: target_client_common_name.to_string(),
             revoked_at,
