@@ -136,6 +136,11 @@ try {
     }
     Confirm-TestCondition ($manifest.artifacts.Count -eq 11) 'Fixture differs from the release producer inventory.'
     Confirm-TestCondition ($manifest.platforms.Count -eq 5) 'Fixture is missing real release platforms.'
+    foreach ($document in @('README.md', 'docs/client.md')) {
+        $instructions = Get-Content -LiteralPath (Join-Path $root $document) -Raw
+        Confirm-TestCondition ($instructions -cmatch 'https://raw.githubusercontent.com/squid-proxy-lovers/ccp/[0-9a-f]{40}/install.ps1') 'Bootstrap instructions are not pinned to an immutable commit.'
+        Confirm-TestCondition (-not $instructions.Contains('/ccp/main/install.ps1')) 'Bootstrap instructions still execute the moving main branch.'
+    }
     [IO.File]::WriteAllText((Join-Path $fixture 'ccp-provenance.json'), 'fixture attestation')
     Confirm-TestCondition ((Get-CcpReleaseTag stable '') -eq 'v0.2.0') 'Stable selection failed.'
     Confirm-TestCondition ((Get-CcpReleaseTag nightly '') -eq 'nightly-2026-01-02-aaaaaaaaaaaa') 'Nightly selection included a draft.'
