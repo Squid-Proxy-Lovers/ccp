@@ -1905,3 +1905,637 @@ async fn import_v2_flushes_query_caches() {
         "context_query_cache should be flushed after import"
     );
 }
+
+// --- certificate revocation concurrency regressions ---
+
+#[tokio::test]
+async fn second_revoke_does_not_readmit_revoked_client() {
+    let ctx = TestContext::new("double-revoke")
+        .await
+        .expect("test context should initialize");
+    ctx.state.cert_grants.write().await.insert(
+        "victim".to_string(),
+        CertGrant {
+            session_id: ctx.session_id,
+            access_level: "read_write".to_string(),
+            cert_pem: "victim-cert".to_string(),
+            created_at: "1".to_string(),
+            expires_at: "4102444800".to_string(),
+        },
+    );
+    let victim = writer(ctx.session_id, "victim");
+    let operator = admin(ctx.session_id, "writer");
+
+    ctx.state
+        .list_entries(ctx.session_id, &victim)
+        .await
+        .expect("read before revoke");
+
+    ctx.state
+        .revoke_client_cert(ctx.session_id, &operator, "victim")
+        .await
+        .expect("first revoke should succeed");
+    assert!(
+        ctx.state
+            .list_entries(ctx.session_id, &victim)
+            .await
+            .is_err(),
+        "access must be denied after first revoke"
+    );
+
+    // Retrying the revoke (e.g. a client-side retry after a dropped response)
+    // must not undo the first one.
+    let _ = ctx
+        .state
+        .revoke_client_cert(ctx.session_id, &operator, "victim")
+        .await;
+
+    assert!(
+        ctx.state
+            .revoked_cert_common_names
+            .read()
+            .await
+            .contains("victim"),
+        "second revoke removed the CN from the revoked set"
+    );
+    assert!(
+        ctx.state
+            .list_entries(ctx.session_id, &victim)
+            .await
+            .is_err(),
+        "second revoke re-admitted the revoked certificate"
+    );
+
+    let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .expect("state should reload from sqlite");
+    assert!(
+        reloaded
+            .list_entries(ctx.session_id, &victim)
+            .await
+            .is_err(),
+        "reload must re-apply revocation"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_revokes_of_same_client_never_readmit_it() {
+    let ctx = TestContext::new("revoke-race")
+        .await
+        .expect("test context should initialize");
+    let operator = admin(ctx.session_id, "writer");
+    let handle = tokio::runtime::Handle::current();
+    let rounds = 20;
+    let mut readmitted = 0;
+    for round in 0..rounds {
+        let cn = format!("racer-{round}");
+        ctx.state.cert_grants.write().await.insert(
+            cn.clone(),
+            CertGrant {
+                session_id: ctx.session_id,
+                access_level: "read_write".to_string(),
+                cert_pem: String::new(),
+                created_at: "1".to_string(),
+                expires_at: "4102444800".to_string(),
+            },
+        );
+        let barrier = std::sync::Barrier::new(2);
+        tokio::task::block_in_place(|| {
+            std::thread::scope(|scope| {
+                for _ in 0..2 {
+                    scope.spawn(|| {
+                        barrier.wait();
+                        handle.block_on(async {
+                            let _ = ctx
+                                .state
+                                .revoke_client_cert(ctx.session_id, &operator, &cn)
+                                .await;
+                        });
+                    });
+                }
+            });
+        });
+        if ctx
+            .state
+            .ensure_ping_access(&writer(ctx.session_id, &cn))
+            .await
+            .is_ok()
+        {
+            readmitted += 1;
+        }
+    }
+    assert_eq!(
+        readmitted, 0,
+        "concurrent revokes of the same client re-admitted it in {readmitted}/{rounds} rounds"
+    );
+}
+
+async fn revoke_grant(ctx: &TestContext, cn: &str) {
+    ctx.state.cert_grants.write().await.insert(
+        cn.to_string(),
+        CertGrant {
+            session_id: ctx.session_id,
+            access_level: "read_write".to_string(),
+            cert_pem: String::new(),
+            created_at: "1".to_string(),
+            expires_at: "4102444800".to_string(),
+        },
+    );
+}
+
+/// Runs `admin_calls` admin revokes and `target_threads` threads each sending
+/// `self_calls` self-revokes of `cn`, released together by one barrier.
+fn run_revoke_race(
+    ctx: &TestContext,
+    handle: &tokio::runtime::Handle,
+    cn: &str,
+    admin_calls: usize,
+    target_threads: usize,
+    self_calls: usize,
+) {
+    let operator = admin(ctx.session_id, "writer");
+    let target = writer(ctx.session_id, cn);
+    let barrier = std::sync::Barrier::new(target_threads + usize::from(admin_calls > 0));
+    tokio::task::block_in_place(|| {
+        std::thread::scope(|scope| {
+            if admin_calls > 0 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    handle.block_on(async {
+                        for _ in 0..admin_calls {
+                            let _ = ctx
+                                .state
+                                .revoke_client_cert(ctx.session_id, &operator, cn)
+                                .await;
+                        }
+                    });
+                });
+            }
+            for _ in 0..target_threads {
+                scope.spawn(|| {
+                    barrier.wait();
+                    handle.block_on(async {
+                        for _ in 0..self_calls {
+                            let _ = ctx
+                                .state
+                                .revoke_client_cert(ctx.session_id, &target, cn)
+                                .await;
+                        }
+                    });
+                });
+            }
+        });
+    });
+}
+
+async fn has_access(ctx: &TestContext, cn: &str) -> bool {
+    ctx.state
+        .ensure_ping_access(&writer(ctx.session_id, cn))
+        .await
+        .is_ok()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn admin_revoke_racing_target_self_revokes_is_not_undone() {
+    let ctx = TestContext::new("self-flood")
+        .await
+        .expect("test context should initialize");
+    let handle = tokio::runtime::Handle::current();
+    let rounds = 30;
+    let mut readmitted = 0;
+    for round in 0..rounds {
+        let cn = format!("flood-{round}");
+        revoke_grant(&ctx, &cn).await;
+        run_revoke_race(&ctx, &handle, &cn, 1, 3, 3);
+        readmitted += usize::from(has_access(&ctx, &cn).await);
+    }
+    assert_eq!(
+        readmitted, 0,
+        "admin revoke raced by the target's own self-revokes was undone in {readmitted}/{rounds} rounds"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_self_revokes_cannot_make_client_unrevokable() {
+    let ctx = TestContext::new("self-immunity")
+        .await
+        .expect("test context should initialize");
+    let handle = tokio::runtime::Handle::current();
+    let operator = admin(ctx.session_id, "writer");
+    let rounds = 30;
+    let mut immune = 0;
+    for round in 0..rounds {
+        let cn = format!("immune-{round}");
+        revoke_grant(&ctx, &cn).await;
+        // No admin involved: the target alone races itself with concurrent self-revokes.
+        run_revoke_race(&ctx, &handle, &cn, 0, 4, 2);
+        let grant_gone = !ctx.state.cert_grants.read().await.contains_key(&cn);
+        if grant_gone && has_access(&ctx, &cn).await {
+            immune += 1;
+            // A later admin revoke must still be able to deny access.
+            let result = ctx
+                .state
+                .revoke_client_cert(ctx.session_id, &operator, &cn)
+                .await;
+            assert!(
+                result.is_ok() || !has_access(&ctx, &cn).await,
+                "admin revoke could not fix a client that made itself unrevokable"
+            );
+        }
+    }
+    assert_eq!(
+        immune, 0,
+        "a client left itself allowed with its grant gone in {immune}/{rounds} rounds"
+    );
+}
+
+#[tokio::test]
+async fn persist_failure_does_not_unrevoke_already_revoked_client() {
+    let ctx = TestContext::new("persist-fail")
+        .await
+        .expect("test context should initialize");
+    // Constructed state: CN already in the revoked set while a grant exists
+    // (as if a first revoke had marked it but not yet removed the grant).
+    revoke_grant(&ctx, "victim").await;
+    ctx.state
+        .revoked_cert_common_names
+        .write()
+        .await
+        .insert("victim".to_string());
+
+    let connection = open_sqlite_connection().expect("sqlite should open");
+    connection
+        .execute_batch(
+            "CREATE TRIGGER inject_insert_fail BEFORE INSERT ON issued_client_certs
+               BEGIN SELECT RAISE(ABORT, 'injected persist failure'); END;
+             CREATE TRIGGER inject_update_fail BEFORE UPDATE ON issued_client_certs
+               BEGIN SELECT RAISE(ABORT, 'injected persist failure'); END;",
+        )
+        .expect("triggers should install");
+
+    let result = ctx
+        .state
+        .revoke_client_cert(ctx.session_id, &admin(ctx.session_id, "writer"), "victim")
+        .await;
+    assert!(result.is_err(), "injected persist failure should surface");
+    assert!(
+        ctx.state
+            .revoked_cert_common_names
+            .read()
+            .await
+            .contains("victim"),
+        "persist-failure rollback un-revoked an already revoked CN"
+    );
+    assert!(
+        !has_access(&ctx, "victim").await,
+        "persist-failure rollback restored access to an already revoked CN"
+    );
+}
+
+// --- rollback isolation regressions for import_bundle / restore_deleted_entry / delete_entry ---
+
+fn rollback_test_bundle(session_id: i64, names: &[&str]) -> TransferBundle {
+    let entries: Vec<BundleEntry> = names
+        .iter()
+        .map(|n| BundleEntry {
+            name: (*n).to_string(),
+            description: "imported".to_string(),
+            labels: vec![],
+            context: "IMPORTED".to_string(),
+            shelf_name: "shelf".to_string(),
+            book_name: "book".to_string(),
+            shelf_description: String::new(),
+            book_description: String::new(),
+            history: vec![],
+        })
+        .collect();
+    let bundle_sha256: String = sha2::Sha256::digest(serde_json::to_vec(&entries).unwrap())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    TransferBundle {
+        session: SessionMetadata {
+            session_name: "session-under-test".to_string(),
+            session_id,
+            description: String::new(),
+            owner: String::new(),
+            labels: vec![],
+            visibility: "private".to_string(),
+            purpose: String::new(),
+        },
+        selector: TransferSelector {
+            scope: TransferScope::Session,
+            include_history: false,
+        },
+        exported_at: "0".to_string(),
+        entries,
+        bundle_sha256,
+    }
+}
+
+/// Makes any INSERT into `message_packs` with this entry name fail, so the
+/// caller's persist step fails and it takes its rollback path.
+fn poison_message_pack_insert(name: &str) {
+    open_sqlite_connection()
+        .expect("sqlite should open")
+        .execute_batch(&format!(
+            "CREATE TRIGGER poison_{name} BEFORE INSERT ON message_packs WHEN NEW.name = '{name}'
+             BEGIN SELECT RAISE(ABORT, 'injected persist failure'); END;"
+        ))
+        .expect("poison trigger should install");
+}
+
+/// Holds the sqlite write lock so a victim operation parks inside its persist
+/// step (after releasing the in-memory session lock) until the lock is released.
+fn block_sqlite_writes() -> rusqlite::Connection {
+    let blocker = open_sqlite_connection().expect("sqlite should open");
+    blocker
+        .execute_batch("BEGIN IMMEDIATE;")
+        .expect("should take write lock");
+    blocker
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn import_rollback_does_not_clobber_concurrent_sibling_writes() {
+    let ctx = TestContext::new("rollback-import")
+        .await
+        .expect("test context should initialize");
+    let a = writer(ctx.session_id, "client-a");
+    let b = writer(ctx.session_id, "client-b");
+    let session_id = ctx.session_id;
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "ORIGINAL",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+    poison_message_pack_insert("poison");
+    let blocker = block_sqlite_writes();
+    let bundle = rollback_test_bundle(session_id, &["victim", "poison"]);
+    let handle = tokio::runtime::Handle::current();
+
+    let import_result = tokio::task::block_in_place(|| {
+        std::thread::scope(|scope| {
+            let import = scope.spawn(|| {
+                handle.block_on(ctx.state.import_bundle(
+                    session_id,
+                    &bundle,
+                    &ConflictPolicy::Overwrite,
+                    &a,
+                ))
+            });
+            // Let the import park inside its persist step before client B writes.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let writes = scope.spawn(|| {
+                handle.block_on(async {
+                    ctx.state
+                        .add_book(session_id, "shelf", "concurrent-book", "", &b)
+                        .await
+                        .unwrap();
+                    ctx.state
+                        .add_entry(
+                            session_id,
+                            "other",
+                            "",
+                            &[],
+                            "x",
+                            "shelf",
+                            "concurrent-book",
+                            &b,
+                        )
+                        .await
+                        .unwrap();
+                    ctx.state
+                        .append_to_entry(
+                            session_id,
+                            "victim",
+                            Some("shelf"),
+                            Some("book"),
+                            &b,
+                            "CONCURRENT-APPEND",
+                            AppendMetadata {
+                                agent_name: None,
+                                host_name: None,
+                                reason: None,
+                            },
+                        )
+                        .await
+                        .unwrap();
+                });
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            blocker.execute_batch("COMMIT;").unwrap();
+            let import_result = import.join().expect("import thread");
+            writes.join().expect("writes thread");
+            import_result
+        })
+    });
+    assert!(import_result.is_err(), "poisoned import should fail");
+
+    let sessions = ctx.state.sessions.read().await;
+    let session = sessions.get(&session_id).unwrap();
+    assert!(
+        session
+            .books
+            .contains_key(&("shelf".to_string(), "concurrent-book".to_string())),
+        "import rollback dropped a concurrently added book"
+    );
+    assert!(
+        session
+            .entries
+            .contains_key("shelf::concurrent-book::other"),
+        "import rollback dropped a concurrently added entry"
+    );
+    assert!(
+        session
+            .entries
+            .get("shelf::book::victim")
+            .is_some_and(|e| e.context.contains("CONCURRENT-APPEND")),
+        "import rollback dropped a concurrently acknowledged append"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restore_rollback_does_not_clobber_concurrent_sibling_writes() {
+    let ctx = TestContext::new("rollback-restore")
+        .await
+        .expect("test context should initialize");
+    let a = writer(ctx.session_id, "client-a");
+    let b = writer(ctx.session_id, "client-b");
+    let session_id = ctx.session_id;
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "ORIGINAL",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    let deleted = ctx
+        .state
+        .delete_entry(session_id, "victim", Some("shelf"), Some("book"), &a)
+        .await
+        .unwrap();
+    poison_message_pack_insert("victim");
+    let blocker = block_sqlite_writes();
+    let key = deleted.entry_key.clone();
+    let handle = tokio::runtime::Handle::current();
+
+    let restore_result = tokio::task::block_in_place(|| {
+        std::thread::scope(|scope| {
+            let restore = scope
+                .spawn(|| handle.block_on(ctx.state.restore_deleted_entry(session_id, &key, &a)));
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let writes = scope.spawn(|| {
+                handle.block_on(async {
+                    ctx.state
+                        .add_book(session_id, "shelf", "concurrent-book", "", &b)
+                        .await
+                        .unwrap();
+                    ctx.state
+                        .add_entry(
+                            session_id,
+                            "other",
+                            "",
+                            &[],
+                            "x",
+                            "shelf",
+                            "concurrent-book",
+                            &b,
+                        )
+                        .await
+                        .unwrap();
+                });
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            blocker.execute_batch("COMMIT;").unwrap();
+            let restore_result = restore.join().expect("restore thread");
+            writes.join().expect("writes thread");
+            restore_result
+        })
+    });
+    assert!(restore_result.is_err(), "poisoned restore should fail");
+
+    let sessions = ctx.state.sessions.read().await;
+    let session = sessions.get(&session_id).unwrap();
+    assert!(
+        session
+            .books
+            .contains_key(&("shelf".to_string(), "concurrent-book".to_string())),
+        "restore rollback dropped a concurrently added book"
+    );
+    assert!(
+        session
+            .entries
+            .contains_key("shelf::concurrent-book::other"),
+        "restore rollback dropped a concurrently added entry"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn import_rollback_does_not_resurrect_concurrently_deleted_entry() {
+    let ctx = TestContext::new("rollback-import-delete")
+        .await
+        .expect("test context should initialize");
+    let a = writer(ctx.session_id, "client-a");
+    let b = writer(ctx.session_id, "client-b");
+    let session_id = ctx.session_id;
+    ctx.state
+        .add_shelf(session_id, "shelf", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_book(session_id, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(
+            session_id,
+            "victim",
+            "",
+            &[],
+            "SECRET-TO-DELETE",
+            "shelf",
+            "book",
+            &a,
+        )
+        .await
+        .unwrap();
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    poison_message_pack_insert("poison");
+    let blocker = block_sqlite_writes();
+    let bundle = rollback_test_bundle(session_id, &["victim", "poison"]);
+    let handle = tokio::runtime::Handle::current();
+
+    let (import_result, delete_result) = tokio::task::block_in_place(|| {
+        std::thread::scope(|scope| {
+            let import = scope.spawn(|| {
+                handle.block_on(ctx.state.import_bundle(
+                    session_id,
+                    &bundle,
+                    &ConflictPolicy::Overwrite,
+                    &a,
+                ))
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            // Client B deletes the entry while A's import is parked in its persist step.
+            let delete = scope.spawn(|| {
+                handle.block_on(ctx.state.delete_entry(
+                    session_id,
+                    "victim",
+                    Some("shelf"),
+                    Some("book"),
+                    &b,
+                ))
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            blocker.execute_batch("COMMIT;").unwrap();
+            let import_result = import.join().expect("import thread");
+            let delete_result = delete.join().expect("delete thread");
+            (import_result, delete_result)
+        })
+    });
+    assert!(import_result.is_err(), "poisoned import should fail");
+    assert!(delete_result.is_ok(), "concurrent delete should succeed");
+
+    let readable = ctx
+        .state
+        .list_entries(session_id, &b)
+        .await
+        .unwrap()
+        .iter()
+        .any(|e| e.name == "victim");
+    assert!(
+        !readable,
+        "import rollback resurrected an entry that was concurrently deleted"
+    );
+}
