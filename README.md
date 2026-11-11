@@ -46,6 +46,26 @@ See the [MCP guide](mcp/README.md) for agent setup and the
 [server deployment guide](docs/server.md#deployment) for Docker, source builds,
 and remote enrollment.
 
+### Windows client
+
+On x86_64 Windows, use PowerShell 5.1 or newer with Python 3.10+ (`python` on
+PATH) and a recent GitHub CLI (`gh`) that supports attestation verification:
+
+```powershell
+irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.ps1 | iex
+```
+
+The installer requires an official release containing the Windows client and
+signed manifest. It refuses older releases without those assets. Windows release
+publication is pending registration of the client-only `windows-x86_64` platform;
+CI currently produces a separate client artifact.
+
+Once available, the installer verifies provenance and SHA-256, installs under
+`%LOCALAPPDATA%\ccp\bin`, adds the user PATH, and sets up the MCP bridge. Re-run the
+same command to update. Use `ccp-client` if another program owns `ccp`. See the
+[Windows installation guide](docs/client.md#windows-installation) for nightlies,
+MCP configuration, and credential storage. The native Windows package is client-only.
+
 ### Nightly builds
 
 Standard installs use stable releases. To preview changes merged into `main`,

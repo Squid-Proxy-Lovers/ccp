@@ -5,6 +5,7 @@ The client saves credentials locally and sends data operations to the server.
 
 [Documentation index](README.md) · [Server guide](server.md) · [MCP setup](../mcp/README.md)
 
+- [Windows installation](#windows-installation)
 - [Enroll and select a session](#enroll-and-select-a-session)
 - [CLI reference](#cli-reference)
 - [Entry model](#entry-model)
@@ -13,11 +14,74 @@ The client saves credentials locally and sends data operations to the server.
 - [Rust SDK](#rust-sdk)
 - [Transport and failures](#transport-and-failures)
 
+## Windows installation
+
+Requirements: x86_64 Windows, PowerShell 5.1 or newer, Python 3.10+ available as
+`python`, and a recent GitHub CLI (`gh`) with the attestation policy flags described
+in [release bundle verification](client-release-bundles.md). Verification requires
+GitHub access and any GitHub CLI authentication needed by your environment.
+
+```powershell
+irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.ps1 | iex
+```
+
+This selects the latest stable release from the official GitHub repository.
+To select the latest published nightly, or pin a dated nightly, invoke the same
+script with parameters:
+
+```powershell
+$installer = irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.ps1
+& ([scriptblock]::Create($installer)) -Channel nightly
+# Pinning also requires -Channel nightly:
+# & ([scriptblock]::Create($installer)) -Channel nightly -Version nightly-YYYY-MM-DD-<12-character-SHA>
+```
+
+The installer verifies the release manifest's GitHub attestation against the
+repository, workflow, source ref and commit, signer commit, and hosted-runner
+policy. It checks the Windows executable, matching MCP archive and build metadata
+against the signed manifest's sizes and SHA-256 hashes before installing anything.
+Missing assets, unavailable verification tools, and verification failures stop
+installation. There is no unverified fallback. Older releases without Windows
+assets and the signed manifest cannot be installed this way.
+
+Windows publication still needs the manifest forward-compatibility change and
+registration of `windows-x86_64` as a client-only platform, mapped to
+`ccp-client-windows-x86_64.exe`. CI keeps this executable in a separate artifact
+until packaging can include it in the authenticated release. Nightly publishing
+and the current release contract are unchanged by Windows client support.
+
+Installation stages the executable beside its destination and renames it into
+`%LOCALAPPDATA%\ccp\bin\ccp-client.exe`. An available `ccp.exe` name is installed as
+well; an existing unrelated `ccp` command is retained. `-InstallDir` overrides the
+binary directory. The directory is added to the user PATH. Open a new terminal
+after installation; re-run the same installer command to update. Close running
+CCP processes before updating if Windows reports a file in use.
+
+The matching MCP bridge installs into `%USERPROFILE%\.ccp-mcp\venv`, using
+`Scripts\python.exe`. The installer adds CCP to existing Claude and Codex user
+configurations and to detected Cursor configurations. Codex configuration requires
+`codex mcp add` on PATH. Existing CCP host entries are retained with a reminder to
+check their paths. Missing hosts, configuration failures, and retained entries are
+reported honestly; restart configured MCP hosts to load the tools. Unrelated JSON
+host settings are preserved. A bridge installation failure can leave the already
+verified client installed; re-running retries bridge setup.
+
+Client state defaults to `%USERPROFILE%\.ccp-client` when `HOME` is absent. `HOME`
+retains precedence when set, and `CCP_CLIENT_HOME` overrides both. Keep credentials
+and workspace profiles on NTFS under your private Windows user profile: the
+client relies on inherited profile ACLs, which normally exclude other ordinary
+users. It does not inspect or repair Windows ACLs. Secure any custom home or
+explicit `--profile` directory with equivalent ACLs before use. Unix permission
+checks remain unchanged. Profile publication uses same-directory hard links and
+requires a filesystem supporting them. Hidden enrollment-link paste uses the
+Windows console through `rpassword`.
+
 ## Enroll and select a session
 
 Install the client using the [README instructions](../README.md#install). The
-installer supports Linux and macOS on x86_64 and ARM64. Ask the server operator for
-a `read` or `read_write` enrollment token. Replace `YOUR_TOKEN` below; this example
+shell installer supports Linux and macOS on x86_64 and ARM64; the
+[PowerShell installer](#windows-installation) supports the Windows x86_64 client.
+Ask the server operator for a `read` or `read_write` enrollment token. Replace `YOUR_TOKEN` below; this example
 uses the local server's enrollment endpoint:
 
 ```bash
