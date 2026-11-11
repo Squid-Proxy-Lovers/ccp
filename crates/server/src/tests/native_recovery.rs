@@ -1358,6 +1358,62 @@ async fn import_overwrite_rollback_restores_the_pre_import_value_despite_duplica
     clippy::await_holding_lock,
     reason = "Serializes process-global test environment; server tasks do not acquire this lock."
 )]
+async fn failed_import_bookkeeping_does_not_stall_session_readers() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let _env = test_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (state, journal, session_id, data_dir) =
+            rollback_isolation_fixture("import-no-stall").await;
+        let actor = writer(session_id, "writer");
+        seed_shelf_book_and_anchor(&state, session_id, &actor).await;
+        poison_before("message_packs", "INSERT", "NEW.name = 'poison'");
+        let gate = test_hooks::arm("import_bundle::failure_log");
+        let import = tokio::spawn({
+            let state = Arc::clone(&state);
+            let actor = actor.clone();
+            async move {
+                state
+                    .import_bundle(
+                        session_id,
+                        &poison_bundle(session_id),
+                        &ConflictPolicy::Overwrite,
+                        &actor,
+                    )
+                    .await
+            }
+        });
+        gate.wait_until_reached().await;
+        let read = tokio::time::timeout(
+            Duration::from_millis(200),
+            state.list_entries(session_id, &actor),
+        )
+        .await;
+        assert!(!import.is_finished());
+        gate.release();
+        assert!(finish(import).await.is_err());
+        assert!(
+            read.is_ok(),
+            "session readers stalled behind import failure bookkeeping"
+        );
+        let entries = read.unwrap().unwrap();
+        assert_eq!(
+            entries.len(),
+            1,
+            "the reader must see the rolled-back session"
+        );
+        journal.shutdown().unwrap();
+        std::fs::remove_dir_all(data_dir).unwrap();
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "Serializes process-global test environment; server tasks do not acquire this lock."
+)]
 async fn revoke_persist_does_not_stall_unrelated_access_checks() {
     tokio::time::timeout(Duration::from_secs(20), async {
         let _env = test_env_lock()

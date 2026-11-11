@@ -188,6 +188,10 @@ pub(super) fn persist_transfer_log(
     created_at: &str,
     created_by: &str,
 ) -> anyhow::Result<()> {
+    #[cfg(test)]
+    if outcome.starts_with("rolled_back:") {
+        super::test_hooks::checkpoint_blocking("import_bundle::failure_log");
+    }
     let connection = open_sqlite_connection()?;
     connection
         .execute(

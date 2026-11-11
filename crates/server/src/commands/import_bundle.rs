@@ -283,29 +283,33 @@ impl ServerState {
         if let Err(error) = super::super::database::persist_snapshot(
             super::super::database::Snapshot::capture(self).await,
         ) {
-            // Revert in-memory state.
-            let mut sessions = self.sessions.write().await;
-            if let Some(session) = sessions.get_mut(&session_id) {
-                for (key, maybe_previous) in previous_entries {
-                    match maybe_previous {
-                        Some(previous) => {
-                            session.insert_entry(key, previous);
-                        }
-                        None => {
-                            session.remove_entry(&key);
+            // Revert in-memory state, releasing the sessions lock before the
+            // journal and SQLite writes below so other readers are not
+            // stuck behind this call's failure bookkeeping.
+            {
+                let mut sessions = self.sessions.write().await;
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    for (key, maybe_previous) in previous_entries {
+                        match maybe_previous {
+                            Some(previous) => {
+                                session.insert_entry(key, previous);
+                            }
+                            None => {
+                                session.remove_entry(&key);
+                            }
                         }
                     }
+                    let affected_shelves: Vec<String> = session.shelves.keys().cloned().collect();
+                    session.shelves = shelves_snapshot;
+                    session.books = books_snapshot;
+                    session.book_entry_counts = book_counts_snapshot;
+                    session.shelf_book_counts = shelf_book_counts_snapshot;
+                    session.shelf_entry_counts = shelf_entry_counts_snapshot;
+                    for shelf in &affected_shelves {
+                        session.refresh_library_metadata(shelf, None);
+                    }
+                    session.rebuild_list_entries_cache();
                 }
-                let affected_shelves: Vec<String> = session.shelves.keys().cloned().collect();
-                session.shelves = shelves_snapshot;
-                session.books = books_snapshot;
-                session.book_entry_counts = book_counts_snapshot;
-                session.shelf_book_counts = shelf_book_counts_snapshot;
-                session.shelf_entry_counts = shelf_entry_counts_snapshot;
-                for shelf in &affected_shelves {
-                    session.refresh_library_metadata(shelf, None);
-                }
-                session.rebuild_list_entries_cache();
             }
 
             let reason = error.to_string();
