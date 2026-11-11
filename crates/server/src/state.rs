@@ -565,6 +565,9 @@ impl SessionCache {
     }
 }
 
+#[cfg(test)]
+type TestHook = Arc<dyn Fn(&'static str) + Send + Sync>;
+
 pub struct ServerState {
     sessions: RwLock<HashMap<i64, SessionCache>>,
     auth_tokens: RwLock<HashMap<String, AuthGrant>>,
@@ -578,6 +581,8 @@ pub struct ServerState {
     // persist outside the session lock and may roll back on failure take the
     // exclusive (write) guard for their entire duration.
     native_checkpoint: RwLock<()>,
+    #[cfg(test)]
+    test_hook: std::sync::Mutex<Option<TestHook>>,
 }
 
 fn message_entry_from(entry: &CachedMessagePack) -> MessageEntry {
@@ -594,6 +599,35 @@ fn message_entry_from(entry: &CachedMessagePack) -> MessageEntry {
 }
 
 impl ServerState {
+    #[cfg(test)]
+    fn test_event(&self, event: &'static str) {
+        let hook = self.test_hook.lock().unwrap().clone();
+        if let Some(hook) = hook {
+            hook(event);
+        }
+    }
+
+    async fn observe_native_guard<F: std::future::Future>(&self, future: F) -> F::Output {
+        #[cfg(not(test))]
+        {
+            future.await
+        }
+        #[cfg(test)]
+        {
+            let mut future = std::pin::pin!(future);
+            let mut notified = false;
+            std::future::poll_fn(|cx| {
+                let result = future.as_mut().poll(cx);
+                if result.is_pending() && !notified {
+                    notified = true;
+                    self.test_event("native_guard_pending");
+                }
+                result
+            })
+            .await
+        }
+    }
+
     pub async fn resolve_auth_token(&self, token: &str) -> Option<AuthGrant> {
         self.auth_tokens.read().await.get(token).cloned()
     }
@@ -730,7 +764,9 @@ impl ServerState {
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<RwLockReadGuard<'_, ()>> {
         self.ensure_write_access(session_id, auth_context).await?;
-        let guard = self.native_checkpoint.read().await;
+        let guard = self
+            .observe_native_guard(self.native_checkpoint.read())
+            .await;
         // Re-check in case access was revoked while we were waiting on the guard.
         self.ensure_write_access(session_id, auth_context).await?;
         Ok(guard)
@@ -747,7 +783,9 @@ impl ServerState {
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<RwLockWriteGuard<'_, ()>> {
         self.ensure_write_access(session_id, auth_context).await?;
-        let guard = self.native_checkpoint.write().await;
+        let guard = self
+            .observe_native_guard(self.native_checkpoint.write())
+            .await;
         self.ensure_write_access(session_id, auth_context).await?;
         Ok(guard)
     }
@@ -852,7 +890,10 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
 /// hadn't yet been swept up by some other snapshot. If the snapshot persist
 /// fails, the journal is left untouched so those records remain replayable.
 async fn checkpoint_journal(state: &ServerState) {
-    if database::persist_snapshot(database::Snapshot::capture(state).await).is_ok() {
+    let snapshot = database::Snapshot::capture(state).await;
+    #[cfg(test)]
+    state.test_event("checkpoint_captured");
+    if database::persist_snapshot(snapshot).is_ok() {
         let _ = state.journal.truncate_blocking();
     }
 }

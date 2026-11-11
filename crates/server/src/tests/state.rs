@@ -3056,3 +3056,114 @@ async fn delete_shelf_restores_memory_when_persist_fails() {
         "delete_shelf dropped the entry from memory despite a failed persist"
     );
 }
+
+// Adapted from the validator's checkpoint-loss reproductions. Pause the real
+// checkpoint after capture and order the competitor by a poll inside its guard,
+// or by completion if the guard is missing. No scheduling sleeps are needed.
+async fn checkpoint_preserves_concurrent_write(kind: &'static str) {
+    let ctx = TestContext::new(kind).await.unwrap();
+    let sid = ctx.session_id;
+    let a = writer(sid, "client-a");
+    ctx.state.add_shelf(sid, "shelf", "", &a).await.unwrap();
+    ctx.state
+        .add_book(sid, "shelf", "book", "", &a)
+        .await
+        .unwrap();
+    ctx.state
+        .add_entry(sid, "doomed", "", &[], "x", "shelf", "book", &a)
+        .await
+        .unwrap();
+    let (events, observed) = std::sync::mpsc::channel();
+    let (resume, paused) = std::sync::mpsc::channel();
+    let paused = std::sync::Mutex::new(paused);
+    let hook_events = events.clone();
+    *ctx.state.test_hook.lock().unwrap() = Some(Arc::new(move |event| {
+        hook_events.send(event).unwrap();
+        if event == "checkpoint_captured" {
+            paused
+                .lock()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+    }));
+    let state = Arc::clone(&ctx.state);
+    let handle = tokio::runtime::Handle::current();
+    let checkpoint_handle = handle.clone();
+    let checkpoint = spawn_worker(move || {
+        checkpoint_handle.block_on(async {
+            if kind == "revoke-add" {
+                state
+                    .revoke_client_cert(sid, &admin(sid, "writer"), "writer")
+                    .await
+                    .unwrap();
+            } else {
+                state
+                    .delete_entry(
+                        sid,
+                        "doomed",
+                        Some("shelf"),
+                        Some("book"),
+                        &writer(sid, "client-a"),
+                    )
+                    .await
+                    .unwrap();
+            }
+        })
+    });
+    tokio::task::block_in_place(|| {
+        assert_eq!(
+            observed
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            "checkpoint_captured"
+        );
+        let state = Arc::clone(&ctx.state);
+        let write = spawn_worker(move || {
+            handle.block_on(async {
+                state
+                    .add_entry(
+                        sid,
+                        "acked",
+                        "",
+                        &[],
+                        "ACKED",
+                        "shelf",
+                        "book",
+                        &writer(sid, "client-a"),
+                    )
+                    .await
+                    .unwrap();
+            });
+            wait_until(
+                std::time::Instant::now() + std::time::Duration::from_secs(5),
+                "writer to flush acknowledged add",
+                || {
+                    load_entries(state.journal.path()).unwrap().iter().any(|record| matches!(record, JournalEntry::AddEntry { name, .. } if name == "acked"))
+                },
+            );
+            events.send("write_completed").unwrap();
+        });
+        let event = observed
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(event, "native_guard_pending" | "write_completed"));
+        resume.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        join_within(checkpoint, deadline, "checkpoint");
+        join_within(write, deadline, "concurrent writer");
+    });
+    ctx.journal.shutdown().unwrap();
+    let reloaded = ServerState::load_from_storage(Arc::clone(&ctx.journal))
+        .await
+        .unwrap();
+    assert!(
+        entry_exists(&reloaded, sid, "shelf::book::acked"),
+        "acknowledged add_entry was dropped by revoke's checkpoint"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revoke_checkpoint_preserves_concurrent_add_entry() {
+    checkpoint_preserves_concurrent_write("revoke-add").await;
+}

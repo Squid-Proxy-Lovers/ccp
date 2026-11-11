@@ -64,12 +64,11 @@ impl ServerState {
             }
         }
 
-        // Take the shared native guard just for the checkpoint: it captures
-        // a full snapshot of session state, which must not happen while an
-        // exclusive mutation (import_bundle, delete_entry, ...) has mutated
-        // memory but not yet persisted or rolled back.
+        // Release both grant and revoked-set locks before waiting for the
+        // exclusive checkpoint boundary. No journal producer may complete
+        // between snapshot capture and journal retirement.
         {
-            let _snapshot_guard = self.native_checkpoint.read().await;
+            let _snapshot_guard = self.native_checkpoint.write().await;
             checkpoint_journal(self).await;
         }
         Ok(RevokeCertResult {

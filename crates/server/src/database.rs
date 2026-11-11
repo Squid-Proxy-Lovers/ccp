@@ -24,6 +24,8 @@ impl ServerState {
             append_locks: Mutex::new(HashMap::new()),
             journal,
             native_checkpoint: RwLock::new(()),
+            #[cfg(test)]
+            test_hook: std::sync::Mutex::new(None),
         };
 
         for entry in load_entries(state.journal.path())? {
