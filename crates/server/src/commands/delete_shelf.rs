@@ -60,6 +60,9 @@ impl ServerState {
             (deleted_books, deleted_entries)
         };
 
+        #[cfg(test)]
+        self.test_event("shelf_mutated");
+
         // persist the full snapshot so SQLite matches memory
         if let Err(error) = super::super::database::persist_snapshot(
             super::super::database::Snapshot::capture(self).await,

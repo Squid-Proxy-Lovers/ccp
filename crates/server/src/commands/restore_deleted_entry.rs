@@ -86,6 +86,9 @@ impl ServerState {
             })?;
             message_entry_from(entry)
         };
+        #[cfg(test)]
+        self.test_event("restore_mutated");
+
         if let Err(error) = super::super::database::persist_restored_entry(
             &deleted_entry,
             deleted_history.as_slice(),
