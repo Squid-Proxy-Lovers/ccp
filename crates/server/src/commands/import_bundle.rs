@@ -271,6 +271,8 @@ impl ServerState {
         let created_at = current_timestamp_string()?;
         let total_affected = imported_entries + overwritten_entries;
 
+        #[cfg(test)]
+        super::super::test_hooks::checkpoint("import_bundle::persist").await;
         if let Err(error) = super::super::database::persist_snapshot(
             super::super::database::Snapshot::capture(self).await,
         ) {

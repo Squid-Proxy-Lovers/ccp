@@ -6,6 +6,7 @@ use reqwest::StatusCode;
 use serde_json::Value;
 
 use ccp_tests::harness::{LoadOperation, TestServer, run_persistent_load};
+use protocol::{ClientRequest, ServerResponse};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn enrollment_tokens_are_reusable_until_expiry_and_issue_distinct_client_certs()
@@ -246,6 +247,59 @@ async fn mtls_endpoint_rejects_requests_without_client_certificates() -> anyhow:
     let result = server.unauthenticated_list_status().await?;
     assert!(result.is_err());
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeated_revoke_over_mtls_keeps_the_client_refused() -> anyhow::Result<()> {
+    let server = TestServer::start().await?;
+    let victim = server.enroll_read_write().await?;
+    let admin_token = server.issue_token("admin")?;
+    let admin = server.redeem_token(&admin_token.token).await?;
+
+    victim.list().await?;
+    admin.revoke(&victim.client_cn).await?;
+    assert!(victim.list().await.is_err());
+
+    assert!(admin.revoke(&victim.client_cn).await.is_err());
+    assert!(victim.list().await.is_err());
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn concurrent_self_revokes_over_mtls_leave_the_client_refused() -> anyhow::Result<()> {
+    // Defence test: the exclusive guard serializes these calls already.
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        let server = TestServer::start().await?;
+        for _ in 0..8 {
+            let victim = server.enroll_read_write().await?;
+            let revoke = ClientRequest::RevokeClientCert {
+                session_id: victim.session_id,
+                client_common_name: victim.client_cn.clone(),
+            };
+
+            let mut tasks = Vec::new();
+            for _ in 0..4 {
+                let mut connection = victim.connect().await?;
+                let revoke = revoke.clone();
+                tasks.push(tokio::spawn(
+                    async move { connection.request(revoke).await },
+                ));
+            }
+            let mut successes = 0;
+            for task in tasks {
+                let response =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), task).await??;
+                if matches!(response?, ServerResponse::CertRevoked(_)) {
+                    successes += 1;
+                }
+            }
+            assert_eq!(successes, 1, "exactly one self-revoke must succeed");
+
+            assert!(victim.list().await.is_err());
+        }
+        Ok(())
+    })
+    .await?
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
