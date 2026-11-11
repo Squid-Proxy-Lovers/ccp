@@ -11,12 +11,15 @@ impl ServerState {
         shelf_name: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<DeleteShelfResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
         let shelf_name = normalize_segment(Some(shelf_name), "");
         if shelf_name.is_empty() {
             bail!("shelf_name is required for delete_shelf");
         }
 
+        let session_snapshot;
         let (deleted_books, deleted_entries) = {
             let mut sessions = self.sessions.write().await;
             let session = sessions
@@ -26,6 +29,8 @@ impl ServerState {
             if !session.shelves.contains_key(&shelf_name) {
                 bail!("shelf '{shelf_name}' not found");
             }
+
+            session_snapshot = session.clone();
 
             // count what we're about to remove
             let deleted_books = session
@@ -56,11 +61,15 @@ impl ServerState {
         };
 
         // persist the full snapshot so SQLite matches memory
-        super::super::database::persist_snapshot(
+        if let Err(error) = super::super::database::persist_snapshot(
             super::super::database::Snapshot::capture(self).await,
-        )?;
+        ) {
+            let mut sessions = self.sessions.write().await;
+            sessions.insert(session_id, session_snapshot);
+            return Err(error);
+        }
 
-        checkpoint_journal(&self.journal);
+        checkpoint_journal(self).await;
         Ok(DeleteShelfResult {
             shelf_name,
             deleted_books,
