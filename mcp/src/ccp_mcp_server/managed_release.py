@@ -99,7 +99,7 @@ def download(directory: Path, channel: str, selected: str) -> contract.Manifest:
     ref = contract.source_ref(channel, selected, manifest)
     contract.verify_provenance(directory, manifest, ref)
     build.compatible(manifest)
-    names = (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json")
+    names = manifest.client_assets(platform)
     for name in names:
         network.asset(selected, name, directory / name, manifest.artifacts[name].size)
     manifest.verify_files(directory, names)
