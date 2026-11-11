@@ -146,6 +146,7 @@ class Store:
             platform == build.host_platform(), "Stored bundle belongs to another platform"
         )
         build.compatible(manifest)
+        manifest.client_assets(platform)
         item = manifest.artifacts[f"ccp-client-{platform}"]
         contract.require(
             contract.digest(path / "client") == (item.size, item.sha256), "Stored client changed"
@@ -202,9 +203,7 @@ class Store:
             contract.digest(path / "client") == (item.size, item.sha256),
             "Client changed during candidate build",
         )
-        manifest.verify_files(
-            release, (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json")
-        )
+        manifest.verify_files(release, manifest.client_assets(platform))
         row: dict[str, object] = {
             "format": 1,
             "generation": path.name,
