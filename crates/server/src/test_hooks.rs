@@ -19,6 +19,17 @@ pub(crate) async fn checkpoint(label: &'static str) {
     }
 }
 
+/// Parks inside a synchronous SQLite persistence function. The bounded wait
+/// prevents a failed test from leaving a runtime worker blocked at teardown.
+pub(crate) fn checkpoint_blocking(label: &'static str) {
+    if let Some((reached, _release, blocking_release)) = armed::take(label) {
+        reached.notify_one();
+        blocking_release
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("test must release the persistence gate within five seconds");
+    }
+}
+
 #[cfg(test)]
 mod armed {
     use std::collections::HashMap;

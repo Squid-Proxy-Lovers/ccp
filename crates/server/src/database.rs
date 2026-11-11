@@ -304,6 +304,8 @@ pub(super) fn persist_revoked_cert(
     grant: &CertGrant,
     revoked_at: &str,
 ) -> anyhow::Result<()> {
+    #[cfg(test)]
+    super::test_hooks::checkpoint_blocking("revoke_client_cert::persist");
     let mut connection = open_sqlite_connection()?;
     let transaction = connection
         .transaction()

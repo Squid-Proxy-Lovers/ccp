@@ -1353,6 +1353,61 @@ async fn import_overwrite_rollback_restores_the_pre_import_value_despite_duplica
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::await_holding_lock,
+    reason = "Serializes process-global test environment; server tasks do not acquire this lock."
+)]
+async fn revoke_persist_does_not_stall_unrelated_access_checks() {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        let _env = test_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (state, journal, session_id, data_dir) =
+            rollback_isolation_fixture("revoke-no-stall").await;
+        let cn = "peer";
+        state
+            .cert_grants
+            .write()
+            .await
+            .insert(cn.to_string(), read_write_grant(session_id));
+        let operator = admin(session_id, "writer");
+        let bystander = writer(session_id, "bystander");
+
+        let gate = test_hooks::arm("revoke_client_cert::persist");
+        let revoke = tokio::spawn({
+            let state = Arc::clone(&state);
+            let operator = operator.clone();
+            async move { state.revoke_client_cert(session_id, &operator, cn).await }
+        });
+        gate.wait_until_reached().await;
+        // The persist seam remains parked throughout the access check.
+        let bystander_check = tokio::time::timeout(
+            Duration::from_millis(200),
+            state.ensure_ping_access(&bystander),
+        )
+        .await;
+        assert!(!revoke.is_finished());
+        gate.release();
+        finish(revoke).await.unwrap();
+
+        assert!(
+            bystander_check.is_ok(),
+            "an unrelated access check must not block on another client's revoke persist"
+        );
+        bystander_check.unwrap().unwrap();
+
+        journal.shutdown().unwrap();
+        #[expect(
+            clippy::let_underscore_must_use,
+            reason = "best-effort cleanup of a temporary test directory"
+        )]
+        let _ = std::fs::remove_dir_all(&data_dir);
+    })
+    .await
+    .unwrap();
+}
+
 async fn seed_doomed_and_safe_shelves(
     state: &ServerState,
     session_id: i64,
