@@ -6,13 +6,11 @@ All notable changes to this project are documented in this file.
 
 ### Security
 
-- Fixed certificate revocation and rollback handling under concurrent requests (advisory: TBD).
+- Fixed certificate revocation and rollback handling under concurrent requests (advisory pending).
 
 ### Fixed
 
-- `revoke_client_cert` now checks and marks a certificate revoked under a single
-  lock held for the whole operation, so a retried or concurrent revoke of the
-  same certificate can no longer undo an earlier revocation.
-- `import_bundle`, `restore_deleted_entry` and `delete_entry` now hold an
-  exclusive mutation guard for their full duration, so their rollback path can
-  no longer clobber another client's concurrent write.
+- Hardened certificate revocation against concurrent and repeated requests.
+- Hardened native state mutations (imports, restores, deletes) against concurrent interleaving.
+- Native state is now persisted before a routine checkpoint retires journal records, so pending writes are no longer dropped by that checkpoint.
+- Fixed a bundle-import edge case that could leave the in-memory and persisted state inconsistent after a failed import.
