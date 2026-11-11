@@ -145,7 +145,11 @@ impl ServerState {
                         } else {
                             imported_entries += 1;
                         }
-                        previous_entries.insert(key.clone(), prior);
+                        // A bundle that lists the same path twice must roll
+                        // back to the state before this import, not to the
+                        // first occurrence's already-imported value, so keep
+                        // only the first-seen original for this key.
+                        previous_entries.entry(key.clone()).or_insert(prior);
                         let imported = session.build_entry(
                             path,
                             entry.description.clone(),
@@ -187,7 +191,10 @@ impl ServerState {
                     ConflictPolicy::MergeHistory => {
                         if let Some(existing) = session.entries.get_mut(&key) {
                             // Keep existing context/description/labels; union history rows.
-                            previous_entries.insert(key.clone(), Some(existing.clone()));
+                            // Same first-seen-original rule as the Overwrite branch above.
+                            previous_entries
+                                .entry(key.clone())
+                                .or_insert_with(|| Some(existing.clone()));
                             let known_op_ids: HashSet<_> = existing
                                 .history
                                 .iter()
