@@ -71,6 +71,8 @@ impl ServerState {
             (deleted_entry, deleted_history, deleted_result)
         };
 
+        #[cfg(test)]
+        super::super::test_hooks::checkpoint("delete_entry::persist").await;
         let persist_result = super::super::database::persist_deleted_entry(
             &deleted_entry,
             deleted_history.as_slice(),
