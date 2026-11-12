@@ -29,6 +29,9 @@ mod commands;
 #[path = "database.rs"]
 mod database;
 #[cfg(test)]
+#[path = "test_hooks.rs"]
+mod test_hooks;
+#[cfg(test)]
 #[path = "tests/state.rs"]
 #[expect(
     unsafe_code,

@@ -69,6 +69,8 @@ impl ServerState {
         };
 
         // persist the full snapshot so SQLite matches memory
+        #[cfg(test)]
+        super::super::test_hooks::checkpoint("delete_shelf::persist").await;
         if let Err(error) = super::super::database::persist_snapshot(
             super::super::database::Snapshot::capture(self).await,
         ) {

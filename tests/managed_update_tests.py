@@ -123,6 +123,52 @@ class ManagedUpdateTests(unittest.TestCase):
         self.assertFalse((self.store.root / policy.NAME).exists())
         self.assertEqual((self.store.root / policy.MARKER).read_bytes(), marker)
 
+    def test_future_manifest_update_downloads_only_local_assets_and_activates(self):
+        self.configure(True)
+        self.f.prepare("b" * 40)
+        data = self.f.future_manifest()
+        with self.boundaries(), patch.object(net, "asset", side_effect=self.asset) as download:
+            result = updater.update(self.store, 1)
+        self.assertEqual(result["result"], "updated")
+        generation = self.store.generation(self.store.pointer().current)
+        self.assertEqual(generation.manifest.value(), data)
+        self.assertEqual(
+            {call.args[1] for call in download.call_args_list},
+            {
+                contract.MANIFEST,
+                contract.PROVENANCE,
+                "ccp-client-" + build_module.host_platform(),
+                "ccp-mcp.tar.gz",
+                "build-info.json",
+            },
+        )
+        self.assertEqual(self.store.pointer().previous, self.first.generation_id)
+
+    def test_update_never_follows_future_asset_urls_or_downloads_opaque_payloads(self):
+        self.configure(True)
+        self.f.prepare("b" * 40)
+        data = self.f.future_manifest()
+        data["artifacts"]["ccp-client-windows-x86_64.exe"] = {
+            "size": contract.MAX_ARTIFACT + 1,
+            "url": "https://attacker.invalid/client",
+        }
+        data["artifacts"]["release-notes.txt"] = {"size": 0, "signature": "future-format"}
+        (self.f.inputs / contract.MANIFEST).write_text(json.dumps(data))
+        with self.boundaries(), patch.object(net, "asset", side_effect=self.asset) as download:
+            result = updater.update(self.store, 1)
+        self.assertEqual(result["result"], "updated")
+        self.assertEqual(
+            {call.args[1] for call in download.call_args_list},
+            {
+                contract.MANIFEST,
+                contract.PROVENANCE,
+                "ccp-client-" + build_module.host_platform(),
+                "ccp-mcp.tar.gz",
+                "build-info.json",
+            },
+        )
+        self.assertEqual(self.store.generation(self.store.pointer().current).manifest.value(), data)
+
     def test_verified_update_checks_both_aliases_preserves_config_and_retains_old_pair(self):
         self.configure()
         self.f.prepare("b" * 40)
@@ -599,6 +645,24 @@ class ManagedNetworkTests(unittest.TestCase):
                 for key in call.args[0].headers
             )
         )
+
+    def test_stable_discovery_rejects_prerelease_tags_even_with_wrong_github_flags(self):
+        for tag in ["v0.2.0-rc.1", "v0.2.0-beta.1", "v0.2.0-alpha", "v0.2.0rc1", "v0.2.0+build"]:
+            row = {"tag_name": tag, "draft": False, "prerelease": False}
+            with self.subTest(tag=tag):
+                self.assertIsNone(release.eligible(row, "stable"))
+                with (
+                    patch.object(net, "api", return_value=row) as api,
+                    self.assertRaisesRegex(ValueError, "Stable release is unavailable"),
+                ):
+                    release.discover("stable", None)
+                api.assert_called_once_with("releases/latest")
+                with patch.object(net, "api") as api, self.assertRaises(ValueError):
+                    release.discover("stable", tag)
+                api.assert_not_called()
+        stable = {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
+        with patch.object(net, "api", return_value=stable):
+            self.assertEqual(release.discover("stable", None), "v0.2.0")
 
     def test_discovery_honors_channel_pin_bounds_and_never_uses_dates_for_ordering(self):
         stable = {"tag_name": "v0.2.0", "draft": False, "prerelease": False}

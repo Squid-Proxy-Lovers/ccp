@@ -83,6 +83,143 @@ class ManagedBundleTests(unittest.TestCase):
         ):
             return self.store.stage(self.inputs, "stable", "v0.2.0")
 
+    def future_manifest(self):
+        path = self.inputs / contract.MANIFEST
+        data = json.loads(path.read_bytes())
+        data["platforms"].append("windows-x86_64")
+        for name in ("ccp-client-windows-x86_64.exe", "release-notes.txt"):
+            data["artifacts"][name] = {"size": 1, "sha256": "a" * 64}
+        path.write_text(json.dumps(data))
+        return data
+
+    def test_future_manifest_stages_only_selected_platform_and_shared_assets(self):
+        data = self.future_manifest()
+        for platform in contract.PLATFORMS:
+            with (
+                self.subTest(platform=platform),
+                patch.object(build_module, "host_platform", return_value=platform),
+            ):
+                generation = self.stage()
+                self.assertEqual(generation.manifest.value(), data)
+                self.assertEqual(
+                    (generation.path / "client").read_bytes(),
+                    (self.inputs / f"ccp-client-{platform}").read_bytes(),
+                )
+                self.assertEqual(
+                    {p.name for p in (generation.path / "release").iterdir()},
+                    {
+                        contract.MANIFEST,
+                        contract.PROVENANCE,
+                        f"ccp-client-{platform}",
+                        "ccp-mcp.tar.gz",
+                        "build-info.json",
+                    },
+                )
+                self.store.activate(generation.generation_id, self.store.pointer().revision)
+                self.assertEqual(self.store.launch("client", ())[0], generation.path / "client")
+
+    def test_stage_never_copies_or_builds_opaque_future_assets(self):
+        data = self.future_manifest()
+        future = "ccp-client-windows-x86_64.exe"
+        data["artifacts"][future] = {"size": contract.MAX_ARTIFACT + 1, "url": "file:///outside"}
+        data["artifacts"]["release-notes.txt"] = {"size": 0, "signature": "future-format"}
+        (self.inputs / contract.MANIFEST).write_text(json.dumps(data))
+        generation = self.stage()
+        self.assertEqual(generation.manifest.value(), data)
+        self.assertEqual(set(generation.manifest.artifacts), set(contract.ASSETS))
+        self.assertFalse((generation.path / "release" / future).exists())
+        self.assertFalse((generation.path / "release/release-notes.txt").exists())
+        self.store.activate(generation.generation_id, 0)
+        self.assertEqual(self.store.launch("client", ())[0], generation.path / "client")
+
+    def test_invalid_future_manifest_never_builds_or_replaces_active_generation(self):
+        active = self.stage()
+        self.store.activate(active.generation_id, 0)
+        pointer = (self.store.root / "current.json").read_bytes()
+        local = "ccp-client-" + build_module.host_platform()
+        reasons = {
+            "missing": "Missing client release artifact",
+            "platform": "Missing client platform",
+            "duplicate": "Duplicate release platform",
+            "asset-name": "Invalid release identity",
+            "platform-name": "Invalid release identity",
+            "hash": "Release artifact differs from manifest",
+        }
+        for change, reason in reasons.items():
+            self.prepare()
+            data = self.future_manifest()
+            if change == "missing":
+                del data["artifacts"][local]
+            elif change == "platform":
+                data["platforms"].remove(build_module.host_platform())
+            elif change == "duplicate":
+                data["platforms"].append("windows-x86_64")
+            elif change == "asset-name":
+                data["artifacts"]["../escape"] = data["artifacts"][local]
+            elif change == "platform-name":
+                data["platforms"].append("../escape")
+            else:
+                data["artifacts"][local]["sha256"] = "0" * 64
+            (self.inputs / contract.MANIFEST).write_text(json.dumps(data))
+            with (
+                self.subTest(change=change),
+                patch.object(contract, "verify_provenance"),
+                patch.object(build_module, "build") as builder,
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
+            ):
+                self.store.stage(self.inputs, "stable", "v" + contract.source_version(ROOT))
+            builder.assert_not_called()
+            self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
+            self.assertEqual(
+                [p.name for p in (self.store.root / "bundles").iterdir()], [active.generation_id]
+            )
+
+    def test_future_platform_is_never_selected_by_host_detection(self):
+        self.future_manifest()
+        with (
+            patch.object(build_module.platform, "system", return_value="Windows"),
+            patch.object(build_module.platform, "machine", return_value="x86_64"),
+            patch.object(build_module, "build") as builder,
+            self.assertRaisesRegex(ValueError, "^Unsupported managed client platform$"),
+        ):
+            self.store.stage(self.inputs, "stable", "v" + contract.source_version(ROOT))
+        builder.assert_not_called()
+
+    def test_reopened_store_checks_host_and_manifest_platform_before_client_lookup(self):
+        generation = self.stage()
+        release_path = generation.path / "release" / contract.MANIFEST
+        ready_path = generation.path / "ready.json"
+        original = json.loads(release_path.read_bytes())
+        ready = fs.load(ready_path)
+        local = build_module.host_platform()
+        for change, reason in (
+            ("host", "Stored bundle belongs to another platform"),
+            ("platform", "Missing client platform"),
+            ("client", "Missing client release artifact"),
+            ("future-host", "Unsupported client platform"),
+        ):
+            data = json.loads(json.dumps(original))
+            row = dict(ready)
+            if change in ("host", "future-host"):
+                row["platform"] = "windows-x86_64"
+            elif change == "platform":
+                data["platforms"].remove(local)
+            else:
+                del data["artifacts"]["ccp-client-" + local]
+            fs.atomic(release_path, data)
+            row["manifest_sha256"] = hashlib.sha256(release_path.read_bytes()).hexdigest()
+            fs.atomic(ready_path, row)
+            with (
+                self.subTest(change=change),
+                patch.object(
+                    build_module,
+                    "host_platform",
+                    return_value="windows-x86_64" if change == "future-host" else local,
+                ),
+                self.assertRaisesRegex(ValueError, "^" + reason + "$"),
+            ):
+                self.store.generation(generation.generation_id)
+
     def test_private_stage_reopen_activation_noop_and_software_only_rollback(self):
         first = self.stage()
         self.assertEqual(self.store.status()["pointer"]["revision"], 0)
@@ -158,6 +295,60 @@ class ManagedBundleTests(unittest.TestCase):
             self.assertEqual(
                 [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
             )
+
+    def test_rc_build_checks_exact_canonical_mcp_metadata(self):
+        import asyncio
+        import importlib.metadata
+        from dataclasses import replace
+        from types import SimpleNamespace
+
+        # The coroutine is closed below; its health-only imports need no real MCP stack.
+        dependencies = {
+            "fastmcp": SimpleNamespace(Client=object),
+            "ccp_mcp_server.workspace": SimpleNamespace(build_server=object),
+            "ccp_mcp_server.workspace_config": SimpleNamespace(WorkspaceConfig=object),
+            "ccp_mcp_server.workspace_runtime": SimpleNamespace(WorkspaceRuntime=object),
+        }
+        generation = self.root / "rc-candidate"
+        generation.mkdir()
+        manifest = replace(
+            contract.decode((self.inputs / contract.MANIFEST).read_bytes()),
+            package_version="0.2.0-rc.1",
+        )
+        info = {
+            "format": 1,
+            "package_version": manifest.package_version,
+            **{
+                key: manifest.contracts[key]
+                for key in [
+                    "native_wire",
+                    "workspace_api",
+                    "client_profile_read_min",
+                    "client_profile_write",
+                ]
+            },
+        }
+        with (
+            patch.object(build_module, "expand"),
+            patch.object(
+                build_module, "run", side_effect=[json.dumps(info).encode(), b"", b"", b""]
+            ) as run,
+        ):
+            build_module.build(generation, manifest)
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[4], "0.2.0rc1")
+        for installed in ["0.2.0rc1", "0.2.0rc2", "0.2.0", "0.2.0-rc.1", "0.2.1rc1"]:
+            with (
+                patch.dict(sys.modules, dependencies),
+                patch.object(sys, "argv", ["-c", *arguments[4:]]),
+                patch.object(importlib.metadata, "version", return_value=installed),
+                patch.object(asyncio, "run", side_effect=lambda coroutine: coroutine.close()),
+            ):
+                if installed == "0.2.0rc1":
+                    exec(build_module.MCP_HEALTH, {})  # noqa: S102 -- execute the actual fixed health script with mocked metadata.
+                else:
+                    with self.assertRaisesRegex(SystemExit, "version differs"):
+                        exec(build_module.MCP_HEALTH, {})  # noqa: S102 -- same fixed script, testing rejection before health calls.
 
     def test_copy_then_verify_never_installs_again_from_mutable_download_directory(self):
         original = (self.inputs / "ccp-mcp.tar.gz").read_bytes()

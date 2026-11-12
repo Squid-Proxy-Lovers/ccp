@@ -424,8 +424,39 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  provenance:
+  release-identity:
     needs: [package]
+    if: >-
+      github.repository == 'Squid-Proxy-Lovers/ccp' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+       (github.ref == 'refs/heads/main' && (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.nightly))))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.identity.outputs.channel }}
+      tag: ${{ steps.identity.outputs.tag }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      make_latest: ${{ steps.identity.outputs.make_latest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Validate release identity before attestation or publishing
+        id: identity
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python scripts/release_tag.py --tag "${GITHUB_REF#refs/tags/}" --output "$GITHUB_OUTPUT"
+          else
+            printf 'channel=nightly\ntag=nightly-%s-%s\n' "$(date -u +%Y-%m-%d)" "${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          fi
+
+  provenance:
+    needs: [package, release-identity]
     if: >-
       github.repository == 'Squid-Proxy-Lovers/ccp' &&
       ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
@@ -456,16 +487,11 @@ jobs:
         env:
           ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.release-identity.outputs.channel }}
+          RELEASE_TAG: ${{ needs.release-identity.outputs.tag }}
         run: |
           cp "$ATTESTATION_BUNDLE" dist/ccp-provenance.json
-          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            channel=stable
-            tag="${GITHUB_REF#refs/tags/}"
-          else
-            channel=nightly
-            tag="nightly-$(date -u +%Y-%m-%d)-${GITHUB_SHA:0:12}"
-          fi
-          python scripts/release_contract.py --directory dist --channel "$channel" --tag "$tag" --platform linux-x86_64 > /dev/null
+          python scripts/release_contract.py --directory dist --channel "$CHANNEL" --tag "$RELEASE_TAG" --platform linux-x86_64 > /dev/null
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-provenance
@@ -474,7 +500,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [package, provenance]
+    needs: [package, release-identity, provenance]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -493,6 +519,8 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          prerelease: ${{ needs.release-identity.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.release-identity.outputs.make_latest }}
 
   docker:
     needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client]
@@ -533,8 +561,8 @@ jobs:
           if-no-files-found: error
 
   docker-publish:
-    needs: [docker, package]
-    if: github.event_name == 'push'
+    needs: [docker, package, release-identity, provenance]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -549,13 +577,21 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish tested image to existing tags
+      - name: Publish tested image to validated tags
+        env:
+          CHANNEL: ${{ needs.release-identity.outputs.channel }}
+          RELEASE_TAG: ${{ needs.release-identity.outputs.tag }}
         run: |
+          case "$CHANNEL" in
+            stable) alias=latest ;;
+            rc) alias="$RELEASE_TAG" ;;
+            *) exit 1 ;;
+          esac
           docker load --input image/ccp-image.tar.gz
           docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
           docker push "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
-          docker tag "ccp-ci:$GITHUB_SHA" ghcr.io/squid-proxy-lovers/ccp:latest
-          docker push ghcr.io/squid-proxy-lovers/ccp:latest
+          docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$alias"
+          docker push "ghcr.io/squid-proxy-lovers/ccp:$alias"
 
   nightly:
     needs: [package, docker, provenance]

@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from .managed_archive import expand
-from .release_contract import PLATFORMS, Manifest, fields, require
+from .release_contract import PLATFORMS, Manifest, fields, python_version, require
 
 MCP_HEALTH = """
 import asyncio, importlib.metadata, sys
@@ -129,7 +129,7 @@ def build(generation: Path, manifest: Manifest) -> None:
             "-I",
             "-c",
             MCP_HEALTH,
-            manifest.package_version,
+            python_version(manifest.package_version),
             str(client),
             str(generation / "health-profile"),
         )

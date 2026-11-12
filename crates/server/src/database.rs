@@ -193,6 +193,10 @@ pub(super) fn persist_transfer_log(
     created_at: &str,
     created_by: &str,
 ) -> anyhow::Result<()> {
+    #[cfg(test)]
+    if outcome.starts_with("rolled_back:") {
+        super::test_hooks::checkpoint_blocking("import_bundle::failure_log");
+    }
     let connection = open_sqlite_connection()?;
     connection
         .execute(
@@ -309,6 +313,8 @@ pub(super) fn persist_revoked_cert(
     grant: &CertGrant,
     revoked_at: &str,
 ) -> anyhow::Result<()> {
+    #[cfg(test)]
+    super::test_hooks::checkpoint_blocking("revoke_client_cert::persist");
     let mut connection = open_sqlite_connection()?;
     let transaction = connection
         .transaction()
