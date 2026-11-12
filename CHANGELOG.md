@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0-rc.1] - 2026-11-12
+
+This is a release candidate for 0.2.0, not a stable release. See the
+[0.2.0 section](#020) below for the changes.
+
+Download assets from the exact `v0.2.0-rc.1` release and verify them using
+[the RC installation guide](docs/client-release-bundles.md#install-a-release-candidate).
+Use the matching `ccp-mcp.tar.gz` archive from that release. The server image is
+`ghcr.io/squid-proxy-lovers/ccp:v0.2.0-rc.1`. Default installs and `:latest`
+remain on stable 0.1.1.
+
 ## 0.2.0
 
 ### Added

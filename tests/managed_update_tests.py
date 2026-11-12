@@ -29,6 +29,7 @@ class ManagedUpdateTests(unittest.TestCase):
     def setUp(self):
         self.f = ManagedBundleTests()
         self.f.setUp()
+        self.version, self.tag = self.f.version, self.f.tag
         self.addCleanup(self.f.doCleanups)
         self.store, self.root = self.f.store, self.f.root
         self.first = self.f.stage()
@@ -53,7 +54,7 @@ class ManagedUpdateTests(unittest.TestCase):
             "pending": False,
             "server": {
                 "instance_id": str(uuid4()),
-                "package_version": "0.2.0",
+                "package_version": self.version,
                 "native_wire": 1,
                 "workspace_api": 1,
             },
@@ -68,7 +69,7 @@ class ManagedUpdateTests(unittest.TestCase):
     def api(self, path):
         self.api_calls.append(path)
         if path.startswith("releases"):
-            return {"tag_name": "v0.2.0", "draft": False, "prerelease": False}
+            return {"tag_name": self.tag, "draft": False, "prerelease": False}
         base, candidate = path.removeprefix("compare/").split("...")
         candidate = candidate.split("?")[0]
         return {
@@ -229,14 +230,14 @@ class ManagedUpdateTests(unittest.TestCase):
         self.assertEqual(policy.load(self.store.root).source_floor, "c" * 40)
 
     def test_exact_tag_pin_retains_authenticated_source_even_when_current_is_manually_changed(self):
-        self.configure(pin="v0.2.0")
+        self.configure(pin=self.tag)
         self.assertEqual(policy.load(self.store.root).pin_source, "a" * 40)
         self.f.prepare("b" * 40)
         with self.boundaries(), self.assertRaisesRegex(ValueError, "Pinned release source changed"):
             updater.update(self.store)
         second = self.f.stage()
         self.store.activate(second.generation_id, 1)
-        self.configure(pin="v0.2.0")
+        self.configure(pin=self.tag)
         self.assertEqual(policy.load(self.store.root).pin_source, "a" * 40)
 
     def test_disable_during_preflight_revokes_automatic_selection_but_keeps_ready_candidate(self):

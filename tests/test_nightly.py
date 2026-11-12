@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -257,6 +258,9 @@ class ReleaseContractTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.dist = Path(self.directory.name)
         self.contract = nightly.release_contract
+        self.version = self.contract.source_version(ROOT)
+        self.tag = "v" + self.version
+        self.channel = "rc" if "-rc." in self.version else "stable"
         for name in nightly.ASSETS:
             (self.dist / name).write_bytes((name + "-exact-source").encode())
         nightly.prepare(self.dist, SHA)
@@ -345,9 +349,7 @@ class ReleaseContractTests(unittest.TestCase):
             target = source / name
             target.parent.mkdir(parents=True, exist_ok=True)
             raw = (ROOT / name).read_text()
-            raw = raw.replace(
-                'version = "' + self.contract.source_version(ROOT) + '"', 'version = "0.3.0"'
-            )
+            raw = re.sub(r'^version = "[^"]+"$', 'version = "0.3.0"', raw, flags=re.M)
             raw = re.sub(
                 r"(const (?:PROTOCOL_VERSION|API_VERSION|PROFILE_MIN_FORMAT|PROFILE_FORMAT|SCHEMA_VERSION): u32 = )([0-9]+)",
                 lambda match: match[1] + str(int(match[2]) + 1),
@@ -642,7 +644,7 @@ class ReleaseContractTests(unittest.TestCase):
         value = self.manifest.value()
         self.assertEqual(value["repository"], "Squid-Proxy-Lovers/ccp")
         self.assertEqual(value["source_sha"], SHA)
-        self.assertEqual(value["package_version"], "0.2.0")
+        self.assertEqual(value["package_version"], self.version)
         self.assertEqual(
             value["contracts"],
             {
@@ -704,8 +706,14 @@ class ReleaseContractTests(unittest.TestCase):
                 self.contract.decode(json.dumps(data).encode())
 
     def test_release_selection_pins_stable_version_or_main_nightly_source(self):
+        stable_version = self.version.split("-", 1)[0]
+        stable = replace(self.manifest, package_version=stable_version)
+        stable_tag = "v" + stable_version
         self.assertEqual(
-            self.contract.source_ref("stable", "v0.2.0", self.manifest), "refs/tags/v0.2.0"
+            self.contract.source_ref("stable", stable_tag, stable), "refs/tags/" + stable_tag
+        )
+        self.assertEqual(
+            self.contract.source_ref(self.channel, self.tag, self.manifest), "refs/tags/" + self.tag
         )
         self.assertEqual(self.contract.source_ref("nightly", TAG, self.manifest), "refs/heads/main")
         for channel, tag in [
@@ -770,13 +778,13 @@ class ReleaseContractTests(unittest.TestCase):
                 patch.object(self.contract.subprocess, "run", side_effect=error),
                 self.assertRaises(ValueError) as caught,
             ):
-                self.contract.verify(self.dist, "stable", "v0.2.0", "linux-x86_64")
+                self.contract.verify(self.dist, self.channel, self.tag, "linux-x86_64")
             self.assertNotIn("PRIVATE_VERIFIER", str(caught.exception))
             self.assertIn("no checksum fallback", str(caught.exception))
         self.assertEqual({p.name: p.read_bytes() for p in self.dist.iterdir()}, before)
         (self.dist / self.contract.PROVENANCE).unlink()
         with patch.object(self.contract.subprocess, "run") as verifier, self.assertRaises(OSError):
-            self.contract.verify(self.dist, "stable", "v0.2.0", "linux-x86_64")
+            self.contract.verify(self.dist, self.channel, self.tag, "linux-x86_64")
         verifier.assert_not_called()
 
     def test_corrupt_pair_or_symlink_is_refused_even_after_publisher_verification(self):

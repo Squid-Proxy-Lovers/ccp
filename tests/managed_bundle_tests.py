@@ -7,6 +7,7 @@ import importlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -70,18 +71,42 @@ class ManagedBundleTests(unittest.TestCase):
         for name in contract.ASSETS:
             (self.inputs / name).write_bytes((name + " fixture").encode())
         archive(self.inputs / "ccp-mcp.tar.gz")
+        self.version = contract.source_version(ROOT).split("-", 1)[0]
+        self.tag = "v" + self.version
+        self.source_root = self.stable_source()
+        self.assertEqual(contract.source_version(self.source_root), self.version)
         self.prepare()
         (self.inputs / contract.PROVENANCE).write_bytes(b"owned mocked provenance boundary")
 
+    def stable_source(self):
+        # Managed stable updates must stay stable even when the checkout is an RC.
+        source = self.root / "release-source"
+        for filename in (
+            "crates/client/Cargo.toml",
+            "crates/server/Cargo.toml",
+            "crates/protocol/Cargo.toml",
+            "mcp/pyproject.toml",
+            "crates/protocol/src/lib.rs",
+            "crates/protocol/src/workspace.rs",
+            "crates/client/src/workspace/store.rs",
+            "crates/server/src/init.rs",
+        ):
+            target = source / filename
+            target.parent.mkdir(parents=True, exist_ok=True)
+            raw = (ROOT / filename).read_text()
+            raw = re.sub(r'^version = "[^"]+"$', f'version = "{self.version}"', raw, flags=re.M)
+            target.write_text(raw)
+        return source
+
     def prepare(self, sha="a" * 40):
-        contract.prepare(ROOT, self.inputs, sha)
+        contract.prepare(self.source_root, self.inputs, sha)
 
     def stage(self):
         with (
             patch.object(contract, "verify_provenance"),
             patch.object(build_module, "build", side_effect=fake_build),
         ):
-            return self.store.stage(self.inputs, "stable", "v0.2.0")
+            return self.store.stage(self.inputs, "stable", self.tag)
 
     def future_manifest(self):
         path = self.inputs / contract.MANIFEST
@@ -167,7 +192,7 @@ class ManagedBundleTests(unittest.TestCase):
                 patch.object(build_module, "build") as builder,
                 self.assertRaisesRegex(ValueError, "^" + reason + "$"),
             ):
-                self.store.stage(self.inputs, "stable", "v" + contract.source_version(ROOT))
+                self.store.stage(self.inputs, "stable", self.tag)
             builder.assert_not_called()
             self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
             self.assertEqual(
@@ -182,7 +207,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module, "build") as builder,
             self.assertRaisesRegex(ValueError, "^Unsupported managed client platform$"),
         ):
-            self.store.stage(self.inputs, "stable", "v" + contract.source_version(ROOT))
+            self.store.stage(self.inputs, "stable", self.tag)
         builder.assert_not_called()
 
     def test_reopened_store_checks_host_and_manifest_platform_before_client_lookup(self):
@@ -259,7 +284,7 @@ class ManagedBundleTests(unittest.TestCase):
                 ),
                 self.assertRaises(ValueError),
             ):
-                self.store.stage(self.inputs, "stable", "v0.2.0")
+                self.store.stage(self.inputs, "stable", self.tag)
             self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
             self.assertEqual(
                 [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
@@ -272,7 +297,7 @@ class ManagedBundleTests(unittest.TestCase):
         pointer = (self.store.root / "current.json").read_bytes()
         info = {
             "format": 1,
-            "package_version": "0.2.0",
+            "package_version": self.version,
             "native_wire": 1,
             "workspace_api": 1,
             "client_profile_read_min": 1,
@@ -290,7 +315,7 @@ class ManagedBundleTests(unittest.TestCase):
                 patch.object(build_module, "run", side_effect=replies),
                 self.assertRaises(ValueError),
             ):
-                self.store.stage(self.inputs, "stable", "v0.2.0")
+                self.store.stage(self.inputs, "stable", self.tag)
             self.assertEqual((self.store.root / "current.json").read_bytes(), pointer)
             self.assertEqual(
                 [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
@@ -362,7 +387,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(contract, "verify_provenance", side_effect=verified),
             patch.object(build_module, "build", side_effect=fake_build),
         ):
-            generation = self.store.stage(self.inputs, "stable", "v0.2.0")
+            generation = self.store.stage(self.inputs, "stable", self.tag)
         self.assertEqual((generation.path / "release/ccp-mcp.tar.gz").read_bytes(), original)
         self.assertTrue((generation.path / "source/ccp-mcp/src/module.py").exists())
 
@@ -388,7 +413,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module, "build", side_effect=substitute),
             self.assertRaises(ValueError),
         ):
-            self.store.stage(self.inputs, "stable", "v0.2.0")
+            self.store.stage(self.inputs, "stable", self.tag)
         self.assertEqual((self.store.root / "current.json").read_bytes(), before)
         self.assertEqual(
             [p.name for p in (self.store.root / "bundles").iterdir()], [first.generation_id]
@@ -404,7 +429,7 @@ class ManagedBundleTests(unittest.TestCase):
             patch.object(build_module, "build") as builder,
             self.assertRaises(ValueError),
         ):
-            self.store.stage(self.inputs, "stable", "v0.2.0")
+            self.store.stage(self.inputs, "stable", self.tag)
         builder.assert_not_called()
         client.unlink()
         client.symlink_to(self.inputs / "build-info.json")
@@ -569,7 +594,7 @@ class ManagedBundleTests(unittest.TestCase):
             self.assertEqual(result["mcp"], str(first.path / "venv/bin/python"))
             self.assertEqual(result["status"]["pointer"]["current"], first.generation_id)
             for writer in [
-                lambda: self.store.stage(self.inputs, "stable", "v0.2.0"),
+                lambda: self.store.stage(self.inputs, "stable", self.tag),
                 lambda: self.store.activate(second.generation_id, 1),
                 lambda: self.store.rollback(1),
             ]:
@@ -639,7 +664,7 @@ class ManagedBundleTests(unittest.TestCase):
 
         def stage():
             try:
-                results.append(self.store.stage(self.inputs, "stable", "v0.2.0"))
+                results.append(self.store.stage(self.inputs, "stable", self.tag))
             except (OSError, ValueError, AssertionError) as error:
                 errors.append(str(error))
 
