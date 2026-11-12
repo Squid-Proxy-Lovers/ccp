@@ -1090,8 +1090,10 @@ class ReleaseTagTests(unittest.TestCase):
         docker.chmod(0o700)
         log = self.root / "docker-log"
         for channel, tag, expected in [
-            ("stable", "v0.2.0", ["latest", "v0.2.0"]),
+            ("stable", "v0.2.0", ["v0.2.0", "latest"]),
             ("rc", "v0.2.0-rc.1", ["v0.2.0-rc.1"]),
+            ("nightly", "nightly-2026-01-01-abcdef123456", None),
+            ("", "v0.2.0", None),
         ]:
             log.write_text("")
             environment = {
@@ -1109,6 +1111,10 @@ class ReleaseTagTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
+            if expected is None:
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(log.read_text(), "")
+                continue
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             pushes = [call[1] for call in calls if call[0] == "push"]
