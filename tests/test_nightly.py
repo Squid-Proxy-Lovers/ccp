@@ -1148,6 +1148,8 @@ class InstallerTests(unittest.TestCase):
         )
         # A stable release and a draft are deliberately ahead of the valid nightly.
         stable = dict(release(), tag_name="v0.2.0", prerelease=False)
+        stable["assets"] = [{"name": "ccp-mcp.tar.gz"}]
+        (self.fixtures / "latest").write_text(json.dumps(stable))
         (self.fixtures / "releases-1.json").write_text(json.dumps([stable, release(draft=True)]))
         (self.fixtures / "releases-2.json").write_text(json.dumps([release()]))
         stub = (
@@ -1172,7 +1174,9 @@ elif name == 'curl':
     shutil.copyfile(pathlib.Path(os.environ['NIGHTLY_TEST_FIXTURES']) / fixture,
                     args[args.index('-o') + 1])
 elif name == 'git':
-    sys.exit('Unexpected source clone')
+    assert args[:4] == ['clone', '--depth', '1', '--branch']
+    assert args[4] == 'v0.2.0'
+    (pathlib.Path(args[-1]) / 'mcp').mkdir(parents=True)
 elif name == 'cargo':
     assert args == ['build', '--release', '--locked', '-p', 'client']
 elif name == 'mktemp':
@@ -1591,9 +1595,36 @@ elif name == 'cat':
         result, calls = self.install("--client")
         self.assertEqual(result.returncode, 0, result.stderr)
         downloads = [call[2] for call in calls if call[0] == "curl"]
-        self.assertEqual(len(downloads), 1)
-        self.assertIn("/releases/latest/download/ccp-client-linux-x86_64", downloads[0])
+        self.assertTrue(any("/releases/latest" in url for url in downloads))
+        self.assertTrue(all("/download/v0.2.0/" in url for url in downloads if "/download/" in url))
+        pip = next(call for call in calls if call[0] == "pip")
+        self.assertTrue(pip[-1].endswith("/ccp-mcp.tar.gz"))
+        self.assertFalse(any(call[0] == "git" for call in calls))
         self.assertFalse((self.install_dir / "ccp-nightly.json").exists())
+
+    def test_legacy_stable_mcp_clone_uses_release_tag(self):
+        metadata = json.loads((self.fixtures / "latest").read_text())
+        metadata["assets"] = []
+        (self.fixtures / "latest").write_text(json.dumps(metadata))
+        result, calls = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        clone = next(call for call in calls if call[0] == "git")
+        self.assertEqual(clone[1:6], ["clone", "--depth", "1", "--branch", "v0.2.0"])
+        self.assertTrue(any(call[0] == "pip" and call[-1].endswith("/repo/mcp") for call in calls))
+
+    def test_stable_mcp_checksum_failure_preserves_client(self):
+        target = self.install_dir / "ccp-client"
+        target.write_bytes(b"working client")
+        (self.fixtures / "ccp-mcp.tar.gz").write_bytes(b"wrong release")
+        result, calls = self.install("--client")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.read_bytes(), b"working client")
+        self.assertFalse(any(call[0] in ("pip", "git") for call in calls))
+
+    def test_stable_mcp_download_failure_does_not_fall_back(self):
+        result, calls = self.install("--client", failure="ccp-mcp.tar.gz")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call[0] in ("pip", "git") for call in calls))
 
     def test_no_nightly_fails_without_installing(self):
         (self.fixtures / "releases-2.json").write_text("[]")
