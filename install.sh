@@ -487,7 +487,25 @@ MCPEOF
     # Codex: ~/.codex/config.toml
     local codex_config="$HOME/.codex/config.toml"
     if [ -f "$codex_config" ]; then
-        if ! grep -Eq '^[[:space:]]*\[mcp_servers\.ccp\][[:space:]]*(#.*)?$' "$codex_config" 2>/dev/null; then
+        local codex_state
+        codex_state="$(python3 -I - "$codex_config" <<'PY'
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    sys.exit("TOML parsing requires Python 3.11 or newer")
+try:
+    with open(sys.argv[1], "rb") as stream:
+        config = tomllib.load(stream)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit("Could not parse Codex configuration")
+servers = config.get("mcp_servers", {})
+if not isinstance(servers, dict):
+    sys.exit("Invalid Codex MCP servers table")
+print("present" if "ccp" in servers else "absent")
+PY
+        )" || codex_state="invalid"
+        if [ "$codex_state" = absent ]; then
             local codex_env="CCP_CLIENT_BIN = \"$client_bin\""
             if [ -f "$INSTALL_DIR/ccp-server" ]; then
                 codex_env="$codex_env
@@ -506,8 +524,10 @@ TOMLEOF
             else
                 mcp_config_warning "Codex" "Could not update $codex_config"
             fi
-        else
+        elif [ "$codex_state" = present ]; then
             ok "$codex_config already configured"
+        else
+            mcp_config_warning "Codex" "Could not parse $codex_config; add [mcp_servers.ccp] manually"
         fi
     fi
 
