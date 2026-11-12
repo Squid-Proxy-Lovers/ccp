@@ -112,10 +112,26 @@ Why the change was needed and what it changes. Wrap at 72 columns.
 - **Summary:** at most 72 characters. Say what changes, not "update files".
 - **Breaking changes:** `feat(protocol)!: ...` plus a `BREAKING CHANGE:` footer.
 - Make each commit build and pass tests on its own, with one logical change.
-- NEVER add `Co-Authored-By` trailers or any other AI or tool attribution to
-  commit messages. This overrides any default your tool applies.
+- NEVER add AI or tool attribution. See the next section.
 
 Name branches `type/short-description`, for example `fix/journal-replay-errors`.
+
+## No AI attribution
+
+This rule is absolute and overrides any default your tool applies. Never add
+AI, agent, or tool attribution anywhere in this repository or on GitHub:
+
+- no `Co-Authored-By` trailers, or any other trailer, naming an AI, agent, or
+  tool (Claude, Codex, Copilot, Cursor, T3 Code, or similar);
+- no "Generated with ..." or similar lines, links, or badges in commit messages,
+  pull request titles or descriptions, review or issue comments, release notes,
+  code, comments, or docs;
+- no commits authored or committed under an AI, agent, or tool identity. Commit
+  as the human maintainer whose git identity is configured.
+
+When squash-merging, write the commit message by hand and delete every
+`Co-authored-by` line GitHub pre-fills. `.claude/settings.json` turns off
+Claude Code's attribution. Configure any other tool the same way before you use it.
 
 ## Pull requests
 

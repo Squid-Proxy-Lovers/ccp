@@ -11,7 +11,10 @@ venv/
 
 # IDE
 .vscode/
-.claude/
+# Keep local Claude Code state out of Git; the shared settings file disables
+# AI attribution for everyone.
+.claude/*
+!.claude/settings.json
 
 # Generated at runtime
 mcp-server-config.json
