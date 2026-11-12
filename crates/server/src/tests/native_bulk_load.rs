@@ -251,6 +251,143 @@ async fn add_bulk_fixture_entry(ctx: &TestContext, name: &str) {
 }
 
 #[tokio::test]
+async fn bulk_load_matches_incremental_replay_generations_and_history() {
+    let ctx = TestContext::new("bulk-replay-generations").await.unwrap();
+    {
+        let mut sessions = ctx.state.sessions.write().await;
+        let session = sessions.get_mut(&ctx.session_id).unwrap();
+        insert_replay_reference(session, "snapshot", "base\nsaved", &[("saved-op", "saved")]);
+        insert_replay_reference(
+            session,
+            "generation",
+            "new generation\nsaved generation",
+            &[("generation-op", "saved generation")],
+        );
+    }
+    ctx.state.persist_snapshot_to_sqlite().await.unwrap();
+    ctx.journal.checkpoint_blocking().unwrap();
+    for record in replay_generation_records(ctx.session_id) {
+        ctx.journal.append(record).unwrap();
+    }
+    ctx.journal.shutdown().unwrap();
+    {
+        let mut sessions = ctx.state.sessions.write().await;
+        let session = sessions.get_mut(&ctx.session_id).unwrap();
+        // An independent final-state oracle uses the old per-entry insert path,
+        // without reusing the startup replay filter or operation-id dedupe.
+        insert_replay_reference(
+            session,
+            "journal",
+            "new journal\nonce\nlegacy\nlegacy",
+            &[("new-op", "once"), ("", "legacy"), ("", "legacy")],
+        );
+    }
+    let journal = Arc::new(JournalHandle::start(ctx.journal.path().to_owned()).unwrap());
+    let loaded = ServerState::load_from_storage(journal).await.unwrap();
+    {
+        let actual = loaded.sessions.read().await;
+        let expected = ctx.state.sessions.read().await;
+        assert_session_caches_equal(&actual[&ctx.session_id], &expected[&ctx.session_id]);
+        let entries = &actual[&ctx.session_id].entries;
+        assert_eq!(entries["main::default::snapshot"].history.len(), 1);
+        assert_eq!(entries["main::default::generation"].history.len(), 1);
+        assert_eq!(entries["main::default::journal"].history.len(), 3);
+    }
+    loaded.journal.shutdown().unwrap();
+}
+
+fn insert_replay_reference(
+    session: &mut SessionCache,
+    name: &str,
+    context: &str,
+    histories: &[(&str, &str)],
+) {
+    session.upsert_library_metadata("main", "default", None, None);
+    let (path, key) = entry_path_for(name, Some("main"), Some("default"));
+    let history = histories
+        .iter()
+        .map(|(operation_id, content)| MessageHistoryEntry {
+            operation_id: (*operation_id).into(),
+            client_common_name: "writer".into(),
+            agent_name: None,
+            host_name: None,
+            reason: None,
+            appended_content: (*content).into(),
+            created_at: "2".into(),
+        })
+        .collect();
+    let entry = session.build_entry(
+        path,
+        "replay fixture".into(),
+        vec!["replay".into()],
+        context.into(),
+        "1".into(),
+        "2".into(),
+        history,
+    );
+    session.insert_entry(key, entry);
+}
+
+fn replay_generation_records(session_id: i64) -> Vec<JournalEntry> {
+    vec![
+        replay_fixture_add(session_id, "snapshot", "must not replace SQLite"),
+        replay_fixture_append(session_id, "snapshot", "saved-op", "saved"),
+        replay_fixture_append(session_id, "snapshot", "saved-op", "saved"),
+        replay_fixture_add(session_id, "generation", "old generation"),
+        replay_fixture_append(session_id, "generation", "old-op", "old append"),
+        replay_fixture_add(session_id, "generation", "new generation"),
+        replay_fixture_append(
+            session_id,
+            "generation",
+            "generation-op",
+            "saved generation",
+        ),
+        replay_fixture_add(session_id, "journal", "old journal"),
+        replay_fixture_append(session_id, "journal", "old-op", "old append"),
+        replay_fixture_add(session_id, "journal", "new journal"),
+        replay_fixture_append(session_id, "journal", "new-op", "once"),
+        replay_fixture_append(session_id, "journal", "new-op", "once"),
+        replay_fixture_append(session_id, "journal", "", "legacy"),
+        replay_fixture_append(session_id, "journal", "", "legacy"),
+    ]
+}
+
+fn replay_fixture_add(session_id: i64, name: &str, context: &str) -> JournalEntry {
+    JournalEntry::AddEntry {
+        session_id,
+        name: name.into(),
+        description: "replay fixture".into(),
+        labels: vec!["replay".into()],
+        context: context.into(),
+        shelf_name: "main".into(),
+        book_name: "default".into(),
+        created_at: "1".into(),
+        updated_at: "2".into(),
+    }
+}
+
+fn replay_fixture_append(
+    session_id: i64,
+    name: &str,
+    operation_id: &str,
+    content: &str,
+) -> JournalEntry {
+    JournalEntry::AppendEntry {
+        session_id,
+        name: name.into(),
+        operation_id: operation_id.into(),
+        client_common_name: "writer".into(),
+        agent_name: None,
+        host_name: None,
+        reason: None,
+        appended_content: content.into(),
+        shelf_name: "main".into(),
+        book_name: "default".into(),
+        created_at: "2".into(),
+    }
+}
+
+#[tokio::test]
 async fn startup_finalizes_all_populated_sessions() {
     let ctx = TestContext::new("multi-session-bulk-load").await.unwrap();
     let mut session_ids = vec![ctx.session_id];
