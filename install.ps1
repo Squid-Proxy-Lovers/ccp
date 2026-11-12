@@ -13,6 +13,7 @@ $ErrorActionPreference = 'Stop'
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
 $CcpClientAsset = 'ccp-client-windows-x86_64.exe'
 $script:CcpUpgrade = $null
+$script:CcpRetentionDirectory = $null
 
 function Test-CcpPythonAlias {
     param([string]$Path)
@@ -159,12 +160,30 @@ function New-CcpPrivateStage {
     return $path
 }
 
+function Remove-CcpTree {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Path)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Delete owned staging tree without following links')) { return }
+    foreach ($child in [IO.Directory]::EnumerateFileSystemEntries($Path)) {
+        $attributes = [IO.File]::GetAttributes($child)
+        if ($attributes -band [IO.FileAttributes]::ReparsePoint) {
+            if ($attributes -band [IO.FileAttributes]::Directory) { [IO.Directory]::Delete($child, $false) }
+            else { [IO.File]::Delete($child) }
+        } elseif ($attributes -band [IO.FileAttributes]::Directory) { Remove-CcpTree $child }
+        else {
+            [IO.File]::SetAttributes($child, ($attributes -band (-bnot [IO.FileAttributes]::ReadOnly)))
+            [IO.File]::Delete($child)
+        }
+    }
+    [IO.Directory]::Delete($Path, $false)
+}
+
 function Remove-CcpPrivateStage {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Path)
     if (-not $PSCmdlet.ShouldProcess($Path, 'Remove private CCP staging directory')) { return }
     Confirm-CcpPrivateStage $Path
-    Remove-Item -LiteralPath $Path -Recurse -Force
+    Remove-CcpTree $Path
 }
 
 function New-CcpDirectory {
@@ -341,12 +360,12 @@ function Start-CcpUpgrade {
                 [IO.File]::Copy($targets[$key], (Join-Path $directory $key), $false)
                 if ((Get-CcpFileDigest (Join-Path $directory $key)) -ne $hash) { throw 'Upgrade input changed during backup.' }
             }
-            $files += [PSCustomObject]@{ key = $key; existed = [bool]$hash; hash = $hash }
+            $files += [PSCustomObject]@{ key = $key; existed = [bool]$hash; hash = $hash; new_hash = $null }
         }
-        $state = [PSCustomObject]@{ format = 1; directory = $directory; candidate = $Candidate; files = $files; touched = @(); committed = $false }
+        $state = [PSCustomObject]@{ format = 2; directory = $directory; candidate = $Candidate; files = $files; touched = @(); committed = $false; cleanup_ready = $false; alias_disowned = $false; alias_record_hash = $null }
         Save-CcpUpgradeState $state
         $pointer = Join-Path $directory 'journal.json'
-        [IO.File]::WriteAllText($pointer, (@{format = 1; directory = $directory} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($pointer, (@{format = 2; directory = $directory; cleanup_done = $false} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
         Confirm-CcpPath $journal -AllowMissing
         [IO.File]::Move($pointer, $journal)
         return $state
@@ -362,14 +381,87 @@ function Publish-CcpUpgradeFile {
         $targets = Get-CcpUpgradeTarget (Split-Path -Parent $script:CcpUpgrade.directory)
         $key = @($targets.Keys | Where-Object { $targets[$_] -eq $Destination })
         if ($key.Count -ne 1) { throw 'Unrecognized upgrade destination.' }
-        if ($script:CcpUpgrade.touched -notcontains $key[0]) {
-            $original = $script:CcpUpgrade.files | Where-Object key -EQ $key[0]
-            if ((Get-CcpFileDigest $Destination) -ne $original.hash) { throw 'Upgrade destination changed before publication.' }
-            $script:CcpUpgrade.touched += $key[0]
-            Save-CcpUpgradeState $script:CcpUpgrade
+        $file = $script:CcpUpgrade.files | Where-Object key -EQ $key[0]
+        $current = Get-CcpFileDigest $Destination
+        if ($current -ne $file.hash -and ($null -eq $file.new_hash -or $current -ne $file.new_hash)) {
+            if ($key[0] -eq 'alias') {
+                $script:CcpUpgrade.alias_disowned = $true
+                Save-CcpUpgradeState $script:CcpUpgrade
+                Write-Warning 'An unrelated replacement ccp.exe was retained; CCP alias ownership is dropped.'
+            }
+            throw 'Upgrade destination changed outside the installer; it was not overwritten.'
         }
+        if ($script:CcpUpgrade.touched -notcontains $key[0]) { $script:CcpUpgrade.touched += $key[0] }
+        $file.new_hash = Get-CcpFileDigest $Source
+        Save-CcpUpgradeState $script:CcpUpgrade
     }
     Publish-CcpFile $Source $Destination
+}
+
+function Save-CcpCleanupPointer {
+    param([string]$BinDirectory, [string]$Directory)
+    Confirm-CcpPrivateStage $Directory
+    $source = Join-Path $Directory 'cleanup.json'
+    $journal = Join-Path $BinDirectory '.ccp-upgrade.json'
+    [IO.File]::WriteAllText($source, (@{format = 2; directory = $Directory; cleanup_done = $true} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    Confirm-CcpPath $journal
+    [IO.File]::Replace($source, $journal, [NullString]::Value)
+}
+
+function Restore-CcpUpgradeFile {
+    param($State, $File, [string]$Destination)
+    $current = Get-CcpFileDigest $Destination
+    if ($File.key -eq 'install' -and $State.alias_record_hash -and $current -eq $State.alias_record_hash) { return }
+    if ($current -ne $File.hash -and ($null -eq $File.new_hash -or $current -ne $File.new_hash)) {
+        if ($File.key -eq 'alias') {
+            $State.alias_disowned = $true
+            Save-CcpUpgradeState $State
+            Write-Warning 'An unrelated replacement ccp.exe was retained; CCP alias ownership is dropped.'
+            return
+        }
+        Write-Warning 'A recovery destination changed outside the installer and was left untouched; inspect it before retrying.'
+        throw 'A recovery destination changed outside the installer; it was left untouched.'
+    }
+    if ($File.existed) {
+        $backup = Join-Path $State.directory $File.key
+        if ((Get-CcpFileDigest $backup) -ne $File.hash) { throw 'Upgrade backup changed.' }
+        if ($current -ne $File.hash) { Publish-CcpFile $backup $Destination }
+    } elseif ($current) { [IO.File]::Delete($Destination) }
+}
+
+function Clear-CcpRecoveredAlias {
+    param($State, [string]$Destination)
+    if (-not $State.alias_disowned) { return }
+    $file = $State.files | Where-Object key -EQ 'install'
+    if (-not $file.existed) { return }
+    $record = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $State.directory 'install') -Raw | ConvertFrom-Json
+    $record.alias_sha256 = $null
+    $source = Join-Path $State.directory 'disowned-install.json'
+    [IO.File]::WriteAllText($source, ($record | ConvertTo-Json -Depth 20), [Text.UTF8Encoding]::new($false))
+    $hash = Get-CcpFileDigest $source
+    $current = Get-CcpFileDigest $Destination
+    if ($current -ne $file.hash -and (-not $file.new_hash -or $current -ne $file.new_hash) -and
+        (-not $State.alias_record_hash -or $current -ne $State.alias_record_hash)) { throw 'Installation ownership changed outside recovery.' }
+    $State.alias_record_hash = $hash
+    Save-CcpUpgradeState $State
+    if ($current -ne $hash) { Publish-CcpFile $source $Destination }
+}
+
+function Complete-CcpUpgradeCleanup {
+    param([string]$BinDirectory, [string]$Directory)
+    # This pointer survives removal of state.json, so every deletion is restartable.
+    Save-CcpCleanupPointer $BinDirectory $Directory
+    Remove-CcpPrivateStage $Directory
+    Remove-CcpUpgradeJournal $BinDirectory
+}
+
+function Remove-CcpUpgradeJournal {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$BinDirectory)
+    if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Remove completed upgrade journal')) { return }
+    $path = Join-Path $BinDirectory '.ccp-upgrade.json'
+    Confirm-CcpPath $path -AllowMissing
+    [IO.File]::Delete($path)
 }
 
 function Restore-CcpUpgrade {
@@ -380,8 +472,15 @@ function Restore-CcpUpgrade {
     if ((Get-Item -LiteralPath $journal -Force).Length -gt 4096) { throw 'Invalid upgrade journal.' }
     $pointer = Get-Content -Encoding UTF8 -LiteralPath $journal -Raw | ConvertFrom-Json
     $directory = [IO.Path]::GetFullPath($pointer.directory)
-    if ($pointer.format -ne 1 -or (Split-Path -Parent $directory) -ne $BinDirectory -or
+    if ($pointer.format -ne 2 -or $pointer.cleanup_done -isnot [bool] -or
+        (Split-Path -Parent $directory) -ne $BinDirectory -or
         (Split-Path -Leaf $directory) -cnotmatch '^\.ccp-stage-[0-9a-f]{32}$') { throw 'Invalid upgrade journal directory.' }
+    Confirm-CcpPath $directory -AllowMissing
+    if ($pointer.cleanup_done) {
+        if (Test-Path -LiteralPath $directory) { Remove-CcpPrivateStage $directory }
+        Remove-CcpUpgradeJournal $BinDirectory
+        return
+    }
     Confirm-CcpPrivateStage $directory
     $statePath = Join-Path $directory 'state.json'
     Confirm-CcpPath $statePath
@@ -389,38 +488,198 @@ function Restore-CcpUpgrade {
     $state = Get-Content -Encoding UTF8 -LiteralPath $statePath -Raw | ConvertFrom-Json
     $targets = Get-CcpUpgradeTarget $BinDirectory
     $keys = @($state.files | ForEach-Object key)
-    if ($state.format -ne 1 -or $state.directory -ne $directory -or
+    if ($state.format -ne 2 -or $state.directory -ne $directory -or
         @($state.files).Count -ne $targets.Count -or @($keys | Select-Object -Unique).Count -ne $targets.Count) { throw 'Invalid upgrade snapshots.' }
     foreach ($file in $state.files) {
         if (-not $targets.ContainsKey($file.key) -or $file.existed -isnot [bool] -or
             ($file.existed -and $file.hash -cnotmatch '^[0-9a-f]{64}$') -or
-            (-not $file.existed -and $null -ne $file.hash)) { throw 'Invalid upgrade snapshot.' }
+            (-not $file.existed -and $null -ne $file.hash) -or
+            ($null -ne $file.new_hash -and $file.new_hash -cnotmatch '^[0-9a-f]{64}$')) { throw 'Invalid upgrade snapshot.' }
     }
-    if ($state.committed -isnot [bool] -or @($state.touched | Where-Object { -not $targets.ContainsKey($_) }).Count) { throw 'Invalid upgrade publication state.' }
+    if ($state.committed -isnot [bool] -or $state.cleanup_ready -isnot [bool] -or $state.alias_disowned -isnot [bool] -or
+        ($state.alias_record_hash -and $state.alias_record_hash -cnotmatch '^[0-9a-f]{64}$') -or
+        @($state.touched | Where-Object { -not $targets.ContainsKey($_) }).Count) { throw 'Invalid upgrade publication state.' }
     if ($state.candidate) {
         $parent = Join-Path $env:USERPROFILE '.ccp-mcp\generations'
         if ((Split-Path -Parent $state.candidate) -ne $parent -or
             (Split-Path -Leaf $state.candidate) -cnotmatch '^\.ccp-stage-[0-9a-f]{32}$') { throw 'Invalid upgrade candidate directory.' }
-        Confirm-CcpPrivateStage $state.candidate
+        Confirm-CcpPath $state.candidate -AllowMissing
+        if (Test-Path -LiteralPath $state.candidate) { Confirm-CcpPrivateStage $state.candidate }
+        elseif (-not $state.cleanup_ready -or $state.committed) { throw 'Upgrade candidate disappeared before cleanup.' }
     }
-    if (-not $state.committed) {
-        $touched = @($state.touched)
-        [array]::Reverse($touched)
-        foreach ($key in $touched) {
-            $file = $state.files | Where-Object key -EQ $key
-            $current = Get-CcpFileDigest $targets[$key]
-            if ($file.existed) {
-                $backup = Join-Path $directory $key
-                if ((Get-CcpFileDigest $backup) -ne $file.hash) { throw 'Upgrade backup changed.' }
-                if ($current -ne $file.hash) { Publish-CcpFile $backup $targets[$key] }
-            } elseif ($current) { [IO.File]::Delete($targets[$key]) }
+    if (-not $state.cleanup_ready) {
+        if (-not $state.committed) {
+            $touched = @($state.touched)
+            [array]::Reverse($touched)
+            foreach ($key in $touched) { Restore-CcpUpgradeFile $state ($state.files | Where-Object key -EQ $key) $targets[$key] }
+            Clear-CcpRecoveredAlias $state $targets.install
         }
-        if ($state.candidate) {
-            Remove-CcpPrivateStage $state.candidate
+        $state.cleanup_ready = $true
+        Save-CcpUpgradeState $state
+    }
+    if (-not $state.committed -and $state.candidate -and (Test-Path -LiteralPath $state.candidate)) { Remove-CcpPrivateStage $state.candidate }
+    Complete-CcpUpgradeCleanup $BinDirectory $directory
+}
+
+function Invoke-CcpRecovery {
+    param([string]$BinDirectory)
+    try { Restore-CcpUpgrade $BinDirectory }
+    catch {
+        $failure = [InvalidOperationException]::new('Installation is mid-recovery. Close CCP and MCP processes, then re-run the same command to repair it. Recovery must finish before another upgrade.')
+        $failure.Data['CcpPrerequisite'] = $failure.Message
+        throw $failure
+    }
+}
+
+function Get-CcpRetentionRoot {
+    $context = Get-Variable CcpRetentionDirectory -Scope Script -ErrorAction SilentlyContinue
+    if ($context) { return $context.Value }
+}
+
+function Get-CcpRetention {
+    param([string]$BinDirectory)
+    $path = Join-Path $BinDirectory '.ccp-retention.json'
+    Confirm-CcpPath $path -AllowMissing
+    if (-not (Test-Path -LiteralPath $path)) { return [PSCustomObject]@{format = 1; next_id = 0; generations = @(); backups = @()} }
+    if ((Get-Item -LiteralPath $path -Force).Length -gt 65536) { throw 'Invalid retention record.' }
+    $record = Get-Content -Encoding UTF8 -LiteralPath $path -Raw | ConvertFrom-Json
+    if ($record.format -ne 1 -or ($record.next_id -isnot [int] -and $record.next_id -isnot [long]) -or $record.next_id -lt 0) { throw 'Invalid retention inventory.' }
+    $ids = @()
+    foreach ($entry in @($record.generations) + @($record.backups)) {
+        if (($entry.id -isnot [int] -and $entry.id -isnot [long]) -or $entry.id -le 0 -or $entry.id -gt $record.next_id) { throw 'Invalid retention sequence.' }
+        $ids += $entry.id
+    }
+    if (@($ids | Select-Object -Unique).Count -ne $ids.Count) { throw 'Duplicate retention ownership entry.' }
+    return $record
+}
+
+function Save-CcpRetention {
+    param($Record, [string]$BinDirectory)
+    $directory = New-CcpPrivateStage $BinDirectory
+    try {
+        $source = Join-Path $directory 'retention.json'
+        $destination = Join-Path $BinDirectory '.ccp-retention.json'
+        [IO.File]::WriteAllText($source, ($Record | ConvertTo-Json -Depth 20 -WarningAction Stop), [Text.UTF8Encoding]::new($false))
+        Confirm-CcpPath $destination -AllowMissing
+        if ([IO.File]::Exists($destination)) { [IO.File]::Replace($source, $destination, [NullString]::Value) }
+        else { [IO.File]::Move($source, $destination) }
+    } finally { Remove-CcpPrivateStage $directory }
+}
+
+function Register-CcpGeneration {
+    param([string]$Directory)
+    $bin = Get-CcpRetentionRoot
+    if (-not $bin) { throw 'Generation creation requires an installation context.' }
+    Confirm-CcpPrivateStage $Directory
+    $marker = Join-Path $Directory '.ccp-generation.json'
+    [IO.File]::WriteAllText($marker, (@{format = 1; token = [Guid]::NewGuid().ToString('N'); install_root = $bin} | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    $record = Get-CcpRetention $bin
+    if ($record.next_id -eq [long]::MaxValue) { throw 'Retention sequence is exhausted.' }
+    $record.next_id++
+    $record.generations += [PSCustomObject]@{
+        id = $record.next_id; directory = $Directory; marker_hash = (Get-CcpFileDigest $marker)
+        creation_ticks = (Get-Item -LiteralPath $Directory -Force).CreationTimeUtc.Ticks; status = 'candidate'
+    }
+    Save-CcpRetention $record $bin
+}
+
+function Register-CcpBackup {
+    param([string]$Path, [string]$Backup, [string]$Hash)
+    $bin = Get-CcpRetentionRoot
+    if (-not $bin) { return }
+    $targets = Get-CcpUpgradeTarget $bin
+    $key = @(@('claude', 'cursor', 'codex') | Where-Object { $targets[$_] -eq $Path })
+    if ($key.Count -ne 1) { throw 'Unrecognized configuration backup.' }
+    $record = Get-CcpRetention $bin
+    if ($record.next_id -eq [long]::MaxValue) { throw 'Retention sequence is exhausted.' }
+    $record.next_id++
+    $record.backups += [PSCustomObject]@{id = $record.next_id; config = $key[0]; path = $Backup; hash = $Hash}
+    Save-CcpRetention $record $bin
+}
+
+function Remove-CcpRecordedBackup {
+    [CmdletBinding(SupportsShouldProcess)]
+    param($Record, [string]$BinDirectory)
+    if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Prune recorded configuration backups')) { return }
+    $targets = Get-CcpUpgradeTarget $BinDirectory
+    $present = @()
+    foreach ($entry in $Record.backups) {
+        if ($entry.config -notin @('claude', 'cursor', 'codex') -or $entry.hash -cnotmatch '^[0-9a-f]{64}$') { throw 'Invalid recorded backup.' }
+        $config = $targets[$entry.config]
+        $pattern = '^' + [regex]::Escape((Split-Path -Leaf $config)) + '\.backup\.[0-9]{8}T[0-9]{9}Z\.[0-9a-f]{32}$'
+        if ((Split-Path -Parent $entry.path) -ne (Split-Path -Parent $config) -or (Split-Path -Leaf $entry.path) -cnotmatch $pattern) { throw 'Invalid backup ownership path.' }
+        $current = Get-CcpFileDigest $entry.path
+        if (-not $current) { continue }
+        if ($current -ne $entry.hash) { Write-Warning 'A modified backup was retained and is no longer installer-owned.'; continue }
+        $present += $entry
+    }
+    $keep = @()
+    foreach ($key in @('claude', 'cursor', 'codex')) {
+        $ordered = @($present | Where-Object config -EQ $key | Sort-Object id -Descending)
+        $keep += @($ordered | Select-Object -First 3)
+        foreach ($entry in @($ordered | Select-Object -Skip 3)) {
+            Confirm-CcpPath $entry.path
+            if ((Get-CcpFileDigest $entry.path) -ne $entry.hash) { throw 'Backup changed before pruning.' }
+            Remove-Item -LiteralPath $entry.path -Force
         }
     }
-    [IO.File]::Delete($journal)
-    Remove-CcpPrivateStage $directory
+    $Record.backups = $keep
+    Save-CcpRetention $Record $BinDirectory
+}
+
+function Remove-CcpRecordedGeneration {
+    [CmdletBinding(SupportsShouldProcess)]
+    param($Record, [string]$BinDirectory)
+    if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Prune recorded MCP generations')) { return }
+    $installed = Get-CcpInstallState $BinDirectory
+    $active = if ($installed) { Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $installed.mcp_command)) } else { $null }
+    $parent = Join-Path $env:USERPROFILE '.ccp-mcp\generations'
+    if (-not $installed -and @($Record.generations | Where-Object status -EQ 'committed').Count) { throw 'Active installation ownership is unavailable; generations were retained.' }
+    foreach ($entry in $Record.generations) {
+        if ((Split-Path -Parent $entry.directory) -ne $parent -or
+            (Split-Path -Leaf $entry.directory) -cnotmatch '^\.ccp-stage-[0-9a-f]{32}$' -or
+            $entry.marker_hash -cnotmatch '^[0-9a-f]{64}$' -or $entry.status -notin @('candidate', 'committed', 'deleting')) { throw 'Invalid generation ownership record.' }
+        if ($entry.directory -eq $active) { $entry.status = 'committed' }
+    }
+    $previous = $Record.generations | Where-Object { $_.directory -ne $active -and $_.status -eq 'committed' } | Sort-Object id -Descending | Select-Object -First 1
+    $keep = @()
+    foreach ($entry in $Record.generations) {
+        Confirm-CcpPath $entry.directory -AllowMissing
+        if (-not (Test-Path -LiteralPath $entry.directory)) { continue }
+        if ($entry.directory -eq $active -or ($previous -and $entry.directory -eq $previous.directory)) { $keep += $entry; continue }
+        Confirm-CcpPrivateStage $entry.directory
+        $identity = (Get-Item -LiteralPath $entry.directory -Force).CreationTimeUtc.Ticks
+        $marker = Join-Path $entry.directory '.ccp-generation.json'
+        $markerHash = Get-CcpFileDigest $marker
+        if ($identity -ne $entry.creation_ticks -or
+            ($markerHash -and $markerHash -ne $entry.marker_hash) -or
+            (-not $markerHash -and $entry.status -ne 'deleting')) {
+            Write-Warning 'An unrecognized generation directory was retained and is no longer installer-owned.'
+            continue
+        }
+        if ($entry.status -ne 'deleting') {
+            $entry.status = 'deleting'
+            Save-CcpRetention $Record $BinDirectory
+        }
+        Remove-CcpPrivateStage $entry.directory
+    }
+    $Record.generations = $keep
+    Save-CcpRetention $Record $BinDirectory
+}
+
+function Invoke-CcpRetention {
+    param([string]$BinDirectory)
+    if (Test-Path -LiteralPath (Join-Path $BinDirectory '.ccp-upgrade.json')) { return }
+    if (-not (Test-Path -LiteralPath (Join-Path $BinDirectory '.ccp-retention.json'))) { return }
+    try {
+        $record = Get-CcpRetention $BinDirectory
+        Remove-CcpRecordedBackup $record $BinDirectory
+        Remove-CcpRecordedGeneration $record $BinDirectory
+    } catch {
+        $failure = [InvalidOperationException]::new('Recorded cleanup is pending. Close old MCP processes and re-run the same command before another upgrade.')
+        $failure.Data['CcpPrerequisite'] = $failure.Message
+        throw $failure
+    }
 }
 
 function Get-CcpInstallState {
@@ -442,11 +701,10 @@ function Install-CcpCommand {
     if (-not $script:CcpUpgrade) { throw 'Executable publication requires an upgrade transaction.' }
     $client = Join-Path $BinDirectory 'ccp-client.exe'
     $alias = Join-Path $BinDirectory 'ccp.exe'
-    $hash = Get-CcpFileDigest $Source
     $aliasHash = Get-CcpFileDigest $alias
     $state = Get-CcpInstallState $BinDirectory
-    # Adopt only a recorded alias or bytes matching this verified release.
-    $owned = $aliasHash -and (($state -and $state.alias_sha256 -eq $aliasHash) -or $aliasHash -eq $hash)
+    # Existing files require a recorded ownership hash; names or matching releases are insufficient.
+    $owned = $aliasHash -and $state -and $state.alias_sha256 -eq $aliasHash
     $existing = Get-Command ccp -ErrorAction SilentlyContinue | Select-Object -First 1
     $available = -not $aliasHash -and -not $existing
     $directory = New-CcpPrivateStage $BinDirectory
@@ -486,17 +744,17 @@ function Invoke-CcpUpgrade {
     } catch {
         $script:CcpUpgrade = $null
         try {
-            if ($state) { Restore-CcpUpgrade $BinDirectory }
+            if ($state) { Invoke-CcpRecovery $BinDirectory }
             else { Remove-CcpPrivateStage $candidate.directory }
         } catch {
-            $failure = [InvalidOperationException]::new('Upgrade rollback is pending. Close CCP processes and re-run this installer to recover the previous install.')
+            $failure = [InvalidOperationException]::new('Installation is mid-recovery. Close CCP and MCP processes, then re-run the same command to repair it. Recovery must finish before another upgrade.')
             $failure.Data['CcpPrerequisite'] = $failure.Message
             throw $failure
         }
         throw
     } finally { $script:CcpUpgrade = $null }
-    try { Restore-CcpUpgrade $BinDirectory }
-    catch { Write-Warning 'Upgrade completed; private journal cleanup is pending and will be retried on the next run.' }
+    try { Restore-CcpUpgrade $BinDirectory; Invoke-CcpRetention $BinDirectory }
+    catch { Write-Warning 'Upgrade completed; recorded cleanup is pending. Close old MCP processes and re-run the same command before another upgrade.' }
 }
 
 function Set-CcpUserPath {
@@ -519,6 +777,7 @@ function Install-CcpMcp {
     New-CcpDirectory $parent
     $directory = New-CcpPrivateStage $parent
     try {
+        Register-CcpGeneration $directory
         $venv = Join-Path $directory 'venv'
         Invoke-CcpNative $BootstrapPython @('-I', '-m', 'venv', $venv)
         $python = Join-Path $venv 'Scripts\python.exe'
@@ -546,7 +805,12 @@ function Backup-CcpConfig {
     $stamp = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
     $backup = "$Path.backup.$stamp.$([Guid]::NewGuid().ToString('N'))"
     Confirm-CcpPath $backup -AllowMissing
+    $hash = Get-CcpFileDigest $Path
+    Register-CcpBackup $Path $backup $hash
     [IO.File]::Copy($Path, $backup, $false)
+    if ((Get-CcpFileDigest $backup) -ne $hash) { throw 'Configuration changed during backup.' }
+    $bin = Get-CcpRetentionRoot
+    if ($bin) { Remove-CcpRecordedBackup (Get-CcpRetention $bin) $bin }
 }
 
 function Set-CcpCodexConfig {
@@ -681,7 +945,11 @@ function Install-CcpWindows {
         $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
     }
     try {
-        if ($lock) { Restore-CcpUpgrade $bin }
+        if ($lock) {
+            $script:CcpRetentionDirectory = $bin
+            Invoke-CcpRecovery $bin
+            Invoke-CcpRetention $bin
+        }
         Resolve-CcpApplication 'gh' | Out-Null
         $python = Resolve-CcpPython
         $tag = Get-CcpReleaseTag $ReleaseChannel $RequestedVersion
@@ -695,7 +963,9 @@ function Install-CcpWindows {
                 $lockPath = Join-Path $bin '.ccp-upgrade.lock'
                 Confirm-CcpPath $lockPath -AllowMissing
                 $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-                Restore-CcpUpgrade $bin
+                $script:CcpRetentionDirectory = $bin
+                Invoke-CcpRecovery $bin
+                Invoke-CcpRetention $bin
             }
             Set-CcpUserPath $bin
             Write-Information -InformationAction Continue 'Building and validating the matching MCP bridge before replacing any commands.'
@@ -705,7 +975,10 @@ function Install-CcpWindows {
         } finally {
             Remove-CcpPrivateStage $stage
         }
-    } finally { if ($lock) { $lock.Dispose() } }
+    } finally {
+        $script:CcpRetentionDirectory = $null
+        if ($lock) { $lock.Dispose() }
+    }
 }
 
 try { Install-CcpWindows $Channel $Version $InstallDir }

@@ -125,7 +125,7 @@ function Test-CcpApplicationResolution {
 function Confirm-TestFailure {
     param([scriptblock]$Action, [string]$Message)
     $failed = $false
-    try { & $Action } catch { $failed = $true }
+    try { & $Action } catch { $failed = $true; $script:LastFailureMessage = $_.Exception.Message }
     Confirm-TestCondition $failed $Message
 }
 function Get-TestUpgradeSnapshot {
@@ -260,15 +260,229 @@ function Test-CcpUpgradeRollback {
         $script:PublishFailureDestination = $targets.alias; $script:PublishFailureFired = $false; $script:BlockRestore = $true
         Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Blocked rollback did not fail closed.'
         Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $BinDirectory '.ccp-upgrade.json')) 'Blocked rollback discarded recovery data.'
+        Confirm-TestCondition ($script:LastFailureMessage.Contains('mid-recovery') -and $script:LastFailureMessage.Contains('re-run the same command')) 'Blocked rollback did not explain recovery.'
+        $callsBefore = $script:NativeCalls.Count; $downloadsBefore = $script:DownloadUrls.Count
+        Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Still-blocked recovery did not fail closed.'
+        Confirm-TestCondition ($script:NativeCalls.Count -eq $callsBefore -and $script:DownloadUrls.Count -eq $downloadsBefore) 'A retry started tool or network work before recovery completed.'
         Confirm-TestCondition ((Get-CcpFileDigest $before.command) -eq $before.bridge) 'Blocked rollback changed the previous MCP bridge.'
         $script:BlockRestore = $false; $script:PublishFailureDestination = ''
         Install-CcpWindows stable '' $BinDirectory
         Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
-        Confirm-TestCondition ((Get-TestUpgradeSnapshot $BinDirectory).generations -eq ($before.generations + 1)) 'Recovery did not remove the failed candidate.'
+        Confirm-TestCondition ((Get-TestUpgradeSnapshot $BinDirectory).generations -eq [Math]::Min(2, ($before.generations + 1))) 'Recovery did not remove the failed candidate.'
     } finally {
         $script:BlockRestore = $false; $script:PublishFailureDestination = ''; $script:BuildFailure = ''; $script:RejectCodex = $false
         Set-Item Function:Publish-CcpFile $script:SavedUpgradePublisher
     }
+}
+function Get-TestPendingUpgrade {
+    param([string]$BinDirectory)
+    $pointer = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $BinDirectory '.ccp-upgrade.json') -Raw | ConvertFrom-Json
+    return (Get-Content -Encoding UTF8 -LiteralPath (Join-Path $pointer.directory 'state.json') -Raw | ConvertFrom-Json)
+}
+function Test-CcpRestartableRecovery {
+    param([string]$Stage, [string]$BinDirectory, $Manifest, [string]$ManifestPath)
+    $targets = Get-CcpUpgradeTarget $BinDirectory
+    $script:R3Publisher = ${function:Publish-CcpFile}; $script:R3Saver = ${function:Save-CcpUpgradeState}
+    $script:R3Remover = ${function:Remove-CcpPrivateStage}; $script:R3Tree = ${function:Remove-CcpTree}
+    $script:R3Pointer = ${function:Save-CcpCleanupPointer}; $script:R3Journal = ${function:Remove-CcpUpgradeJournal}
+    $script:R3Client = $targets.client; $script:R3Alias = $targets.alias
+    $script:R3Block = $false; $script:R3AliasFault = $false; $script:R3AliasFired = $false
+    $script:R3Phase = ''; $script:R3Fired = $false; $script:R3Candidate = ''; $script:R3Directory = ''
+    $script:R3AliasWrites = 0
+    Set-Item Function:Publish-CcpFile {
+        param([string]$Source, [string]$Destination)
+        if ($Destination -eq $script:R3Alias) { $script:R3AliasWrites++ }
+        if ($script:R3Block -and $Destination -eq $script:R3Client -and (Split-Path -Leaf $Source) -eq 'client') { throw 'Blocked restore.' }
+        if ($script:R3AliasFault -and $Destination -eq $script:R3Alias -and -not $script:R3AliasFired) {
+            $script:R3AliasFired = $true; throw 'Second publish failed.'
+        }
+        & $script:R3Publisher $Source $Destination
+    }
+    Set-Item Function:Save-CcpUpgradeState {
+        param($State)
+        & $script:R3Saver $State
+        if ($script:R3Phase -eq 'checkpoint' -and $State.cleanup_ready -and -not $State.committed -and -not $script:R3Fired) {
+            $script:R3Fired = $true; throw 'Stopped after durable cleanup checkpoint.'
+        }
+    }
+    Set-Item Function:Save-CcpCleanupPointer {
+        param([string]$BinDirectory, [string]$Directory)
+        & $script:R3Pointer $BinDirectory $Directory
+        if ($script:R3Phase -eq 'pointer' -and -not $script:R3Fired) { $script:R3Fired = $true; throw 'Stopped after cleanup pointer.' }
+    }
+    Set-Item Function:Remove-CcpTree {
+        param([string]$Path)
+        if ($script:R3Phase -eq 'partial-stage' -and $Path -eq $script:R3Directory -and -not $script:R3Fired) {
+            [IO.File]::Delete((Join-Path $Path 'state.json'))
+            $script:R3Fired = $true; throw 'Stopped partway through snapshot deletion.'
+        }
+        & $script:R3Tree $Path
+    }
+    Set-Item Function:Remove-CcpPrivateStage {
+        param([string]$Path)
+        & $script:R3Remover $Path
+        if (-not $script:R3Fired -and (($script:R3Phase -eq 'candidate' -and $Path -eq $script:R3Candidate) -or
+            ($script:R3Phase -eq 'stage' -and $Path -eq $script:R3Directory))) {
+            $script:R3Fired = $true; throw 'Stopped after directory deletion.'
+        }
+    }
+    Set-Item Function:Remove-CcpUpgradeJournal {
+        param([string]$BinDirectory)
+        & $script:R3Journal $BinDirectory
+        if ($script:R3Phase -eq 'journal' -and -not $script:R3Fired) { $script:R3Fired = $true; throw 'Stopped after journal deletion.' }
+    }
+    try {
+        foreach ($phase in @('checkpoint', 'candidate', 'pointer', 'partial-stage', 'stage', 'journal', 'foreign-alias', 'foreign-client')) {
+            Set-TestReleaseClient $Stage $Manifest $ManifestPath "cleanup client $phase"
+            $script:BridgeBytes = "cleanup bridge $phase"
+            $script:R3Block = $true; $script:R3AliasFault = $true; $script:R3AliasFired = $false
+            Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Recovery setup did not block.'
+            Confirm-TestCondition ($script:LastFailureMessage.Contains('mid-recovery')) 'Blocked recovery message was not clear.'
+            $pending = Get-TestPendingUpgrade $BinDirectory
+            $script:R3Candidate = $pending.candidate; $script:R3Directory = $pending.directory
+            Invoke-CcpRetention $BinDirectory
+            Confirm-TestCondition (Test-Path -LiteralPath $pending.candidate) 'Retention pruned a rollback generation.'
+            $script:R3Block = $false; $script:R3Phase = $phase; $script:R3Fired = $false
+            if ($phase -eq 'foreign-alias') {
+                [IO.File]::WriteAllText($targets.alias, 'unrelated replacement executable')
+                $writes = $script:R3AliasWrites
+                $warnings = @(Invoke-CcpRecovery $BinDirectory 3>&1)
+                Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $targets.alias -Raw) -eq 'unrelated replacement executable') 'Recovery overwrote an unrelated alias.'
+                Confirm-TestCondition ($script:R3AliasWrites -eq $writes) 'Recovery attempted to publish over an unrelated alias.'
+                Confirm-TestCondition ($null -eq (Get-CcpInstallState $BinDirectory).alias_sha256) 'Recovery retained alias ownership.'
+                Confirm-TestCondition (($warnings -join ' ').Contains('unrelated replacement')) 'Recovery did not warn about the replacement alias.'
+                Install-CcpWindows stable '' $BinDirectory
+                Confirm-TestCondition ($script:R3AliasWrites -eq $writes) 'Retry adopted the unrelated alias.'
+                # Even unrecorded bytes identical to the release are not ownership proof.
+                [IO.File]::Copy($targets.client, $targets.alias, $true)
+                Install-CcpWindows stable '' $BinDirectory
+                Confirm-TestCondition ($script:R3AliasWrites -eq $writes -and $null -eq (Get-CcpInstallState $BinDirectory).alias_sha256) 'An unrecorded pre-existing alias was adopted.'
+                $record = Get-CcpInstallState $BinDirectory; $record.alias_sha256 = Get-CcpFileDigest $targets.alias
+                [IO.File]::WriteAllText($targets.install, ($record | ConvertTo-Json))
+            } elseif ($phase -eq 'foreign-client') {
+                [IO.File]::WriteAllText($targets.client, 'unrelated client replacement')
+                $warnings = @(Confirm-TestFailure { Invoke-CcpRecovery $BinDirectory } 'Unknown client replacement was overwritten.' 3>&1)
+                Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $targets.client -Raw) -eq 'unrelated client replacement') 'Recovery overwrote unknown destination bytes.'
+                Confirm-TestCondition (($warnings -join ' ').Contains('left untouched')) 'Recovery did not warn about unknown destination bytes.'
+                # User resolves the external change to known proposed bytes before retry.
+                [IO.File]::Copy((Join-Path $Stage $CcpClientAsset), $targets.client, $true)
+                Install-CcpWindows stable '' $BinDirectory
+                Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
+            } else {
+                Confirm-TestFailure { Invoke-CcpRecovery $BinDirectory } "Cleanup interruption at $phase did not fail."
+                Confirm-TestCondition $script:R3Fired "Cleanup interruption at $phase was not reached."
+                $script:R3Phase = ''
+                Install-CcpWindows stable '' $BinDirectory
+                Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
+                Confirm-TestCondition (-not (Test-Path -LiteralPath $pending.directory)) 'Recovery retained the transaction directory.'
+                Confirm-TestCondition (-not (Test-Path -LiteralPath $pending.candidate)) 'Recovery retained the rollback candidate.'
+            }
+            $script:R3Phase = ''; $script:R3AliasFault = $false
+        }
+    } finally {
+        Set-Item Function:Publish-CcpFile $script:R3Publisher; Set-Item Function:Save-CcpUpgradeState $script:R3Saver
+        Set-Item Function:Remove-CcpPrivateStage $script:R3Remover; Set-Item Function:Remove-CcpTree $script:R3Tree
+        Set-Item Function:Save-CcpCleanupPointer $script:R3Pointer; Set-Item Function:Remove-CcpUpgradeJournal $script:R3Journal
+    }
+}
+function Test-CcpBoundedRetention {
+    param([string]$Stage, [string]$BinDirectory, $Manifest, [string]$ManifestPath)
+    $parent = Join-Path $env:USERPROFILE '.ccp-mcp/generations'
+    $unknown = New-CcpPrivateStage $parent
+    [IO.File]::WriteAllText((Join-Path $unknown 'user.txt'), 'unrecorded user directory')
+    $foreignBackup = Join-Path $env:USERPROFILE ('.claude.json.backup.20000101T000000000Z.' + [Guid]::NewGuid().ToString('N'))
+    [IO.File]::WriteAllText($foreignBackup, 'unrecorded user backup')
+    $outside = Join-Path (Split-Path -Parent $env:USERPROFILE) 'retention-outside'
+    New-Item -ItemType Directory -Force -Path $outside | Out-Null
+    [IO.File]::WriteAllText((Join-Path $outside 'keep.txt'), 'do not traverse')
+    $record = Get-CcpRetention $BinDirectory
+    $old = $record.generations | Sort-Object id | Select-Object -First 1
+    $type = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'Junction' } else { 'SymbolicLink' }
+    New-Item -ItemType $type -Path (Join-Path $old.directory 'external-link') -Target $outside | Out-Null
+    $script:R3RetentionTree = ${function:Remove-CcpTree}
+    $script:R3RetentionOld = $old.directory
+    $script:R3RetentionBlocked = $true
+    $script:R3RetentionReached = $false
+    Set-Item Function:Remove-CcpTree {
+        param([string]$Path)
+        if ($Path -eq $script:R3RetentionOld -and $script:R3RetentionBlocked) {
+            [IO.File]::Delete((Join-Path $Path '.ccp-generation.json'))
+            $script:R3RetentionReached = $true
+            throw 'Interrupted recorded generation deletion.'
+        }
+        & $script:R3RetentionTree $Path
+    }
+    try {
+        Set-TestReleaseClient $Stage $Manifest $ManifestPath 'interrupted pruning client'
+        $script:BridgeBytes = 'interrupted pruning bridge'
+        Install-CcpWindows stable '' $BinDirectory
+        Confirm-TestCondition $script:R3RetentionReached 'Generation deletion interruption was not reached.'
+        $installed = Get-CcpInstallState $BinDirectory
+        Confirm-TestCondition (Test-Path -LiteralPath $installed.mcp_command) 'Retention interruption changed the active generation.'
+        $calls = $script:NativeCalls.Count; $downloads = $script:DownloadUrls.Count
+        Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Blocked retention allowed another upgrade.'
+        Confirm-TestCondition ($script:NativeCalls.Count -eq $calls -and $script:DownloadUrls.Count -eq $downloads) 'Pending cleanup did not finish before tool/network work.'
+        $script:R3RetentionBlocked = $false
+        Install-CcpWindows stable '' $BinDirectory
+        Confirm-TestCondition (-not (Test-Path -LiteralPath $old.directory)) 'Partially deleted generation could not be pruned on retry.'
+    } finally { Set-Item Function:Remove-CcpTree $script:R3RetentionTree }
+    $script:R3BackupRegistrar = ${function:Register-CcpBackup}
+    $script:R3Backups = [Collections.Generic.List[object]]::new()
+    Set-Item Function:Register-CcpBackup {
+        param([string]$Path, [string]$Backup, [string]$Hash)
+        $script:R3Backups.Add(@{config = $Path; path = $Backup})
+        & $script:R3BackupRegistrar $Path $Backup $Hash
+    }
+    try {
+        for ($iteration = 1; $iteration -le 6; $iteration++) {
+            $before = Get-CcpInstallState $BinDirectory
+            $previous = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $before.mcp_command))
+            Set-TestReleaseClient $Stage $Manifest $ManifestPath "retained client $iteration"
+            $script:BridgeBytes = "retained bridge $iteration"
+            Install-CcpWindows stable '' $BinDirectory
+            $record = Get-CcpRetention $BinDirectory
+            $active = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent (Get-CcpInstallState $BinDirectory).mcp_command))
+            Confirm-TestCondition (@($record.generations).Count -eq 2) 'Generation retention did not keep exactly two.'
+            Confirm-TestCondition ($record.generations.directory -contains $active -and $record.generations.directory -contains $previous) 'Retention removed active or previous generation.'
+            Confirm-TestCondition (@(Get-ChildItem -LiteralPath $parent -Directory -Force).Count -eq 3) 'Recorded generation pruning did not remove old directories.'
+            foreach ($key in @('claude', 'cursor', 'codex')) {
+                Confirm-TestCondition (@($record.backups | Where-Object config -EQ $key).Count -le 3) 'Configuration backups exceeded their bound.'
+            }
+            Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $unknown 'user.txt') -Raw) -eq 'unrecorded user directory') 'Retention pruned an unrecorded directory.'
+            Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $foreignBackup -Raw) -eq 'unrecorded user backup') 'Retention pruned an unrecorded backup.'
+            Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $outside 'keep.txt') -Raw) -eq 'do not traverse') 'Generation pruning followed a nested junction.'
+        }
+        $script:R3RetentionSaver = ${function:Save-CcpRetention}
+        $script:R3BackupDeleteBlocked = $true; $script:R3BackupDeleteReached = $false
+        Set-Item Function:Save-CcpRetention {
+            param($Record, [string]$BinDirectory)
+            $prior = Get-CcpRetention $BinDirectory
+            $missing = @($prior.backups | Where-Object { -not (Test-Path -LiteralPath $_.path) })
+            if ($script:R3BackupDeleteBlocked -and $missing.Count -and
+                @($Record.backups | Where-Object config -EQ 'claude').Count -le 3) {
+                $script:R3BackupDeleteReached = $true
+                throw 'Interrupted inventory update after backup deletion.'
+            }
+            & $script:R3RetentionSaver $Record $BinDirectory
+        }
+        try {
+            Set-TestReleaseClient $Stage $Manifest $ManifestPath 'interrupted backup client'
+            $script:BridgeBytes = 'interrupted backup bridge'
+            Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Backup deletion interruption did not fail.'
+            Confirm-TestCondition $script:R3BackupDeleteReached 'Backup inventory interruption was not reached.'
+            $script:R3BackupDeleteBlocked = $false
+            Install-CcpWindows stable '' $BinDirectory
+            $record = Get-CcpRetention $BinDirectory
+            Confirm-TestCondition (@($record.generations).Count -eq 2) 'Backup recovery changed generation retention.'
+        } finally { Set-Item Function:Save-CcpRetention $script:R3RetentionSaver }
+        $targets = Get-CcpUpgradeTarget $BinDirectory
+        foreach ($key in @('claude', 'codex')) {
+            $latest = @($script:R3Backups | Where-Object config -EQ $targets[$key] | Select-Object -Last 3)
+            $kept = @($record.backups | Where-Object config -EQ $key)
+            Confirm-TestCondition ($kept.Count -eq 3) 'Retention kept fewer than the three recent backups.'
+            foreach ($entry in $kept) { Confirm-TestCondition ($latest.path -contains $entry.path) 'Retention did not keep the newest recorded backups.' }
+        }
+    } finally { Set-Item Function:Register-CcpBackup $script:R3BackupRegistrar }
 }
 function Invoke-CcpNative {
     param([string]$Executable, [string[]]$ArgumentList, [switch]$Capture)
@@ -476,6 +690,7 @@ try {
     $venvCalls = @($script:NativeCalls | Where-Object { $_.Arguments -contains 'venv' })
     Confirm-TestCondition ($venvCalls.Count -eq 2) 'Each successful upgrade must build a separate venv.'
     Test-CcpUpgradeRollback $fixture $InstallDir $manifest $manifestPath
+    Test-CcpRestartableRecovery $fixture $InstallDir $manifest $manifestPath
     $aliasPath = Join-Path $InstallDir 'ccp.exe'
     if (Test-Path -LiteralPath $aliasPath) {
         Confirm-TestCondition ((Get-FileHash $aliasPath).Hash -eq (Get-FileHash $downloadedClient).Hash) 'Owned ccp alias was not updated.'
@@ -524,6 +739,7 @@ try {
         Set-Acl -LiteralPath $private -AclObject $originalAcl
         Remove-CcpPrivateStage $private
     }
+    Test-CcpBoundedRetention $fixture $InstallDir $manifest $manifestPath
     $directoryTarget = Join-Path $InstallDir 'directory'
     New-Item -ItemType Directory -Path $directoryTarget | Out-Null
     Confirm-TestFailure { Publish-CcpFile (Join-Path $fixture $CcpClientAsset) $directoryTarget } 'Directory destination accepted.'

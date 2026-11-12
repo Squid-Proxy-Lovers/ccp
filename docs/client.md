@@ -74,8 +74,8 @@ Each upgrade builds a fresh MCP venv under `%USERPROFILE%\.ccp-mcp\generations`,
 using `Scripts\python.exe`. It validates the package version, import and console
 entry point before replacing any installed commands. The generation also retains
 its verified matching client. Generation paths stay fixed because venv launchers
-contain absolute interpreter paths. Previous generations and the legacy
-`%USERPROFILE%\.ccp-mcp\venv` are retained, so existing processes keep their files.
+contain absolute interpreter paths. The current generation and one previous
+installer-recorded generation are kept. Unregistered directories are never pruned.
 Close CCP processes before upgrading and restart MCP hosts afterward.
 
 The installer adds CCP to detected Claude, Codex and Cursor configurations, and
@@ -84,17 +84,25 @@ Customized entries are retained with a reminder to check their paths. Missing
 hosts are reported. Codex configuration requires `codex mcp add` and
 `codex mcp get --json` on PATH. Unrelated JSON settings remain intact. Before
 modifying an existing JSON or Codex config, the installer saves a timestamped
-`.backup.*` copy beside it. Codex edits use a private staged `CODEX_HOME`.
+`.backup.*` copy beside it and retains the three most recent installer-recorded
+backups per config. Modified or unregistered backups are left alone. Codex edits
+use a private staged `CODEX_HOME`.
 
 An ownership record, `.ccp-install.json`, beside the binaries tracks the installer's
-alias and active MCP generation. The installer stages both executables and keeps a private upgrade
-journal (`.ccp-upgrade.json`) with their previous bytes and the host configurations. A failed upgrade
-restores the previous pair and configurations; a failed candidate build never
-changes them. If an open process prevents rollback, close it and re-run the same
-installer: journal recovery runs before another upgrade. Keep recovery files
-until that run succeeds. An unrelated `ccp.exe` is never adopted just because
-its name matches. Successful upgrades retain the previous venvs; remove an unused
-old generation only after its hosts have stopped and you no longer need it.
+alias and active MCP generation. The installer stages both executables and keeps
+a private upgrade journal (`.ccp-upgrade.json`) with their previous bytes and the
+host configurations. A failed upgrade restores the previous pair and configurations;
+a failed candidate build never changes them. If an open process prevents rollback,
+the installer exits nonzero and clearly
+reports that it is mid-recovery. Close that process and re-run the same command:
+recovery and pending cleanup finish before tool checks, downloads or another
+upgrade. Keep recovery files until that run succeeds. An unrelated `ccp.exe` is never adopted just because
+its name matches. Cleanup checkpoints tolerate already-deleted files and
+directories. Recovery checks destination hashes before restoring bytes; an unrelated replacement
+`ccp.exe` is kept with a warning and its alias ownership is dropped. Retention
+prunes only recorded, identity-checked generations and hash-checked backups,
+never an active or rollback generation. Close old MCP hosts if cleanup is blocked
+and re-run the command to finish pruning.
 
 Client state defaults to `%USERPROFILE%\.ccp-client` when `HOME` is absent. `HOME`
 retains precedence when set, and `CCP_CLIENT_HOME` overrides both. Keep credentials
