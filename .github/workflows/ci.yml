@@ -128,6 +128,7 @@ jobs:
     needs: [test]
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
@@ -139,10 +140,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Image references must be lower case; github.repository keeps the
+      # organisation's capitals, which made every publish fail.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: ${{ github.event_name == 'push' }}
           tags: |
-            ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/squid-proxy-lovers/ccp:latest
+            ghcr.io/squid-proxy-lovers/ccp:${{ github.sha }}
+            ${{ github.ref_type == 'tag' && format('ghcr.io/squid-proxy-lovers/ccp:{0}', github.ref_name) || '' }}
