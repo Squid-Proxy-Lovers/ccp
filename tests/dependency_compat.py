@@ -111,6 +111,16 @@ def server_env(data: Path, auth: int, mtls: int) -> dict[str, str]:
     )
 
 
+def summary(*, old_client: Path | None, old_server: Path | None) -> str:
+    """Describe only what actually ran: real old/new checks need --old-*."""
+    checked = ["server restarts, existing enrollments, and persisted content"]
+    if old_client:
+        checked.append("old/new TLS clients")
+    if old_server:
+        checked.append("server upgrade/downgrade")
+    return f"PASS: {', '.join(checked)}"
+
+
 def check(args):
     old_server = args.old_server or args.server
     old_client = args.old_client or args.client
@@ -179,9 +189,8 @@ def check(args):
         with Server(old_server, env, auth):
             assert "old client append" in content(old_client, old_env)
             assert "old client append" in content(args.client, new_env)
-    print(
-        "PASS: old/new TLS clients, server upgrade/downgrade, existing enrollments and persisted content"
-    )
+
+    print(summary(old_client=args.old_client, old_server=args.old_server))
 
 
 if __name__ == "__main__":

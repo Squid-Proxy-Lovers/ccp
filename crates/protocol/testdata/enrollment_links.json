@@ -1,0 +1,702 @@
+{
+  "format": 1,
+  "invitation_suffix": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "cases": [
+    {
+      "name": "short port",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": true,
+      "https_origin": "https://ccp.example:8443/",
+      "mtls_origin": "https://ccp.example:8444/",
+      "workspace_name": "Team context",
+      "i": "00000000-0000-0000-0000-000000000001",
+      "w": "00000000-0000-0000-0000-000000000002",
+      "ca": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ca_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "canonical": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fccp.example%3A8444%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context"
+    },
+    {
+      "name": "distinct host",
+      "uri": "https://ccp.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A9444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%E5%90%8D+%26+%F0%9F%A6%91",
+      "valid": true,
+      "https_origin": "https://ccp.example/",
+      "mtls_origin": "https://clients.example:9444/",
+      "workspace_name": "名 & 🦑",
+      "i": "00000000-0000-0000-0000-000000000001",
+      "w": "00000000-0000-0000-0000-000000000002",
+      "ca": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ca_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "canonical": "https://ccp.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A9444%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%E5%90%8D+%26+%F0%9F%A6%91"
+    },
+    {
+      "name": "ipv6",
+      "uri": "https://[::1]:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Bob%27s+%25%2F%23+context",
+      "valid": true,
+      "https_origin": "https://[::1]:8443/",
+      "mtls_origin": "https://[::1]:8444/",
+      "workspace_name": "Bob's %/# context",
+      "i": "00000000-0000-0000-0000-000000000001",
+      "w": "00000000-0000-0000-0000-000000000002",
+      "ca": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ca_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "canonical": "https://[::1]:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2F%5B%3A%3A1%5D%3A8444%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Bob%27s+%25%2F%23+context"
+    },
+    {
+      "name": "public default port",
+      "uri": "https://CCP.example:443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=443&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=team",
+      "valid": true,
+      "https_origin": "https://ccp.example/",
+      "mtls_origin": "https://ccp.example/",
+      "workspace_name": "team",
+      "i": "00000000-0000-0000-0000-000000000001",
+      "w": "00000000-0000-0000-0000-000000000002",
+      "ca": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ca_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "canonical": "https://ccp.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fccp.example%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=team"
+    },
+    {
+      "name": "preserve BOM name",
+      "uri": "https://localhost:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%EF%BB%BFname",
+      "valid": true,
+      "https_origin": "https://localhost:8443/",
+      "mtls_origin": "https://localhost:8444/",
+      "workspace_name": "﻿name",
+      "i": "00000000-0000-0000-0000-000000000001",
+      "w": "00000000-0000-0000-0000-000000000002",
+      "ca": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ca_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "canonical": "https://localhost:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Flocalhost%3A8444%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%EF%BB%BFname"
+    },
+    {
+      "name": "byte boundary",
+      "uri": "https://127.0.0.1:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9",
+      "valid": true,
+      "https_origin": "https://127.0.0.1:8443/",
+      "mtls_origin": "https://127.0.0.1:8444/",
+      "workspace_name": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "i": "00000000-0000-0000-0000-000000000001",
+      "w": "00000000-0000-0000-0000-000000000002",
+      "ca": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "ca_bytes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "canonical": "https://127.0.0.1:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2F127.0.0.1%3A8444%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9"
+    },
+    {
+      "name": "http",
+      "uri": "http://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "query",
+      "uri": "https://ccp.example:8443/join?key=no#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "empty query",
+      "uri": "https://ccp.example:8443/join?#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "userinfo",
+      "uri": "https://user:pass@ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "empty userinfo",
+      "uri": "https://@ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "ambiguous slashes",
+      "uri": "https:////ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "dot route",
+      "uri": "https://ccp.example:8443/./join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "encoded path",
+      "uri": "https://ccp.example:8443/%6aoin#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "extra route",
+      "uri": "https://ccp.example:8443/other/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "trailing route",
+      "uri": "https://ccp.example:8443/join/#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "unknown version",
+      "uri": "https://ccp.example:8443/join#v=2&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "version"
+    },
+    {
+      "name": "unknown field",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context&transport=wss",
+      "valid": false,
+      "error": "fields"
+    },
+    {
+      "name": "duplicate field",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context&t={invitation}",
+      "valid": false,
+      "error": "fields"
+    },
+    {
+      "name": "encoded duplicate",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context&%76=1",
+      "valid": false,
+      "error": "fields"
+    },
+    {
+      "name": "missing field",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002",
+      "valid": false,
+      "error": "fields"
+    },
+    {
+      "name": "empty pair",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context&",
+      "valid": false,
+      "error": "fields"
+    },
+    {
+      "name": "second hash",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context#again",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "bad percent",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%GG",
+      "valid": false,
+      "error": "syntax"
+    },
+    {
+      "name": "short percent",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%",
+      "valid": false,
+      "error": "syntax"
+    },
+    {
+      "name": "invalid utf8",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%C0%AF",
+      "valid": false,
+      "error": "syntax"
+    },
+    {
+      "name": "encoded control",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=a%00b",
+      "valid": false,
+      "error": "name"
+    },
+    {
+      "name": "trailing name whitespace",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=name%20",
+      "valid": false,
+      "error": "name"
+    },
+    {
+      "name": "oversize name",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9",
+      "valid": false,
+      "error": "name"
+    },
+    {
+      "name": "bad CA size",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "pin"
+    },
+    {
+      "name": "CA padding",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA%3D&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "pin"
+    },
+    {
+      "name": "noncanonical CA last bits",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "pin"
+    },
+    {
+      "name": "wrong hash algorithm",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha1%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "pin"
+    },
+    {
+      "name": "uppercase UUID",
+      "uri": "https://ccp.example:8443/join#v=1&i=FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "identity"
+    },
+    {
+      "name": "nil UUID",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000000&n=Team+context",
+      "valid": false,
+      "error": "identity"
+    },
+    {
+      "name": "zero port",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=0&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "overflow port",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=65536&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "leading zero port",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=08444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "http mtls",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=http%3A%2F%2Fclients.example%3A8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "mtls credentials",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fuser%40clients.example%3A8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "mtls query",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A8444%3Fx%3D1&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "mtls path",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A8444%2Fpath&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "mtls normalizing dot path",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A8444%2F..%2F&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "numeric host alias",
+      "uri": "https://2130706433:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "short IPv4",
+      "uri": "https://127.1:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "shell quote host",
+      "uri": "https://evil'.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "oversize URI",
+      "uri": "https://ccp.example/join#xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "valid": false,
+      "error": "size"
+    },
+    {
+      "name": "empty invitation",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "invitation"
+    },
+    {
+      "name": "wrong invitation kind",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=ccp_recover_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "invitation"
+    },
+    {
+      "name": "invalid invitation hex",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=ccp_join_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "invitation"
+    },
+    {
+      "name": "truncated invitation",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=ccp_join_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "invitation"
+    },
+    {
+      "name": "leading invitation whitespace",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t=%20{invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "invitation"
+    },
+    {
+      "name": "blank name",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=",
+      "valid": false,
+      "error": "name"
+    },
+    {
+      "name": "negative port",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=-1&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "non-HTTPS scheme",
+      "uri": "file://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "Unicode control",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=a%C2%85b",
+      "valid": false,
+      "error": "name"
+    },
+    {
+      "name": "reject host xn--a.example",
+      "uri": "https://xn--a.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host xn--zz.example",
+      "uri": "https://xn--zz.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host xn--ab.example",
+      "uri": "https://xn--ab.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host xn--1ug.example",
+      "uri": "https://xn--1ug.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host ccp。example",
+      "uri": "https://ccp。example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host cc­p.example",
+      "uri": "https://cc­p.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host ＣＣＰ.example",
+      "uri": "https://ＣＣＰ.example/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host ccp.example:08443",
+      "uri": "https://ccp.example:08443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host ccp.example:",
+      "uri": "https://ccp.example:/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host [::ffff:0.0.0.0]",
+      "uri": "https://[::ffff:0.0.0.0]/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host [::ffff:127.0.0.1]",
+      "uri": "https://[::ffff:127.0.0.1]/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host [::ffff:0:0]",
+      "uri": "https://[::ffff:0:0]/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host [::ffff:7f00:1]",
+      "uri": "https://[::ffff:7f00:1]/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject host [0:0:0:0:0:0:0:1]",
+      "uri": "https://[0:0:0:0:0:0:0:1]/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject m host xn--zz.example",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fxn--zz.example&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject m host [::ffff:0.0.0.0]",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2F%5B%3A%3Affff%3A0.0.0.0%5D&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject m host [::ffff:127.0.0.1]",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2F%5B%3A%3Affff%3A127.0.0.1%5D&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject m host clients.example:08444",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A08444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "reject m host clients.example:",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=https%3A%2F%2Fclients.example%3A&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context",
+      "valid": false,
+      "error": "origin"
+    },
+    {
+      "name": "malformed duplicate value",
+      "uri": "https://ccp.example:8443/join#v=1&i=00000000-0000-0000-0000-000000000001&m=8444&ca=sha256%3AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&t={invitation}&w=00000000-0000-0000-0000-000000000002&n=Team+context&n=%C0%AF",
+      "valid": false,
+      "error": "syntax"
+    }
+  ]
+}

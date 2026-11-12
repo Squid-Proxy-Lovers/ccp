@@ -29,6 +29,9 @@ mod commands;
 #[path = "database.rs"]
 mod database;
 #[cfg(test)]
+#[path = "test_hooks.rs"]
+mod test_hooks;
+#[cfg(test)]
 #[path = "tests/state.rs"]
 #[expect(
     unsafe_code,
@@ -418,16 +421,52 @@ impl SessionCache {
     }
 
     fn insert_entry(&mut self, key: String, entry: CachedMessagePack) -> Option<CachedMessagePack> {
+        let previous = self.insert_entry_deferred(key, entry);
+        self.rebuild_list_entries_cache();
+        self.invalidate_entry_search_results();
+        self.invalidate_context_search_results();
+        previous
+    }
+
+    /// Startup insert: maintain counts but defer derived caches until loading ends.
+    fn insert_entry_deferred(
+        &mut self,
+        key: String,
+        entry: CachedMessagePack,
+    ) -> Option<CachedMessagePack> {
         let previous = self.entries.remove(&key);
         if let Some(previous) = &previous {
             self.decrement_entry_counts(previous);
         }
         self.increment_entry_counts(&entry);
         self.entries.insert(key, entry);
+        previous
+    }
+
+    /// Refresh descriptions, sorted summaries and query caches once after startup.
+    fn finish_bulk_load(&mut self) {
+        for entry in self.entries.values_mut() {
+            let shelf_description = self
+                .shelves
+                .get(entry.path.shelf_name())
+                .map(|shelf| shelf.description.clone())
+                .unwrap_or_default();
+            let book_description = self
+                .books
+                .get(&(entry.path.shelf_name.clone(), entry.path.book_name.clone()))
+                .map(|book| book.description.clone())
+                .unwrap_or_default();
+            if entry.summary.shelf_description != shelf_description
+                || entry.summary.book_description != book_description
+            {
+                entry.summary.shelf_description = shelf_description;
+                entry.summary.book_description = book_description;
+                entry.entry_search = build_entry_search_cache(&entry.summary);
+            }
+        }
         self.rebuild_list_entries_cache();
         self.invalidate_entry_search_results();
         self.invalidate_context_search_results();
-        previous
     }
 
     fn remove_entry(&mut self, key: &str) -> Option<CachedMessagePack> {
@@ -582,6 +621,7 @@ pub struct ServerState {
     cert_grants: RwLock<HashMap<String, CertGrant>>,
     revoked_cert_common_names: RwLock<HashSet<String>>,
     append_locks: AppendLocks,
+    native_checkpoint: RwLock<()>,
     journal: Arc<JournalHandle>,
 }
 
@@ -604,6 +644,7 @@ impl ServerState {
     }
 
     pub async fn note_auth_token_used(&self, token: &str) -> anyhow::Result<()> {
+        let _mutation = self.native_checkpoint.read().await;
         let timestamp = current_timestamp_string()?;
         let token_hash = hash_token(token);
 
@@ -635,6 +676,7 @@ impl ServerState {
         cert_pem: &str,
         expires_at: &str,
     ) -> anyhow::Result<()> {
+        let _mutation = self.native_checkpoint.read().await;
         let created_at = current_timestamp_string()?;
         self.journal.append(JournalEntry::IssuedCert {
             session_id,
@@ -659,6 +701,11 @@ impl ServerState {
     }
 
     pub async fn mark_sessions_stopped(&self) -> anyhow::Result<()> {
+        let _mutation = self.native_checkpoint.read().await;
+        self.mark_sessions_stopped_inner().await
+    }
+
+    async fn mark_sessions_stopped_inner(&self) -> anyhow::Result<()> {
         let timestamp = current_timestamp_string()?;
         let mut sessions = self.sessions.write().await;
         for session in sessions.values_mut() {
@@ -818,10 +865,5 @@ fn extend_context_search_cache(cache: &mut ContextSearchCache, appended_content:
         .extend(tokenize_search_text(appended_content));
 }
 
-fn checkpoint_journal(journal: &JournalHandle) {
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "pre-existing behaviour: a failed checkpoint leaves the journal intact for replay"
-    )]
-    let _ = journal.truncate_blocking();
-}
+#[path = "native_checkpoint.rs"]
+mod native_checkpoint;

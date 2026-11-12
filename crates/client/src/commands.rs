@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use protocol::{AppendMetadata, ConflictPolicy, TransferScope, TransferSelector};
 
 use crate::enrollment::enroll;
@@ -22,6 +22,7 @@ use crate::transport::{
 };
 
 const CLIENT_INPUT_FORMATS: &str = r#"Input formats:
+  client workspace --help
   client enroll --redeem-url <url> --token <token>
   client sessions
   client delete-session <session>
@@ -57,6 +58,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    Workspace(crate::workspace::cli::WorkspaceArgs),
+    #[command(flatten)]
+    Native(NativeCommand),
+}
+
+#[derive(Subcommand)]
+enum NativeCommand {
     Enroll(EnrollArgs),
     Sessions,
     DeleteSession(SessionSelectorArgs),
@@ -84,10 +92,15 @@ enum Command {
 
 #[derive(Args)]
 struct EnrollArgs {
-    #[arg(long, value_name = "url")]
-    redeem_url: String,
-    #[arg(long, value_name = "token")]
-    token: String,
+    /// Enrollment link, '-' for stdin, or omit for a hidden paste prompt.
+    #[arg(value_name="LINK",conflicts_with_all=["redeem_url","token"])]
+    link: Option<String>,
+    #[arg(long,conflicts_with_all=["redeem_url","token"])]
+    profile: Option<PathBuf>,
+    #[arg(long, value_name = "url", requires = "token")]
+    redeem_url: Option<String>,
+    #[arg(long, value_name = "token", requires = "redeem_url")]
+    token: Option<String>,
 }
 
 #[derive(Args)]
@@ -250,26 +263,36 @@ struct GetEntryAtArgs {
     book: Option<String>,
 }
 
+pub(crate) async fn run() -> anyhow::Result<()> {
+    match parse_cli().command {
+        Command::Workspace(args) => crate::workspace::cli::run(args).await,
+        Command::Native(command) => run_native(command).await,
+    }
+}
+
 #[expect(
     clippy::cognitive_complexity,
     clippy::too_many_lines,
     reason = "legacy function predating the size and complexity limits; split it before extending"
 )]
-pub(crate) async fn run() -> anyhow::Result<()> {
-    let cli = parse_cli();
-
-    match cli.command {
+async fn run_native(command: NativeCommand) -> anyhow::Result<()> {
+    match command {
         // authentication command, send redeem url and token to the server
         // save the enrollment to the filesystem (~/.ccp/enrollments/<session-name>/<session-id>/enrollment.json)
-        Command::Enroll(args) => {
-            enroll(&args.redeem_url, &args.token).await?;
-        }
+        NativeCommand::Enroll(args) => match (args.redeem_url, args.token) {
+            (Some(url), Some(token)) => enroll(&url, &token).await?,
+            (None, None) => {
+                crate::workspace::links::cli::run(args.link.as_deref(), args.profile.as_deref())
+                    .await?
+            }
+            _ => bail!("native enrollment requires both --redeem-url and --token"),
+        },
 
         // list all sessions and their details
-        Command::Sessions => list_sessions()?,
+        NativeCommand::Sessions => list_sessions()?,
 
         // delete a session and all its enrollments
-        Command::DeleteSession(args) => {
+        NativeCommand::DeleteSession(args) => {
             let removed = delete_session_enrollments(&args.session)?;
             println!(
                 "Removed {removed} saved enrollment(s) for session '{}'.",
@@ -278,14 +301,14 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         // list all entries in a session
-        Command::List(args) => {
+        NativeCommand::List(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_get(&enrollment, "list", None, None, None).await?)?;
         }
 
         // get a specific entry in a session
-        Command::Get(args) => {
+        NativeCommand::Get(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(
@@ -303,7 +326,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         // shelves -> books -> entries
 
         // search for entries in a session
-        Command::SearchEntries(args) => {
+        NativeCommand::SearchEntries(args) => {
             let query = args.query.join(" ");
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
@@ -311,35 +334,35 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         // search for shelves in a session
-        Command::SearchShelves(args) => {
+        NativeCommand::SearchShelves(args) => {
             let query = args.query.join(" ");
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_search(&enrollment, "search_shelves", &query).await?)?;
         }
         // search for books in a session
-        Command::SearchBooks(args) => {
+        NativeCommand::SearchBooks(args) => {
             let query = args.query.join(" ");
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_search(&enrollment, "search_books", &query).await?)?;
         }
         // search for context in a session
-        Command::SearchContext(args) => {
+        NativeCommand::SearchContext(args) => {
             let query = args.query.join(" ");
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_search(&enrollment, "search_context", &query).await?)?;
         }
         // search for deleted entries in a session
-        Command::SearchDeleted(args) => {
+        NativeCommand::SearchDeleted(args) => {
             let query = args.query.join(" ");
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_search(&enrollment, "search_deleted", &query).await?)?;
         }
 
-        Command::AddShelf(args) => {
+        NativeCommand::AddShelf(args) => {
             let shelf_description = args.shelf_description.join(" ");
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
@@ -348,7 +371,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             )?;
         }
 
-        Command::AddBook(args) => {
+        NativeCommand::AddBook(args) => {
             let book_description = args.book_description.join(" ");
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
@@ -358,7 +381,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             )?;
         }
 
-        Command::AddEntry(args) => {
+        NativeCommand::AddEntry(args) => {
             let entry_data = args.entry_data.join(" ");
             let labels = args.labels.as_deref().map(parse_labels).unwrap_or_default();
             let enrollment = select_enrollment(&args.session, true)?;
@@ -378,7 +401,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         // append content to an entry
-        Command::Append(args) => {
+        NativeCommand::Append(args) => {
             let content = args.content.join(" ");
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
@@ -396,8 +419,8 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             )?;
         }
 
-        // soft delete — entry is archived, not destroyed
-        Command::Delete(args) => {
+        // Archive the entry without destroying it.
+        NativeCommand::Delete(args) => {
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
             print_json(
@@ -411,20 +434,20 @@ pub(crate) async fn run() -> anyhow::Result<()> {
             )?;
         }
 
-        Command::DeleteShelf(args) => {
+        NativeCommand::DeleteShelf(args) => {
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_delete_shelf(&enrollment, &args.shelf_name).await?)?;
         }
 
-        Command::Restore(args) => {
+        NativeCommand::Restore(args) => {
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_restore(&enrollment, &args.entry_key).await?)?;
         }
 
         // get the history of an entry
-        Command::History(args) => {
+        NativeCommand::History(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(
@@ -440,7 +463,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         // export a session to a bundle
-        Command::Export(args) => {
+        NativeCommand::Export(args) => {
             if args.book.is_some() && args.shelf.is_none() {
                 bail!("--book requires --shelf");
             }
@@ -487,7 +510,7 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         // import a droplet into a session
-        Command::Import(args) => {
+        NativeCommand::Import(args) => {
             let ext = args
                 .bundle_path
                 .extension()
@@ -515,19 +538,19 @@ pub(crate) async fn run() -> anyhow::Result<()> {
         }
 
         // revoke a client certificate
-        Command::RevokeCert(args) => {
+        NativeCommand::RevokeCert(args) => {
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_revoke_cert(&enrollment, &args.client_common_name).await?)?;
         }
 
-        Command::BriefMe(args) => {
+        NativeCommand::BriefMe(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(&perform_brief_me(&enrollment).await?)?;
         }
 
-        Command::GetEntryAt(args) => {
+        NativeCommand::GetEntryAt(args) => {
             let enrollment = select_enrollment(&args.session, false)?;
             check_cert_timeout(&enrollment);
             print_json(
@@ -653,9 +676,33 @@ fn print_json(body: &str) -> anyhow::Result<()> {
 }
 
 fn parse_cli() -> Cli {
-    match Cli::try_parse() {
+    let args: Vec<_> = std::env::args_os().collect();
+    let workspace = args.get(1).is_some_and(|arg| arg == "workspace");
+    let input_formats = if workspace { "" } else { CLIENT_INPUT_FORMATS };
+    let native = args.get(1).is_some_and(|arg| arg == "enroll")
+        && args.iter().skip(2).any(|arg| {
+            let arg = arg.to_string_lossy();
+            arg == "--redeem-url"
+                || arg == "--token"
+                || arg.starts_with("--redeem-url=")
+                || arg.starts_with("--token=")
+        });
+    let mut command = Cli::command();
+    // Preserve legacy native error/usage output while keeping one parser and
+    // implementation. Link-mode options remain documented on enroll --help.
+    if native && let Some(enroll) = command.find_subcommand_mut("enroll") {
+        *enroll = enroll
+            .clone()
+            .mut_arg("link", |arg| arg.hide(true))
+            .mut_arg("profile", |arg| arg.hide(true));
+    }
+    let matches = match command.try_get_matches_from(args) {
+        Ok(matches) => matches,
+        Err(error) => print_error(error, input_formats),
+    };
+    match Cli::from_arg_matches(&matches) {
         Ok(cli) => cli,
-        Err(error) => print_error(error, CLIENT_INPUT_FORMATS),
+        Err(error) => print_error(error, input_formats),
     }
 }
 
@@ -666,7 +713,21 @@ fn print_error(error: clap::Error, input_formats: &str) -> ! {
         clippy::let_underscore_must_use,
         reason = "printing help is best effort when the terminal has closed"
     )]
-    let _ = error.print();
+    let _ = if use_stderr
+        && std::env::args_os().skip(1).any(|arg| {
+            let value = arg.to_string_lossy();
+            value.contains("ccp_join_") || value.contains("://") && value.contains('#')
+        }) {
+        writeln!(
+            io::stderr(),
+            "Invalid enrollment command arguments. Use ccp-client enroll --help; secret links are not echoed."
+        )
+    } else {
+        error.print()
+    };
+    if input_formats.is_empty() {
+        std::process::exit(exit_code);
+    }
     if use_stderr {
         let mut stderr = io::stderr();
         #[expect(

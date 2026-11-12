@@ -11,7 +11,10 @@ venv/
 
 # IDE
 .vscode/
-.claude/
+# Keep local Claude Code state out of Git; the shared settings file disables
+# AI attribution for everyone.
+.claude/*
+!.claude/settings.json
 
 # Generated at runtime
 mcp-server-config.json
@@ -48,3 +51,6 @@ runtime-journal.jsonl
 # Untracked local agent notes
 /AGENTS.local.md
 /CLAUDE.local.md
+
+# Frontend output is built from source and embedded at compile time.
+/crates/server/web/dist/

@@ -23,3 +23,6 @@ mcp/build
 
 .lint-tools
 .ruff_cache
+**/node_modules
+
+/crates/server/web/dist

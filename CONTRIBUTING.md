@@ -8,7 +8,7 @@ features before implementing them.
 
 ## Setup
 
-Install Rust through rustup, Python 3.13, Git, and Make. The MCP package also
+Install Rust through rustup, Node.js 24, Python 3.13, Git, and Make. The MCP package also
 supports Python 3.10+; CI tests both the minimum and current supported environments.
 
 ```bash
@@ -18,6 +18,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ./mcp
 make tools
+npm ci --prefix crates/server/web --ignore-scripts
 ```
 
 `make tools` installs exact Python tool versions from `requirements-lint.txt` and
@@ -25,7 +26,7 @@ native binaries from `tools/lint-tools.json`. Native downloads are SHA-256 check
 before installation in `.lint-tools/bin`; Linux and macOS support x86_64 and
 ARM64. These tools support development checks.
 
-Rustup selects the compiler in `rust-toolchain.toml`. Rust 1.88 is the supported
+Rustup selects the compiler in `rust-toolchain.toml`. Rust 1.89 is the supported
 minimum. Builds and tests use `Cargo.lock` with `--locked`.
 
 ## Build from a checkout
@@ -37,6 +38,13 @@ make build         # optimized server/client in target/release/
 cargo check --workspace --locked
 make help          # available build, test, and quality commands
 ```
+
+The server build checks frontend dependencies and compiles the locked Svelte
+sources into Cargo's output directory. Install its Node dependencies once before
+Rust server/workspace builds. Docker and CI prebuild the same assets in a Node
+stage and pass `CCP_PANEL_DIST`; that path is a build-time input, not a runtime
+setting. Generated `web/dist` is not committed. Installed server binaries embed
+the panel and do not need Node.js.
 
 Cargo-built binaries are named `server` and `client`; the installer names them
 `ccp-server` and `ccp-client`. See the [test guide](tests/README.md) to select suites.
@@ -50,6 +58,7 @@ make nightly-tests
 make mcp-smoke
 make compat
 make security         # needs network
+npm --prefix crates/server/web audit  # includes the build dependency graph
 ```
 
 Run `make hooks` once to check formatting, Python, and secrets before each commit.
@@ -84,7 +93,9 @@ producing release artifacts.
 | Shell | ShellCheck for Git-visible Bash and POSIX scripts, including extensionless scripts |
 | Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
 | Secrets | Gitleaks CLI on working source and Git history, with redacted output |
-| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit |
+| Tracked text | No em dashes or trailing whitespace; final LF and LF-only endings; explained Svelte suppressions; frozen published 0.1.1 changelog |
+| Attribution | Commit trailers, author/committer identities, and PR titles/bodies; checked again on main after squash merges |
+| Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit; npm audit |
 
 The Rust policy lives in the workspace manifest and `clippy.toml`, and every
 crate inherits it. Tests may unwrap, expect, panic, and index. Python targets
@@ -116,6 +127,24 @@ A change is ready for review when:
 Every pull request needs approval from the code owner in `.github/CODEOWNERS`
 and passing required checks before it merges into `main`.
 
+`make lint-text` checks tracked working files, including staged additions. It
+preserves intentional Unicode fixtures; it does not ban emoji, en dashes or
+curly quotes. Generated panel output, lockfiles and the two upstream font
+licences have narrow, documented exclusions in `scripts/check-repo-hygiene.py`.
+The published 0.1.1 changelog section is matched against its exact original bytes.
+
+The frontend pins `@oss-cve-patches/deepmerge@4.3.2` for the Svelte Vite plugin's
+`deepmerge` dependency until an official fixed dependency is available. This is
+a temporary npm override, locked by tarball integrity, for
+[GHSA-gcqx-w48m-w2h4](https://github.com/advisories/GHSA-gcqx-w48m-w2h4).
+The [fork's targeted fix](https://github.com/oss-cve-patches/deepmerge/pull/1)
+rejects `__proto__` in both merge loops. Its MIT license is unchanged and it adds
+no runtime dependencies or install hooks. Review future publisher/version changes
+rather than widening this override. Remove it after validating an official
+Svelte plugin/dependency release. `tests/frontend_dependency.mjs` resolves the
+actual package from the consuming plugin and tests its CJS and UMD artifacts;
+the complete dependency audit remains enforced.
+
 Dependency vulnerabilities fail the audit. Existing maintenance notices and
 duplicate versions receive separate dependency review. The license allowlist records
 accepted dependencies; new licenses or sources need explicit review. Bincode 1.3 is retained for wire-format
@@ -142,6 +171,15 @@ docs/             architecture and format contracts
 - Preserve public CLI, response, wire, and persisted-data contracts in maintenance changes.
 - Keep generated credentials, databases, local environments, and build outputs out of Git.
 - Keep PRs as drafts while required checks or design decisions are outstanding.
+- Never add AI, agent or tool attribution to commits, PRs, comments, release notes, code or docs. That includes `Co-Authored-By` trailers, "Generated with ..." lines and commits under a tool identity. When squash-merging, delete the `Co-authored-by` lines GitHub pre-fills. See [AGENTS.md](AGENTS.md#no-ai-attribution).
+
+Run `make lint-attribution RANGE=origin/main..HEAD` to check commit metadata.
+Human co-authors are allowed. Only the exact Dependabot identity and GitHub's
+web-flow committer are automation exceptions. PR gates check the title and body
+from the event JSON, including edits. For a stacked PR targeting another branch,
+dispatch the PR gates workflow with its PR number; it reads that PR's actual
+base and head. Push CI checks `before..after` on main, including squash messages.
+Missing or shallow history fails the check; fetch full history before retrying.
 
 ## Dependencies and versions
 
@@ -159,6 +197,14 @@ or incompatible pre-1.0 changes require an appropriate minor version. Track wire
 compatibility with `PROTOCOL_VERSION` in `crates/protocol/src/lib.rs`, and database
 compatibility with `SCHEMA_VERSION` in `crates/server/src/init.rs`. Change those
 when the corresponding contract changes, and document migration requirements.
+
+### Release bootstrap checklist
+
+When bumping the shared workspace and MCP version for a release, update the
+Windows bootstrap URLs in `README.md` and `docs/client.md` to the matching
+`vX.Y.Z` release tag in the same change. Release tags are signed and immutable
+by project policy. Keep the documented tag aligned with the source version;
+the installer fixture checks this relationship and rejects moving `main` URLs.
 
 ## Documentation changes
 

@@ -32,6 +32,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -44,6 +54,8 @@ jobs:
         run: make installer-tests
       - name: Nightly packaging and publication regressions
         run: make nightly-tests
+      - name: Hidden enrollment paste on a real isolated terminal
+        run: python3 tests/client_link_prompt.py --client target/release/client
       - name: CLI integration
         run: bash tests/run.sh --skip-build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -54,12 +66,117 @@ jobs:
             target/release/server
             target/release/client
 
+  macos-client:
+    needs: [test]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Build reviewed dependencies
+        run: cargo build --release --workspace --locked
+      - name: Client tests
+        run: cargo test --package client --locked -- --test-threads=1
+      - name: CLI integration
+        run: bash tests/run.sh --skip-build
+      - run: python -m pip install ./mcp
+      - name: Real MCP to CLI to TLS server
+        env:
+          CCP_SERVER_BIN: ${{ github.workspace }}/target/release/server
+          CCP_CLIENT_BIN: ${{ github.workspace }}/target/release/client
+        run: |
+          python tests/mcp_smoke.py
+          python tests/workspace_mcp_smoke.py
+
+  windows-client:
+    needs: [test]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      # The client's server dev-dependency embeds the panel during tests.
+      - name: Build embedded panel from locked source
+        shell: pwsh
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix crates/server/web run build
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CCP_PANEL_DIST=$env:GITHUB_WORKSPACE/crates/server/web/dist" >> $env:GITHUB_ENV
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          target: x86_64-pc-windows-msvc
+          build-warnings: ""
+          cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
+      - name: Client tests
+        run: cargo test --package client --locked -- --test-threads=1
+      - name: Build Windows client only
+        run: cargo build --release --locked -p client --target x86_64-pc-windows-msvc
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Lint PowerShell installer and regressions
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.24.0 -Scope CurrentUser -Force
+          $issues = @(Invoke-ScriptAnalyzer -Path install.ps1 -Severity Warning,Error)
+          $issues += @(Invoke-ScriptAnalyzer -Path tests/windows_install.ps1 -Severity Warning,Error)
+          if ($issues.Count) { $issues | Format-Table; throw 'PowerShell lint failed' }
+      - name: Isolated installer regressions on PowerShell 7
+        shell: pwsh
+        run: ./tests/windows_install.ps1
+      - name: Isolated installer regressions on Windows PowerShell 5.1
+        shell: powershell
+        run: ./tests/windows_install.ps1
+      - name: Package Windows client
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/client.exe dist/ccp-client-windows-x86_64.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: binaries-windows-x86_64
+          retention-days: 1
+          path: dist/ccp-client-windows-x86_64.exe
+          if-no-files-found: error
+
   clippy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -85,12 +202,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.89.0"
           build-warnings: ""
           cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      - run: cargo +1.88.0 check --workspace --locked
+      - run: cargo +1.89.0 check --workspace --locked
 
   source-lint:
     runs-on: ubuntu-latest
@@ -102,9 +229,18 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Install locked frontend test dependencies
+        run: npm ci --prefix crates/server/web --ignore-scripts
       - run: make tools
       - run: python -m pip install -e ./mcp
-      - run: make lint-python lint-types lint-deadcode lint-deps lint-shell lint-workflows lint-secrets
+      - run: make lint-python lint-types lint-deadcode lint-deps lint-shell lint-workflows lint-secrets lint-text
+      - name: Check final main commit attribution
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: python scripts/check-attribution.py --event "$GITHUB_EVENT_PATH"
       - name: Quality gate regressions
         run: make quality-tests
       - name: Secret history
@@ -116,6 +252,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -144,6 +290,22 @@ jobs:
       - run: python -m pip install -e ./mcp
       - run: make security
 
+  frontend-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Audit the complete locked frontend build dependency graph
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          node --test tests/frontend_dependency.mjs
+          npm --prefix crates/server/web audit
+
   compat:
     needs: [test]
     runs-on: ubuntu-latest
@@ -152,6 +314,16 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           build-warnings: ""
@@ -186,7 +358,11 @@ jobs:
           PY
       - name: Build previous dependency set
         if: steps.versions.outputs.same_api == 'true'
-        run: cargo build --release --locked --manifest-path "$RUNNER_TEMP/ccp-baseline/Cargo.toml" --target-dir "$RUNNER_TEMP/ccp-baseline-target" -p server -p client
+        run: |
+          if [ -f "$RUNNER_TEMP/ccp-baseline/crates/server/build.rs" ] && [ -f "$RUNNER_TEMP/ccp-baseline/crates/server/web/package.json" ]; then
+            npm ci --prefix "$RUNNER_TEMP/ccp-baseline/crates/server/web" --ignore-scripts
+          fi
+          env -u CCP_PANEL_DIST cargo build --release --locked --manifest-path "$RUNNER_TEMP/ccp-baseline/Cargo.toml" --target-dir "$RUNNER_TEMP/ccp-baseline-target" -p server -p client
       - name: Old/new clients and upgrade/downgrade persistence
         if: steps.versions.outputs.same_api == 'true'
         run: python3 tests/dependency_compat.py --server "$RUNNER_TEMP/ccp-current/server" --client "$RUNNER_TEMP/ccp-current/client" --old-server "$RUNNER_TEMP/ccp-baseline-target/release/server" --old-client "$RUNNER_TEMP/ccp-baseline-target/release/client"
@@ -223,10 +399,12 @@ jobs:
         env:
           CCP_SERVER_BIN: ${{ runner.temp }}/ccp-current/server
           CCP_CLIENT_BIN: ${{ runner.temp }}/ccp-current/client
-        run: python tests/mcp_smoke.py
+        run: |
+          python tests/mcp_smoke.py
+          python tests/workspace_mcp_smoke.py
 
   build:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client, windows-client]
     strategy:
       matrix:
         include:
@@ -247,6 +425,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - name: Build embedded panel from locked source
+        run: |
+          npm ci --prefix crates/server/web --ignore-scripts
+          npm --prefix crates/server/web run check
+          npm --prefix crates/server/web run build
+          printf 'CCP_PANEL_DIST=%s\n' "$GITHUB_WORKSPACE/crates/server/web/dist" >> "$GITHUB_ENV"
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           target: ${{ matrix.target }}
@@ -296,8 +484,83 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  release:
+  release-identity:
     needs: [package]
+    if: >-
+      github.repository == 'Squid-Proxy-Lovers/ccp' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+       (github.ref == 'refs/heads/main' && (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.nightly))))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      channel: ${{ steps.identity.outputs.channel }}
+      tag: ${{ steps.identity.outputs.tag }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      make_latest: ${{ steps.identity.outputs.make_latest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Validate release identity before attestation or publishing
+        id: identity
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            python scripts/release_tag.py --tag "${GITHUB_REF#refs/tags/}" --output "$GITHUB_OUTPUT"
+          else
+            printf 'channel=nightly\ntag=nightly-%s-%s\n' "$(date -u +%Y-%m-%d)" "${GITHUB_SHA:0:12}" >> "$GITHUB_OUTPUT"
+          fi
+
+  provenance:
+    needs: [package, release-identity]
+    if: >-
+      github.repository == 'Squid-Proxy-Lovers/ccp' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
+       (github.ref == 'refs/heads/main' && (github.event_name == 'schedule' ||
+        (github.event_name == 'workflow_dispatch' && inputs.nightly))))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: dist
+      - name: Attest the matching release contract
+        id: provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/ccp-release.json
+      - name: Verify publisher policy before making the bundle available
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.release-identity.outputs.channel }}
+          RELEASE_TAG: ${{ needs.release-identity.outputs.tag }}
+        run: |
+          cp "$ATTESTATION_BUNDLE" dist/ccp-provenance.json
+          python scripts/release_contract.py --directory dist --channel "$CHANNEL" --tag "$RELEASE_TAG" --platform linux-x86_64 > /dev/null
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-provenance
+          path: dist/ccp-provenance.json
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    needs: [package, release-identity, provenance]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -307,14 +570,20 @@ jobs:
         with:
           name: release-assets
           path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-provenance
+          path: dist
       # v3.0.3; retain the existing asset-update behavior on tag reruns.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # zizmor: ignore[superfluous-actions]
         with:
           files: dist/*
           generate_release_notes: true
+          prerelease: ${{ needs.release-identity.outputs.prerelease == 'true' }}
+          make_latest: ${{ needs.release-identity.outputs.make_latest }}
 
   docker:
-    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, compat, mcp]
+    needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client, windows-client]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -339,6 +608,8 @@ jobs:
             sleep 0.25
           done
           exit 1
+      - name: Default first-boot setup and persistent restart
+        run: python3 tests/docker_first_boot.py --image "ccp-ci:$GITHUB_SHA"
       - name: Save tested image for publication
         run: docker save "ccp-ci:$GITHUB_SHA" | gzip > "$RUNNER_TEMP/ccp-image.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -350,8 +621,8 @@ jobs:
           if-no-files-found: error
 
   docker-publish:
-    needs: [docker, package]
-    if: github.event_name == 'push'
+    needs: [docker, package, release-identity, provenance]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -366,16 +637,24 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Publish tested image to existing tags
+      - name: Publish tested image to validated tags
+        env:
+          CHANNEL: ${{ needs.release-identity.outputs.channel }}
+          RELEASE_TAG: ${{ needs.release-identity.outputs.tag }}
         run: |
+          case "$CHANNEL" in
+            stable) alias=latest ;;
+            rc) alias="$RELEASE_TAG" ;;
+            *) exit 1 ;;
+          esac
           docker load --input image/ccp-image.tar.gz
           docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
           docker push "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
-          docker tag "ccp-ci:$GITHUB_SHA" ghcr.io/squid-proxy-lovers/ccp:latest
-          docker push ghcr.io/squid-proxy-lovers/ccp:latest
+          docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$alias"
+          docker push "ghcr.io/squid-proxy-lovers/ccp:$alias"
 
   nightly:
-    needs: [package, docker]
+    needs: [package, docker, provenance]
     if: github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.nightly))
     runs-on: ubuntu-latest
     permissions:
@@ -392,6 +671,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-provenance
           path: dist
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
