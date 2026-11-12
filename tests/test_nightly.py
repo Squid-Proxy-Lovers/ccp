@@ -1493,6 +1493,27 @@ elif name == 'cat':
         mcp_cmd.write_text("stub")
         mcp_cmd.chmod(0o755)
 
+    def test_codex_workspace_entry_does_not_block_native_entry(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = '[mcp_servers.ccp-workspace]\ncommand = "workspace"\n'
+        config.write_text(original)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(config.read_text().startswith(original))
+        self.assertIn("[mcp_servers.ccp]\n", config.read_text())
+
+    def test_existing_native_codex_entry_is_retained(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = '  [mcp_servers.ccp] # existing\ncommand = "custom"\n'
+        config.write_text(original)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_text(), original)
+
     def test_codex_config_write_failure_is_reported_honestly(self):
         # A chmod-based permission denial is silently bypassed when the test
         # runs as root, so this fails the "cat" that appends to the config

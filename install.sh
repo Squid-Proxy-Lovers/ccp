@@ -487,7 +487,7 @@ MCPEOF
     # Codex: ~/.codex/config.toml
     local codex_config="$HOME/.codex/config.toml"
     if [ -f "$codex_config" ]; then
-        if ! grep -q "mcp_servers.ccp" "$codex_config" 2>/dev/null; then
+        if ! grep -Eq '^[[:space:]]*\[mcp_servers\.ccp\][[:space:]]*(#.*)?$' "$codex_config" 2>/dev/null; then
             local codex_env="CCP_CLIENT_BIN = \"$client_bin\""
             if [ -f "$INSTALL_DIR/ccp-server" ]; then
                 codex_env="$codex_env
