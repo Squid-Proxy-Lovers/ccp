@@ -70,17 +70,31 @@ The directory is added to the user PATH. Open a new terminal
 after installation; re-run the same installer command to update. Close running
 CCP processes before updating if Windows reports a file in use.
 
-The matching MCP bridge installs into `%USERPROFILE%\.ccp-mcp\venv`, using
-`Scripts\python.exe`. The installer adds CCP to existing Claude and Codex user
-configurations and to detected Cursor configurations. Codex configuration requires
-`codex mcp add` on PATH. Existing CCP host entries are retained with a reminder to
-check their paths. Missing hosts, configuration failures, and retained entries are
-reported honestly; restart configured MCP hosts to load the tools. Unrelated JSON
-host settings are preserved. Before modifying an existing JSON or Codex config,
-the installer saves a timestamped `.backup.*` copy beside it. Codex edits use a
-staged `CODEX_HOME` and publish the result atomically; a failed edit retains the
-original config. A bridge installation failure can leave the already
-verified client installed; re-running retries bridge setup.
+Each upgrade builds a fresh MCP venv under `%USERPROFILE%\.ccp-mcp\generations`,
+using `Scripts\python.exe`. It validates the package version, import and console
+entry point before replacing any installed commands. The generation also retains
+its verified matching client. Generation paths stay fixed because venv launchers
+contain absolute interpreter paths. Previous generations and the legacy
+`%USERPROFILE%\.ccp-mcp\venv` are retained, so existing processes keep their files.
+Close CCP processes before upgrading and restart MCP hosts afterward.
+
+The installer adds CCP to detected Claude, Codex and Cursor configurations, and
+refreshes entries it previously configured to use the new matched generation.
+Customized entries are retained with a reminder to check their paths. Missing
+hosts are reported. Codex configuration requires `codex mcp add` and
+`codex mcp get --json` on PATH. Unrelated JSON settings remain intact. Before
+modifying an existing JSON or Codex config, the installer saves a timestamped
+`.backup.*` copy beside it. Codex edits use a private staged `CODEX_HOME`.
+
+An ownership record, `.ccp-install.json`, beside the binaries tracks the installer's
+alias and active MCP generation. The installer stages both executables and keeps a private upgrade
+journal (`.ccp-upgrade.json`) with their previous bytes and the host configurations. A failed upgrade
+restores the previous pair and configurations; a failed candidate build never
+changes them. If an open process prevents rollback, close it and re-run the same
+installer: journal recovery runs before another upgrade. Keep recovery files
+until that run succeeds. An unrelated `ccp.exe` is never adopted just because
+its name matches. Successful upgrades retain the previous venvs; remove an unused
+old generation only after its hosts have stopped and you no longer need it.
 
 Client state defaults to `%USERPROFILE%\.ccp-client` when `HOME` is absent. `HOME`
 retains precedence when set, and `CCP_CLIENT_HOME` overrides both. Keep credentials

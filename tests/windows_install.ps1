@@ -20,6 +20,10 @@ function Test-CcpNativeExit {
     $PSNativeCommandUseErrorActionPreference = $NativeErrorPreference
     Invoke-CcpNative $Engine @('-NoProfile', '-NonInteractive', '-Command', "[Console]::Error.WriteLine('fixture stderr'); exit 0")
     if ($LASTEXITCODE -ne 0) { throw 'Successful native command returned a failure exit code.' }
+    $encoding = [Console]::OutputEncoding.CodePage
+    $captured = Invoke-CcpNative $Engine @('-NoProfile', '-NonInteractive', '-Command', "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(`$false); [Console]::WriteLine([char]0x00e9)") -Capture
+    if ($LASTEXITCODE -ne 0 -or $captured -ne [string][char]0x00e9) { throw 'Native UTF-8 output was not captured correctly.' }
+    if ([Console]::OutputEncoding.CodePage -ne $encoding) { throw 'Native capture changed caller output encoding.' }
     $nativeFailed = $false
     try { Invoke-CcpNative $Engine @('-NoProfile', '-NonInteractive', '-Command', 'exit 5') }
     catch {
@@ -39,18 +43,23 @@ function Test-CcpNativeExit {
     if (-not $missingFailed) { throw 'Missing native verifier was accepted.' }
 }
 $nativeRunner = ${function:Invoke-CcpNative}
+$script:CcpUpgrade = $null
 $systemPython = Resolve-CcpApplication 'python'
 $engine = (Get-Process -Id $PID).Path
 foreach ($nativeErrorPreference in @($false, $true)) { Test-CcpNativeExit $engine $nativeErrorPreference }
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
 $CcpClientAsset = 'ccp-client-windows-x86_64.exe'
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "ccp-installer-test-$([Guid]::NewGuid().ToString('N'))"
-$profileDirectory = Join-Path $testRoot 'profile with spaces'
+$profileDirectory = Join-Path $testRoot ('profile with spaces ' + [char]0x00e9)
 $InstallDir = Join-Path $profileDirectory 'bin'
 $script:NativeCalls = [Collections.Generic.List[object]]::new()
 $script:RejectAttestation = $false
 $script:RejectCodex = $false
 $script:RejectPythonVersion = $false
+$script:BuildFailure = ''
+$script:BuildFailureReached = $false
+$script:CodexFailureReached = $false
+$script:BridgeBytes = 'fixture'
 $script:DownloadUrls = [Collections.Generic.List[string]]::new()
 $savedEnvironment = @{}
 foreach ($name in @('OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'Path')) {
@@ -119,22 +128,183 @@ function Confirm-TestFailure {
     try { & $Action } catch { $failed = $true }
     Confirm-TestCondition $failed $Message
 }
+function Get-TestUpgradeSnapshot {
+    param([string]$BinDirectory)
+    $files = @{}
+    $targets = Get-CcpUpgradeTarget $BinDirectory
+    foreach ($key in $targets.Keys) { $files[$key] = Get-CcpFileDigest $targets[$key] }
+    $state = Get-CcpInstallState $BinDirectory
+    $venv = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $state.mcp_command))
+    $tree = @{}
+    foreach ($file in Get-ChildItem -LiteralPath $venv -File -Recurse -Force) {
+        $tree[$file.FullName] = Get-CcpFileDigest $file.FullName
+    }
+    $parent = Join-Path $env:USERPROFILE '.ccp-mcp/generations'
+    return @{
+        files = $files; command = $state.mcp_command; bridge = (Get-CcpFileDigest $state.mcp_command); tree = $tree
+        generations = @(Get-ChildItem -LiteralPath $parent -Directory -Force).Count
+    }
+}
+function Confirm-TestUpgradeSnapshot {
+    param($Before, [string]$BinDirectory)
+    $after = Get-TestUpgradeSnapshot $BinDirectory
+    foreach ($key in $Before.files.Keys) {
+        Confirm-TestCondition ($after.files[$key] -eq $Before.files[$key]) "Failed upgrade changed previous $key bytes."
+    }
+    Confirm-TestCondition ($after.tree.Count -eq $Before.tree.Count) 'Failed upgrade changed the previous venv inventory.'
+    foreach ($file in $Before.tree.Keys) {
+        Confirm-TestCondition ($after.tree[$file] -eq $Before.tree[$file]) 'Failed upgrade changed previous venv bytes.'
+    }
+    Confirm-TestCondition ($after.command -eq $Before.command -and $after.bridge -eq $Before.bridge) 'Failed upgrade changed the active MCP bridge.'
+    Confirm-TestCondition ($after.generations -eq $Before.generations) 'Failed upgrade retained a candidate generation.'
+    Confirm-TestCondition (-not (Test-Path -LiteralPath (Join-Path $BinDirectory '.ccp-upgrade.json'))) 'Successful rollback retained its journal.'
+    Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $env:USERPROFILE '.ccp-mcp/venv/Scripts/ccp-mcp-server.exe') -Raw) -eq 'legacy bridge') 'Upgrade modified the legacy venv.'
+}
+function Set-TestReleaseClient {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Stage, $Manifest, [string]$ManifestPath, [string]$Body)
+    if (-not $PSCmdlet.ShouldProcess($Stage, 'Prepare fixture release bytes')) { return }
+    $source = Join-Path $Stage $CcpClientAsset
+    [IO.File]::WriteAllText($source, $Body)
+    $Manifest.artifacts[$CcpClientAsset] = @{size = (Get-Item $source).Length; sha256 = (Get-CcpFileHash -LiteralPath $source)}
+    $Manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $ManifestPath
+}
+function Get-CcpFileHash {
+    param([string]$LiteralPath)
+    return (Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+function Confirm-TestUpgradePair {
+    param([string]$Stage, [string]$BinDirectory, [string]$Bridge)
+    $hash = Get-CcpFileDigest (Join-Path $Stage $CcpClientAsset)
+    Confirm-TestCondition ((Get-CcpFileDigest (Join-Path $BinDirectory 'ccp-client.exe')) -eq $hash) 'Retry did not install the expected client.'
+    Confirm-TestCondition ((Get-CcpFileDigest (Join-Path $BinDirectory 'ccp.exe')) -eq $hash) 'Retry left the alias and client inconsistent.'
+    $state = Get-CcpInstallState $BinDirectory
+    Confirm-TestCondition ((Get-CcpFileDigest $state.mcp_client) -eq $hash) 'MCP did not retain its verified matching client.'
+    Confirm-TestCondition ($state.client_sha256 -eq $hash -and $state.alias_sha256 -eq $hash) 'Ownership hashes did not converge.'
+    Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $state.mcp_command -Raw) -eq $Bridge) 'Retry did not activate the matching MCP bridge.'
+    $claude = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $env:USERPROFILE '.claude.json') -Raw | ConvertFrom-Json
+    Confirm-TestCondition ($claude.mcpServers.ccp.env.CCP_CLIENT_BIN -eq $state.mcp_client) 'Owned host config did not pin the matching client.'
+    Confirm-TestCondition ($claude.mcpServers.ccp.command -eq $state.mcp_command) 'Owned host config did not switch to the matching bridge.'
+    Confirm-TestCondition ($claude.other -eq 'keep') 'Upgrade lost unrelated host configuration.'
+    $cursor = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $env:USERPROFILE '.cursor/mcp.json') -Raw | ConvertFrom-Json
+    Confirm-TestCondition ($cursor.mcpServers.ccp.command -eq $state.mcp_command) 'Owned Cursor config did not switch to the matching bridge.'
+    $codex = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $env:USERPROFILE '.codex/config.toml') -Raw
+    $command = [regex]::Match($codex, '(?m)^command = (".*")$').Groups[1].Value | ConvertFrom-Json
+    Confirm-TestCondition ($command -eq $state.mcp_command) 'Owned Codex config did not switch to the matching bridge.'
+    Confirm-TestCondition (-not (Test-Path -LiteralPath (Join-Path $BinDirectory '.ccp-upgrade.json'))) 'Retry did not finish recovery.'
+}
+function Test-CcpUpgradeRollback {
+    param([string]$Stage, [string]$BinDirectory, $Manifest, [string]$ManifestPath)
+    $targets = Get-CcpUpgradeTarget $BinDirectory
+    # Register a byte-identical verified alias even when the host already has ccp on PATH.
+    [IO.File]::Copy($targets.client, $targets.alias, $true)
+    $record = Get-CcpInstallState $BinDirectory
+    $record.alias_sha256 = Get-CcpFileDigest $targets.alias
+    [IO.File]::WriteAllText($targets.install, ($record | ConvertTo-Json))
+    $script:SavedUpgradePublisher = ${function:Publish-CcpFile}
+    $script:PublishFailureDestination = ''
+    $script:PublishFailureFired = $false
+    $script:BlockRestore = $false
+    $script:UpgradeClientPath = $targets.client
+    Set-Item Function:Publish-CcpFile {
+        param([string]$Source, [string]$Destination)
+        if ($script:BlockRestore -and $Destination -eq $script:UpgradeClientPath -and (Split-Path -Leaf $Source) -eq 'client') {
+            throw 'Fixture blocked rollback until retry.'
+        }
+        if ($Destination -eq $script:PublishFailureDestination -and -not $script:PublishFailureFired) {
+            $script:PublishFailureFired = $true
+            throw 'Fixture interrupted publication.'
+        }
+        & $script:SavedUpgradePublisher $Source $Destination
+    }
+    try {
+        $before = Get-TestUpgradeSnapshot $BinDirectory
+        Set-TestReleaseClient $Stage $Manifest $ManifestPath 'transactional client'
+        $script:BridgeBytes = 'transactional bridge'
+        $script:PublishFailureDestination = $targets.alias
+        Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Second executable publication did not fail.'
+        Confirm-TestCondition $script:PublishFailureFired 'Second executable failure injection was not reached.'
+        Confirm-TestUpgradeSnapshot $before $BinDirectory
+        $script:PublishFailureDestination = ''
+        Install-CcpWindows stable '' $BinDirectory
+        Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
+        Confirm-TestCondition ((Get-CcpFileDigest $before.command) -eq $before.bridge) 'Successful upgrade modified the previous venv.'
+        # The recorded alias is still ours if a prior attempt changed only the client.
+        [IO.File]::WriteAllText($targets.client, 'partial previous client')
+        Install-CcpWindows stable '' $BinDirectory
+        Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
+        $before = Get-TestUpgradeSnapshot $BinDirectory
+        Set-TestReleaseClient $Stage $Manifest $ManifestPath 'next transactional client'
+        $script:BridgeBytes = 'next transactional bridge'
+        foreach ($failure in @('venv', 'pip', 'import', 'entrypoint', 'client', 'alias', 'claude', 'codex', 'install')) {
+            $script:BuildFailure = if ($failure -in @('venv', 'pip', 'import', 'entrypoint')) { $failure } else { '' }
+            $script:RejectCodex = $failure -eq 'codex'
+            $script:PublishFailureDestination = if ($failure -in @('client', 'alias', 'claude', 'install')) { $targets[$failure] } else { '' }
+            $script:PublishFailureFired = $false
+            $script:BuildFailureReached = $false; $script:CodexFailureReached = $false
+            try {
+                Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } "Upgrade unexpectedly passed $failure failure."
+                if ($script:BuildFailure) { Confirm-TestCondition $script:BuildFailureReached "Build failure at $failure was not reached." }
+                if ($script:RejectCodex) { Confirm-TestCondition $script:CodexFailureReached 'Codex failure was not reached.' }
+                if ($script:PublishFailureDestination) { Confirm-TestCondition $script:PublishFailureFired "Publication failure at $failure was not reached." }
+                Confirm-TestUpgradeSnapshot $before $BinDirectory
+            } finally {
+                $script:BuildFailure = ''; $script:RejectCodex = $false; $script:PublishFailureDestination = ''
+            }
+        }
+        Install-CcpWindows stable '' $BinDirectory
+        Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
+        $before = Get-TestUpgradeSnapshot $BinDirectory
+        Set-TestReleaseClient $Stage $Manifest $ManifestPath 'recovered client'
+        $script:BridgeBytes = 'recovered bridge'
+        $script:PublishFailureDestination = $targets.alias; $script:PublishFailureFired = $false; $script:BlockRestore = $true
+        Confirm-TestFailure { Install-CcpWindows stable '' $BinDirectory } 'Blocked rollback did not fail closed.'
+        Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $BinDirectory '.ccp-upgrade.json')) 'Blocked rollback discarded recovery data.'
+        Confirm-TestCondition ((Get-CcpFileDigest $before.command) -eq $before.bridge) 'Blocked rollback changed the previous MCP bridge.'
+        $script:BlockRestore = $false; $script:PublishFailureDestination = ''
+        Install-CcpWindows stable '' $BinDirectory
+        Confirm-TestUpgradePair $Stage $BinDirectory $script:BridgeBytes
+        Confirm-TestCondition ((Get-TestUpgradeSnapshot $BinDirectory).generations -eq ($before.generations + 1)) 'Recovery did not remove the failed candidate.'
+    } finally {
+        $script:BlockRestore = $false; $script:PublishFailureDestination = ''; $script:BuildFailure = ''; $script:RejectCodex = $false
+        Set-Item Function:Publish-CcpFile $script:SavedUpgradePublisher
+    }
+}
 function Invoke-CcpNative {
-    param([string]$Executable, [string[]]$ArgumentList)
+    param([string]$Executable, [string[]]$ArgumentList, [switch]$Capture)
     $script:NativeCalls.Add(@{ Executable = $Executable; Arguments = $ArgumentList })
     if ($script:RejectPythonVersion -and $ArgumentList -contains '-c') { throw 'Fixture unsupported Python version.' }
     if ($Executable -eq 'gh' -and $script:RejectAttestation) { throw 'Fixture attestation failure.' }
     if ($Executable -eq 'codex') {
-        if ($script:RejectCodex) { throw 'Fixture interrupted Codex update.' }
-        [IO.File]::AppendAllText((Join-Path $env:CODEX_HOME 'config.toml'), "`n[mcp_servers.ccp]`ncommand = 'fixture'`n")
+        if ($script:RejectCodex) { $script:CodexFailureReached = $true; throw 'Fixture interrupted Codex update.' }
+        $path = Join-Path $env:CODEX_HOME 'config.toml'
+        $text = Get-Content -Encoding UTF8 -LiteralPath $path -Raw
+        if ($ArgumentList -contains 'get') {
+            if (-not $Capture) { throw 'Host query output must be captured.' }
+            $command = [regex]::Match($text, '(?m)^command = (".*")$').Groups[1].Value | ConvertFrom-Json
+            $client = [regex]::Match($text, '(?m)^CCP_CLIENT_BIN = (".*")$').Groups[1].Value | ConvertFrom-Json
+            return (@{transport = @{type = 'stdio'; command = $command; args = @(); env = @{CCP_CLIENT_BIN = $client}}} | ConvertTo-Json -Depth 5)
+        }
+        $text = [regex]::Replace($text, '(?ms)^\[mcp_servers\.ccp(?:\.env)?\]\r?\n.*?(?=^\[|\z)', '')
+        $command = $ArgumentList[-1] | ConvertTo-Json -Compress
+        $client = ($ArgumentList | Where-Object { $_.StartsWith('CCP_CLIENT_BIN=') }).Substring(15) | ConvertTo-Json -Compress
+        [IO.File]::WriteAllText($path, $text + "`n[mcp_servers.ccp]`ncommand = $command`n[mcp_servers.ccp.env]`nCCP_CLIENT_BIN = $client`n")
     }
     if ($ArgumentList -contains 'venv') {
         $scripts = Join-Path $ArgumentList[-1] 'Scripts'
         New-Item -ItemType Directory -Force -Path $scripts | Out-Null
         [IO.File]::WriteAllText((Join-Path $scripts 'python.exe'), 'fixture')
+        if ($script:BuildFailure -eq 'venv') { $script:BuildFailureReached = $true; throw 'Fixture interrupted venv creation.' }
     }
     if ($ArgumentList -contains 'pip') {
-        [IO.File]::WriteAllText((Join-Path (Split-Path $Executable) 'ccp-mcp-server.exe'), 'fixture')
+        $command = Join-Path (Split-Path $Executable) 'ccp-mcp-server.exe'
+        [IO.File]::WriteAllText($command, $script:BridgeBytes)
+        if ($script:BuildFailure -eq 'pip') { $script:BuildFailureReached = $true; [IO.File]::Delete($command); throw 'Fixture interrupted package install.' }
+        if ($script:BuildFailure -eq 'entrypoint') { $script:BuildFailureReached = $true; [IO.File]::Delete($command) }
+    }
+    if ($ArgumentList -contains '-c' -and ($ArgumentList -join ' ').Contains('importlib.metadata') -and $script:BuildFailure -eq 'import') {
+        $script:BuildFailureReached = $true
+        throw 'Fixture package import failed.'
     }
 }
 function Save-CcpReleaseFile {
@@ -187,7 +357,7 @@ try {
     & $nativeRunner 'python' @((Join-Path $root 'scripts/nightly.py'), 'prepare', '--dist', $fixture, '--sha', ('a' * 40))
     Confirm-TestCondition ($LASTEXITCODE -eq 0) 'Release fixture packaging failed.'
     $manifestPath = Join-Path $fixture 'ccp-release.json'
-    $packaged = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $packaged = Get-Content -Encoding UTF8 -LiteralPath $manifestPath -Raw | ConvertFrom-Json
     $manifest = @{
         format = $packaged.format; repository = $packaged.repository; source_sha = $packaged.source_sha
         package_version = $packaged.package_version; platforms = $packaged.platforms
@@ -203,7 +373,7 @@ try {
     Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v1.2.3' '1.2.4')) 'Mismatched release tag was accepted.'
     Confirm-TestCondition (-not (Test-CcpBootstrapRef 'main' '1.2.3')) 'Moving main ref was accepted.'
     foreach ($document in @('README.md', 'docs/client.md')) {
-        $instructions = Get-Content -LiteralPath (Join-Path $root $document) -Raw
+        $instructions = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root $document) -Raw
         $urls = [regex]::Matches($instructions, 'https://raw\.githubusercontent\.com/squid-proxy-lovers/ccp/([^/\s]+)/install\.ps1')
         Confirm-TestCondition ($urls.Count -gt 0) 'Bootstrap instructions are missing a pinned URL.'
         foreach ($url in $urls) {
@@ -261,6 +431,10 @@ try {
     [IO.File]::WriteAllText((Join-Path $profileDirectory '.claude.json'), '{"other":"keep"}')
     New-Item -ItemType Directory -Path (Join-Path $profileDirectory '.cursor'), (Join-Path $profileDirectory '.codex') | Out-Null
     [IO.File]::WriteAllText((Join-Path $profileDirectory '.codex/config.toml'), '# keep')
+    $legacyScripts = Join-Path $profileDirectory '.ccp-mcp/venv/Scripts'
+    New-Item -ItemType Directory -Force -Path $legacyScripts | Out-Null
+    [IO.File]::WriteAllText((Join-Path $legacyScripts 'python.exe'), 'legacy interpreter')
+    [IO.File]::WriteAllText((Join-Path $legacyScripts 'ccp-mcp-server.exe'), 'legacy bridge')
     $script:RejectAttestation = $true
     Confirm-TestFailure { Install-CcpWindows stable '' $InstallDir } 'Full flow ignored attestation failure.'
     Confirm-TestCondition (-not (Test-Path -LiteralPath $InstallDir)) 'Failed verification created the install directory.'
@@ -268,9 +442,9 @@ try {
     Install-CcpWindows stable '' $InstallDir
     Confirm-TestCondition ($script:ObservedBinDirectory -eq $InstallDir) 'PATH was not configured.'
     Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $InstallDir 'ccp-client.exe')) 'Client was not installed.'
-    $claude = Get-Content -LiteralPath (Join-Path $profileDirectory '.claude.json') -Raw | ConvertFrom-Json
+    $claude = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $profileDirectory '.claude.json') -Raw | ConvertFrom-Json
     Confirm-TestCondition ($claude.other -eq 'keep') 'Unrelated host setting was lost.'
-    Confirm-TestCondition ($claude.mcpServers.ccp.env.CCP_CLIENT_BIN -eq (Join-Path $InstallDir 'ccp-client.exe')) 'MCP client path was not encoded correctly.'
+    Confirm-TestCondition ($claude.mcpServers.ccp.env.CCP_CLIENT_BIN -eq (Get-CcpInstallState $InstallDir).mcp_client) 'MCP client path was not encoded correctly.'
     Confirm-TestCondition ($script:NativeCalls.Executable -contains 'codex') 'Codex MCP command was not called.'
     $claudeBackup = @(Get-ChildItem -LiteralPath $profileDirectory -Force -Filter '.claude.json.backup.*')
     Confirm-TestCondition ($claudeBackup.Count -eq 1) 'Claude config backup was not written.'
@@ -280,10 +454,10 @@ try {
     $codexBackup = @(Get-ChildItem -LiteralPath $codexDirectory -Filter 'config.toml.backup.*')
     Confirm-TestCondition ($codexBackup.Count -eq 1) 'Codex config backup was not written.'
     Confirm-TestCondition (([IO.File]::ReadAllText($codexBackup[0].FullName)) -eq '# keep') 'Codex backup differs from the original bytes.'
-    Confirm-TestCondition ((Get-Content -LiteralPath $codexPath -Raw).Contains('# keep')) 'Codex lost unrelated configuration.'
+    Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $codexPath -Raw).Contains('# keep')) 'Codex lost unrelated configuration.'
     $beforeInterruptedConfig = [IO.File]::ReadAllText($codexPath)
     $script:RejectCodex = $true
-    Confirm-TestFailure { Set-CcpCodexConfig $codexPath 'fixture' 'fixture' } 'Interrupted Codex update was accepted.'
+    Confirm-TestFailure { Set-CcpCodexConfig $codexPath 'fixture' 'fixture' (Get-CcpInstallState $InstallDir).mcp_command (Get-CcpInstallState $InstallDir).mcp_client } 'Interrupted Codex update was accepted.'
     $script:RejectCodex = $false
     Confirm-TestCondition (([IO.File]::ReadAllText($codexPath)) -eq $beforeInterruptedConfig) 'Interrupted update replaced the existing Codex config.'
     Confirm-TestCondition (@(Get-ChildItem -LiteralPath $codexDirectory -Force -Filter '.ccp-stage-*').Count -eq 0) 'Interrupted update leaked staging files.'
@@ -300,18 +474,19 @@ try {
     Confirm-TestCondition ((Get-FileHash (Join-Path $InstallDir 'ccp-client.exe')).Hash -eq
         (Get-FileHash $downloadedClient).Hash) 'Re-running did not update the client.'
     $venvCalls = @($script:NativeCalls | Where-Object { $_.Arguments -contains 'venv' })
-    Confirm-TestCondition ($venvCalls.Count -eq 1) 'An update recreated the venv.'
+    Confirm-TestCondition ($venvCalls.Count -eq 2) 'Each successful upgrade must build a separate venv.'
+    Test-CcpUpgradeRollback $fixture $InstallDir $manifest $manifestPath
     $aliasPath = Join-Path $InstallDir 'ccp.exe'
     if (Test-Path -LiteralPath $aliasPath) {
         Confirm-TestCondition ((Get-FileHash $aliasPath).Hash -eq (Get-FileHash $downloadedClient).Hash) 'Owned ccp alias was not updated.'
         [IO.File]::WriteAllText($aliasPath, 'unrelated ccp')
         Install-CcpWindows stable '' $InstallDir
-        Confirm-TestCondition ((Get-Content -LiteralPath $aliasPath -Raw) -eq 'unrelated ccp') 'Existing ccp command was overwritten.'
+        Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $aliasPath -Raw) -eq 'unrelated ccp') 'Existing ccp command was overwritten.'
     }
     $cursorPath = Join-Path $profileDirectory '.cursor/mcp.json'
     [IO.File]::WriteAllText($cursorPath, '{"mcpServers":{"ccp":{"command":"custom"}}}')
     Set-CcpJsonHost $cursorPath 'new' 'new'
-    $cursor = Get-Content -LiteralPath $cursorPath -Raw | ConvertFrom-Json
+    $cursor = Get-Content -Encoding UTF8 -LiteralPath $cursorPath -Raw | ConvertFrom-Json
     Confirm-TestCondition ($cursor.mcpServers.ccp.command -eq 'custom') 'Existing CCP host config was overwritten.'
     $outside = Join-Path $testRoot 'outside-profile'
     New-Item -ItemType Directory -Path $outside | Out-Null
@@ -336,7 +511,7 @@ try {
     try {
         Confirm-TestFailure { Publish-CcpFile (Join-Path $InstallDir 'ccp-client.exe') $interruptedTarget } 'Interrupted publication was accepted.'
         Confirm-TestCondition ($script:StageChecks -ge 3) 'Final staging recheck or cleanup did not run.'
-        Confirm-TestCondition ((Get-Content -LiteralPath $interruptedTarget -Raw) -eq 'retain old verified bytes') 'Interrupted publication replaced the old client.'
+        Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath $interruptedTarget -Raw) -eq 'retain old verified bytes') 'Interrupted publication replaced the old client.'
     } finally { Set-Item Function:Confirm-CcpPrivateStage $script:SavedStageCheck }
     if ($savedEnvironment['OS'] -eq 'Windows_NT') {
         $private = New-CcpPrivateStage $profileDirectory
