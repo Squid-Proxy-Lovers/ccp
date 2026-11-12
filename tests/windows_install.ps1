@@ -72,8 +72,9 @@ function Confirm-TestCondition {
 }
 function Test-CcpBootstrapRef {
     param([string]$Ref, [string]$SourceVersion)
+    $stableVersion = $SourceVersion -creplace '-rc\.[0-9]+$', ''
     return ($Ref -cmatch '^[0-9a-f]{40}$' -or
-        ($Ref -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and $Ref -ceq "v$SourceVersion"))
+        ($Ref -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and $Ref -ceq "v$stableVersion"))
 }
 function Test-CcpApplicationResolution {
     param([string]$Root, [string]$Interpreter)
@@ -586,15 +587,27 @@ try {
     Confirm-TestCondition (Test-CcpBootstrapRef 'v1.2.3' '1.2.3') 'Matching release tag was rejected.'
     Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v1.2.3' '1.2.4')) 'Mismatched release tag was accepted.'
     Confirm-TestCondition (-not (Test-CcpBootstrapRef 'main' '1.2.3')) 'Moving main ref was accepted.'
+    Confirm-TestCondition (Test-CcpBootstrapRef 'v0.2.0' '0.2.0') 'Stable source rejected its stable bootstrap pin.'
+    Confirm-TestCondition (Test-CcpBootstrapRef 'v0.2.0' '0.2.0-rc.2') 'RC source rejected the stable bootstrap pin.'
+    Confirm-TestCondition (Test-CcpBootstrapRef ('a' * 40) '0.2.0-rc.2') 'RC source rejected a full commit pin.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'main' '0.2.0-rc.2')) 'RC source accepted moving main.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v0.2.0-rc.2' '0.2.0-rc.2')) 'Prerelease bootstrap tag was accepted.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v0.3.0' '0.2.0-rc.2')) 'RC source accepted a different stable version.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v0.2.0' '0.2.1-rc.2')) 'RC source accepted a different patch version.'
+    Confirm-TestCondition (-not (Test-CcpBootstrapRef 'v0.2.0' '0.2.0-beta.1')) 'An unrelated prerelease suffix was stripped.'
     foreach ($document in @('README.md', 'docs/client.md')) {
         $instructions = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $root $document) -Raw
         $urls = [regex]::Matches($instructions, 'https://raw\.githubusercontent\.com/squid-proxy-lovers/ccp/([^/\s]+)/install\.ps1')
         Confirm-TestCondition ($urls.Count -gt 0) 'Bootstrap instructions are missing a pinned URL.'
         foreach ($url in $urls) {
-            Confirm-TestCondition (Test-CcpBootstrapRef $url.Groups[1].Value $packaged.package_version) 'Bootstrap ref must be a full SHA or a release tag matching the source version.'
+            Confirm-TestCondition (Test-CcpBootstrapRef $url.Groups[1].Value $packaged.package_version) 'Bootstrap ref must be a full SHA or the stable release tag matching the source version.'
         }
         Confirm-TestCondition (-not $instructions.Contains('/ccp/main/install.ps1')) 'Bootstrap instructions still execute the moving main branch.'
     }
+    # The bootstrap checkout may be an RC; the mocked selected release is stable.
+    # Keep $packaged.package_version above unchanged for source-version pin checks.
+    $manifest.package_version = $packaged.package_version -creplace '-rc\.[0-9]+$', ''
+    $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath
     [IO.File]::WriteAllText((Join-Path $fixture 'ccp-provenance.json'), 'fixture attestation')
     Confirm-TestCondition ((Get-CcpReleaseTag stable '') -eq 'v0.2.0') 'Stable selection failed.'
     Confirm-TestCondition ((Get-CcpReleaseTag nightly '') -eq 'nightly-2026-01-02-aaaaaaaaaaaa') 'Nightly selection included a draft.'
