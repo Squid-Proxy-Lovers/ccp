@@ -181,6 +181,9 @@ jobs:
       - run: make tools
       - run: python -m pip install -e ./mcp
       - run: make lint-python lint-types lint-deadcode lint-deps lint-shell lint-workflows lint-secrets lint-text
+      - name: Check final main commit attribution
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: python scripts/check-attribution.py --event "$GITHUB_EVENT_PATH"
       - name: Quality gate regressions
         run: make quality-tests
       - name: Secret history

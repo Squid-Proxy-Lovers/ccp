@@ -137,6 +137,9 @@ AI, agent, or tool attribution anywhere in this repository or on GitHub:
 When squash-merging, write the commit message by hand and delete every
 `Co-authored-by` line GitHub pre-fills. `.claude/settings.json` turns off
 Claude Code's attribution. Configure any other tool the same way before you use it.
+Run `make lint-attribution RANGE=base..head` before submitting commits. CI also
+checks PR title/body edits and the final commits pushed to main. Only the exact
+Dependabot identity and GitHub's web-flow committer are automation exceptions.
 
 ## Pull requests
 

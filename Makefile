@@ -3,9 +3,10 @@ CARGO ?= cargo
 PYTHON ?= python3
 LINT_BIN ?= .lint-tools/bin
 BASE ?= origin/main
+export RANGE
 export PATH := $(abspath $(LINT_BIN)):$(PATH)
 
-.PHONY: check nightly-tests installer-tests quality-tests tools build test integration mcp-smoke compat coverage semver test-integrity lint lint-fast lint-text lint-rust lint-docs lint-deps lint-python lint-types lint-deadcode lint-shell lint-workflows lint-secrets security fmt hooks help
+.PHONY: check nightly-tests installer-tests quality-tests tools build test integration mcp-smoke compat coverage semver test-integrity lint lint-fast lint-text lint-attribution lint-rust lint-docs lint-deps lint-python lint-types lint-deadcode lint-shell lint-workflows lint-secrets security fmt hooks help
 
 check: lint-fast quality-tests coverage integration test-integrity semver ## Run the offline gates a pull request must pass.
 
@@ -18,6 +19,7 @@ installer-tests: ## Run isolated Docker installer regressions.
 quality-tests: ## Run quality-tool and CLI-accounting regressions.
 	$(PYTHON) -m unittest discover -s tests -p 'test_quality.py' -v
 	$(PYTHON) -m unittest discover -s tests -p 'test_repo_hygiene.py' -v
+	$(PYTHON) -m unittest discover -s tests -p 'test_attribution.py' -v
 	$(PYTHON) -m unittest discover -s tests -p 'test_workspace_mcp.py' -v
 	node --test tests/workspace_panel.mjs tests/onboarding_panel.mjs tests/enrollment_link.mjs tests/frontend_dependency.mjs
 
@@ -57,6 +59,9 @@ lint-fast: fmt lint-rust lint-docs lint-deps lint-python lint-types lint-deadcod
 
 lint-text: ## Check tracked text, frozen release notes, and Svelte suppression reasons.
 	$(PYTHON) scripts/check-repo-hygiene.py
+
+lint-attribution: ## Check commit metadata in RANGE=base..head for tool attribution.
+	$(PYTHON) scripts/check-attribution.py --range "$$RANGE"
 
 fmt: ## Check Rust formatting.
 	$(CARGO) fmt --all -- --check

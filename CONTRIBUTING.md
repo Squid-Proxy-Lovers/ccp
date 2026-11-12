@@ -94,6 +94,7 @@ producing release artifacts.
 | Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
 | Secrets | Gitleaks CLI on working source and Git history, with redacted output |
 | Tracked text | No em dashes or trailing whitespace; final LF and LF-only endings; explained Svelte suppressions; frozen published 0.1.1 changelog |
+| Attribution | Commit trailers, author/committer identities, and PR titles/bodies; checked again on main after squash merges |
 | Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit; npm audit |
 
 The Rust policy lives in the workspace manifest and `clippy.toml`, and every
@@ -171,6 +172,14 @@ docs/             architecture and format contracts
 - Keep generated credentials, databases, local environments, and build outputs out of Git.
 - Keep PRs as drafts while required checks or design decisions are outstanding.
 - Never add AI, agent or tool attribution to commits, PRs, comments, release notes, code or docs. That includes `Co-Authored-By` trailers, "Generated with ..." lines and commits under a tool identity. When squash-merging, delete the `Co-authored-by` lines GitHub pre-fills. See [AGENTS.md](AGENTS.md#no-ai-attribution).
+
+Run `make lint-attribution RANGE=origin/main..HEAD` to check commit metadata.
+Human co-authors are allowed. Only the exact Dependabot identity and GitHub's
+web-flow committer are automation exceptions. PR gates check the title and body
+from the event JSON, including edits. For a stacked PR targeting another branch,
+dispatch the PR gates workflow with its PR number; it reads that PR's actual
+base and head. Push CI checks `before..after` on main, including squash messages.
+Missing or shallow history fails the check; fetch full history before retrying.
 
 ## Dependencies and versions
 
