@@ -1545,6 +1545,57 @@ elif name == 'cat':
                 self.assertIn("the Codex MCP config was not written", result.stdout)
                 self.assertNotIn(f"Added to {config}", result.stdout)
 
+    def test_inline_codex_servers_table_is_retained_with_warning(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = 'mcp_servers = { other = { command = "o" } }\n'
+        config.write_text(original)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertEqual(tomllib.loads(config.read_text()), tomllib.loads(original))
+        self.assertIn(
+            f"Cannot add [mcp_servers.ccp] to {config} safely; add it manually", result.stdout
+        )
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+
+    def test_codex_config_is_retained_without_tomllib(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = '[mcp_servers.other]\ncommand = "o"\n'
+        config.write_text(original)
+        python = self.bin_dir / "python3"
+        # Exercise the real import failure branch even on a newer interpreter.
+        python.write_text(
+            f"#!{sys.executable}\n"
+            + """import os, sys
+if sys.argv[1:3] == ['-I', '-']:
+    source = sys.stdin.read()
+    class WithoutTomllib:
+        def find_spec(self, fullname, path, target=None):
+            if fullname == 'tomllib':
+                raise ModuleNotFoundError(fullname)
+            return None
+    sys.meta_path.insert(0, WithoutTomllib())
+    sys.argv = sys.argv[2:]
+    exec(compile(source, '<installer>', 'exec'))
+else:
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+"""
+        )
+        python.chmod(0o755)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(f"Could not check {config}: Python 3.11+ is required", result.stdout)
+        self.assertIn("add [mcp_servers.ccp] manually", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Could not parse {config}", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+
     def test_codex_config_write_failure_is_reported_honestly(self):
         # A chmod-based permission denial is silently bypassed when the test
         # runs as root, so this fails the "cat" that appends to the config

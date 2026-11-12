@@ -493,7 +493,8 @@ import sys
 try:
     import tomllib
 except ModuleNotFoundError:
-    sys.exit("TOML parsing requires Python 3.11 or newer")
+    print("unsupported")
+    sys.exit(0)
 try:
     with open(sys.argv[1], "rb") as stream:
         config = tomllib.load(stream)
@@ -511,7 +512,8 @@ PY
                 codex_env="$codex_env
 CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
             fi
-            if cat >> "$codex_config" <<TOMLEOF
+            local codex_block
+            if ! codex_block="$(cat <<TOMLEOF
 
 [mcp_servers.ccp]
 command = "$mcp_cmd"
@@ -519,13 +521,34 @@ command = "$mcp_cmd"
 [mcp_servers.ccp.env]
 $codex_env
 TOMLEOF
-            then
-                ok "Added to $codex_config"
-            else
+            )"; then
                 mcp_config_warning "Codex" "Could not update $codex_config"
+            elif python3 -I - "$codex_config" "$codex_block" <<'PY'
+import pathlib, sys, tomllib
+try:
+    candidate = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8") + sys.argv[2]
+    config = tomllib.loads(candidate)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit(1)
+servers = config.get("mcp_servers", {})
+sys.exit(0 if isinstance(servers, dict) and "ccp" in servers else 1)
+PY
+            then
+                if cat >> "$codex_config" <<TOMLEOF
+$codex_block
+TOMLEOF
+                then
+                    ok "Added to $codex_config"
+                else
+                    mcp_config_warning "Codex" "Could not update $codex_config"
+                fi
+            else
+                mcp_config_warning "Codex" "Cannot add [mcp_servers.ccp] to $codex_config safely; add it manually"
             fi
         elif [ "$codex_state" = present ]; then
             ok "$codex_config already configured"
+        elif [ "$codex_state" = unsupported ]; then
+            mcp_config_warning "Codex" "Could not check $codex_config: Python 3.11+ is required; add [mcp_servers.ccp] manually"
         else
             mcp_config_warning "Codex" "Could not parse $codex_config; add [mcp_servers.ccp] manually"
         fi
