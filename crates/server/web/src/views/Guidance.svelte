@@ -22,6 +22,7 @@
 
   let {global = false}: {global?: boolean} = $props();
 
+  // This mounted view keeps its workspace scope until it is disposed.
   // svelte-ignore state_referenced_locally
   const workspaceId = global ? null : (app.workspace?.id ?? null);
   let bundle = $state.raw<Bundle | null>(null);

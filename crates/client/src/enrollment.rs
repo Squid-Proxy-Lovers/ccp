@@ -77,7 +77,7 @@ pub(crate) async fn enroll_and_save(
         anyhow::bail!("token must not be empty");
     }
 
-    // generate a keypair for mTLS — stays local, only the CSR goes to the server
+    // Generate an mTLS keypair locally; send only the CSR to the server.
     let client_key = KeyPair::generate().context("failed to generate client key pair")?;
     let csr_pem = CertificateParams::new(Vec::<String>::new())
         .context("failed to build CSR params")?

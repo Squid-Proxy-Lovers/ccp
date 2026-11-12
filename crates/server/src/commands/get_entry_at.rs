@@ -34,7 +34,7 @@ impl ServerState {
         let mut parts: Vec<String> = Vec::new();
         let mut history_at: Vec<MessageHistoryEntry> = Vec::new();
 
-        // The initial content was set at entry creation time — count it if we got past
+        // Count the initial content, set at entry creation, if we got past
         // the created_at check above. We use the raw context minus any appended content.
         // Since appends join with '\n', the initial context is everything before the
         // first append. But we can't reliably split that. Instead, reconstruct from
@@ -59,7 +59,7 @@ impl ServerState {
         } else if entry.history.is_empty() {
             entry.context.clone()
         } else {
-            // can't reliably separate — return full context at creation
+            // Return the full context at creation because the appends cannot be separated reliably.
             String::new()
         };
 

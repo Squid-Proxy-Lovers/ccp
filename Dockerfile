@@ -17,7 +17,7 @@ COPY rust-toolchain.toml /app/rust-toolchain.toml
 COPY .cargo/config.toml /app/.cargo/config.toml
 
 # Copy all workspace member manifests so cargo can resolve the workspace.
-# Protocol, transport and server get full source trees — client and tests get
+# Protocol, transport and server get full source trees; client and tests get
 # dummy lib.rs files since we don't need their binaries in the image.
 COPY crates/protocol/Cargo.toml /app/crates/protocol/Cargo.toml
 COPY crates/protocol/src /app/crates/protocol/src

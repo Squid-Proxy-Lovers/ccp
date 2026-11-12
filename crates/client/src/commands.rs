@@ -419,7 +419,7 @@ async fn run_native(command: NativeCommand) -> anyhow::Result<()> {
             )?;
         }
 
-        // soft delete — entry is archived, not destroyed
+        // Archive the entry without destroying it.
         NativeCommand::Delete(args) => {
             let enrollment = select_enrollment(&args.session, true)?;
             check_cert_timeout(&enrollment);

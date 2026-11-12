@@ -11,7 +11,7 @@ export function captureContextRecovery(app, key, itemName = '') {
     try { const candidate = JSON.parse(text).entry?.name; if (typeof candidate === 'string') name = candidate; }
     catch { /* Recovery can also be plain text. */ }
   }
-  record.label = name ? `Entry “${name}” — unsaved text` : 'Context editor — unsaved text';
+  record.label = name ? `Unsaved text for entry “${name}”` : 'Unsaved text from the context editor';
   app.clean();
 }
 
