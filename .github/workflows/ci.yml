@@ -113,8 +113,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the platform binaries belong in the release. The Docker job also
+      # uploads a build record that download-artifact cannot extract.
       - uses: actions/download-artifact@v4
         with:
+          pattern: binaries-*
           path: dist
           merge-multiple: true
 
