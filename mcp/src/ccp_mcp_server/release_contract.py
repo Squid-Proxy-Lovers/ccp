@@ -19,10 +19,11 @@ REPOSITORY = "Squid-Proxy-Lovers/ccp"
 WORKFLOW = REPOSITORY + "/.github/workflows/ci.yml"
 MANIFEST = "ccp-release.json"
 PROVENANCE = "ccp-provenance.json"
-PLATFORMS = ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64")
+UNIX_PLATFORMS = ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64")
+PLATFORMS = (*UNIX_PLATFORMS, "windows-x86_64")
 ASSETS = tuple(
-    f"ccp-{binary}-{platform}" for platform in PLATFORMS for binary in ("client", "server")
-) + ("ccp-mcp.tar.gz", "build-info.json")
+    f"ccp-{binary}-{platform}" for platform in UNIX_PLATFORMS for binary in ("client", "server")
+) + ("ccp-client-windows-x86_64.exe", "ccp-mcp.tar.gz", "build-info.json")
 CONTRACTS = {
     "native_wire",
     "workspace_api",
@@ -38,6 +39,11 @@ RC_VERSION = VERSION_CORE + r"-rc\.(0|[1-9][0-9]*)"
 def require(condition: bool, reason: str) -> None:
     if not condition:
         raise ValueError(reason)
+
+
+def client_filename(platform: str) -> str:
+    require(platform in PLATFORMS, "Unsupported client platform")
+    return f"ccp-client-{platform}" + (".exe" if platform == "windows-x86_64" else "")
 
 
 def fields(value: object, keys: set[str]) -> dict[str, object]:
@@ -155,7 +161,7 @@ class Manifest:
         # The manifest cannot expand the platforms this installed verifier can run.
         require(platform in PLATFORMS, "Unsupported client platform")
         require(platform in self.platforms, "Missing client platform")
-        names = (f"ccp-client-{platform}", "ccp-mcp.tar.gz", "build-info.json")
+        names = (client_filename(platform), "ccp-mcp.tar.gz", "build-info.json")
         require(all(name in self.artifacts for name in names), "Missing client release artifact")
         return names
 
@@ -256,7 +262,7 @@ def prepare(root: Path, directory: Path, source_sha: str) -> None:
         "server_schema_write": source_number(root, "crates/server/src/init.rs", "SCHEMA_VERSION"),
     }
     artifacts = {name: Artifact(*digest(directory / name)) for name in ASSETS}
-    value = Manifest(source_sha, source_version(root), contracts, artifacts).value()
+    value = Manifest(source_sha, source_version(root), contracts, artifacts, PLATFORMS).value()
     encoded = (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
     decode(encoded).verify_files(directory, ASSETS)
     (directory / MANIFEST).write_bytes(encoded)

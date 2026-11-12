@@ -355,3 +355,19 @@ async fn expired_profile_metadata_remains_inspectable_but_cannot_be_used_online(
 fn without_status_state(db: &rusqlite::Connection) {
     db.execute_batch("DROP TRIGGER status_pending_excludes_other; DROP TRIGGER content_pending_excludes_status; DROP TRIGGER lifecycle_pending_excludes_status; DROP TABLE status_state;").unwrap();
 }
+
+#[test]
+fn profile_publication_preserves_existing_files_and_cleans_staging() {
+    let dir = directory();
+    store::publish(&dir, "published", |path| {
+        fs::write(path, b"original")?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(fs::read(dir.join("published")).unwrap(), b"original");
+    assert!(store::publish(&dir, "published", |_| Ok(())).is_err());
+    assert!(store::publish(&dir, "failed", |_| anyhow::bail!("fixture failure")).is_err());
+    assert!(!dir.join("failed").exists());
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+    fs::remove_dir_all(dir).unwrap();
+}

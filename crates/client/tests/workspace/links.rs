@@ -409,6 +409,10 @@ async fn refused_first_link_retains_pending_and_new_link_names_safe_recovery_opt
     assert!(format!("{error:#}").contains("HTTP 403"), "{error:#}");
     assert!(format!("{error:#}").contains("enrollment state is saved"));
     let directory = root.join("first");
+    assert!(
+        format!("{error:#}").contains(directory.to_str().unwrap()),
+        "{error:#}"
+    );
     let before = fs::read(directory.join("workspace-profile.sqlite3")).unwrap();
     let (secret, workspace) = second_invitation(&f);
     let error = enroll_link(&link(&f, &secret, workspace, "second"), None, &root)

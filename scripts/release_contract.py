@@ -39,6 +39,9 @@ from ccp_mcp_server.release_contract import (
     Manifest as Manifest,
 )
 from ccp_mcp_server.release_contract import (
+    client_filename as client_filename,
+)
+from ccp_mcp_server.release_contract import (
     decode as decode,
 )
 from ccp_mcp_server.release_contract import (

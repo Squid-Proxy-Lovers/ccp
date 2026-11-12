@@ -147,7 +147,7 @@ class Store:
         )
         build.compatible(manifest)
         manifest.client_assets(platform)
-        item = manifest.artifacts[f"ccp-client-{platform}"]
+        item = manifest.artifacts[contract.client_filename(platform)]
         contract.require(
             contract.digest(path / "client") == (item.size, item.sha256), "Stored client changed"
         )
@@ -180,7 +180,7 @@ class Store:
         for name, maximum in [
             (contract.MANIFEST, 64 * 1024),
             (contract.PROVENANCE, 4 * 1024 * 1024),
-            (f"ccp-client-{platform}", contract.MAX_ARTIFACT),
+            (contract.client_filename(platform), contract.MAX_ARTIFACT),
             ("ccp-mcp.tar.gz", contract.MAX_ARTIFACT),
             ("build-info.json", 64 * 1024),
         ]:
@@ -191,14 +191,16 @@ class Store:
             contract.decode(verified_manifest) == manifest, "Verified manifest changed"
         )
         build.compatible(manifest)
-        copy_file(release / f"ccp-client-{platform}", path / "client", contract.MAX_ARTIFACT)
+        copy_file(
+            release / contract.client_filename(platform), path / "client", contract.MAX_ARTIFACT
+        )
         (path / "client").chmod(0o700)
         build.build(path, manifest)
         contract.require(
             fs.private_file(release / contract.MANIFEST, 64 * 1024) == verified_manifest,
             "Manifest changed during candidate build",
         )
-        item = manifest.artifacts[f"ccp-client-{platform}"]
+        item = manifest.artifacts[contract.client_filename(platform)]
         contract.require(
             contract.digest(path / "client") == (item.size, item.sha256),
             "Client changed during candidate build",

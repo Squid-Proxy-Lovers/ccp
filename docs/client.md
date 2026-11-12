@@ -5,6 +5,7 @@ The client saves credentials locally and sends data operations to the server.
 
 [Documentation index](README.md) · [Server guide](server.md) · [MCP setup](../mcp/README.md)
 
+- [Windows installation](#windows-installation)
 - [Enroll and select a session](#enroll-and-select-a-session)
 - [CLI reference](#cli-reference)
 - [Entry model](#entry-model)
@@ -13,11 +14,112 @@ The client saves credentials locally and sends data operations to the server.
 - [Rust SDK](#rust-sdk)
 - [Transport and failures](#transport-and-failures)
 
+## Windows installation
+
+Requirements: x86_64 Windows, PowerShell 5.1 or newer, Python 3.10+ available as
+`python`, and a recent GitHub CLI (`gh`) with the attestation policy flags described
+in [release bundle verification](client-release-bundles.md). Verification requires
+GitHub access and any GitHub CLI authentication needed by your environment.
+The installer selects the first real Python application on PATH and checks its
+minimum version. Microsoft Store aliases under `%LOCALAPPDATA%\Microsoft\WindowsApps`
+are ignored; install Python 3.10 or newer if no real interpreter is available.
+
+```powershell
+irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1 | iex
+```
+
+The versioned URL pins the bootstrap bytes to a release tag, signed and immutable
+by project policy. Fetching and running that script trusts GitHub transport and
+the repository content at that tag; the bootstrap itself is not
+attestation-verified before it runs. The script then authenticates every installed
+release component as described below.
+Review a replacement release before changing this URL.
+
+This selects the latest stable release from the official GitHub repository.
+To select the latest published nightly, or pin a dated nightly, invoke the same
+script with parameters:
+
+```powershell
+$installer = irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1
+& ([scriptblock]::Create($installer)) -Channel nightly
+# Pinning also requires -Channel nightly:
+# & ([scriptblock]::Create($installer)) -Channel nightly -Version nightly-YYYY-MM-DD-<12-character-SHA>
+```
+
+The installer verifies the release manifest's GitHub attestation against the
+repository, workflow, source ref and commit, signer commit, and hosted-runner
+policy. It checks the Windows executable, matching MCP archive and build metadata
+against the signed manifest's sizes and SHA-256 hashes before installing anything.
+Missing assets, unavailable verification tools, and verification failures stop
+installation. There is no unverified fallback. Older releases without Windows
+assets and the signed manifest cannot be installed this way.
+
+The release manifest registers `windows-x86_64` as client-only, mapped to
+`ccp-client-windows-x86_64.exe`. Packaging includes its checksum and authenticated
+manifest record in stable and nightly releases; no Windows server is distributed.
+
+Installation stages the executable beside its destination and renames it into
+`%LOCALAPPDATA%\ccp\bin\ccp-client.exe`. An available `ccp.exe` name is installed as
+well; an existing unrelated `ccp` command is retained. `-InstallDir` overrides the
+binary directory within `%USERPROFILE%`. The installer rejects reparse points
+(including junctions) in every component from that profile down to its install,
+MCP and configuration paths. Downloads and publication use private staging
+directories created with a protected ACL granting only the current user full
+control; their owner and ACL are checked again immediately before publication.
+The directory is added to the user PATH. Open a new terminal
+after installation; re-run the same installer command to update. Close running
+CCP processes before updating if Windows reports a file in use.
+
+Each upgrade builds a fresh MCP venv under `%USERPROFILE%\.ccp-mcp\generations`,
+using `Scripts\python.exe`. It validates the package version, import and console
+entry point before replacing any installed commands. The generation also retains
+its verified matching client. Generation paths stay fixed because venv launchers
+contain absolute interpreter paths. The current generation and one previous
+installer-recorded generation are kept. Unregistered directories are never pruned.
+Close CCP processes before upgrading and restart MCP hosts afterward.
+
+The installer adds CCP to detected Claude, Codex and Cursor configurations, and
+refreshes entries it previously configured to use the new matched generation.
+Customized entries are retained with a reminder to check their paths. Missing
+hosts are reported. Codex configuration requires `codex mcp add` and
+`codex mcp get --json` on PATH. Unrelated JSON settings remain intact. Before
+modifying an existing JSON or Codex config, the installer saves a timestamped
+`.backup.*` copy beside it and retains the three most recent installer-recorded
+backups per config. Modified or unregistered backups are left alone. Codex edits
+use a private staged `CODEX_HOME`.
+
+An ownership record, `.ccp-install.json`, beside the binaries tracks the installer's
+alias and active MCP generation. The installer stages both executables and keeps
+a private upgrade journal (`.ccp-upgrade.json`) with their previous bytes and the
+host configurations. A failed upgrade restores the previous pair and configurations;
+a failed candidate build never changes them. If an open process prevents rollback,
+the installer exits nonzero and clearly
+reports that it is mid-recovery. Close that process and re-run the same command:
+recovery and pending cleanup finish before tool checks, downloads or another
+upgrade. Keep recovery files until that run succeeds. An unrelated `ccp.exe` is never adopted just because
+its name matches. Cleanup checkpoints tolerate already-deleted files and
+directories. Recovery checks destination hashes before restoring bytes; an unrelated replacement
+`ccp.exe` is kept with a warning and its alias ownership is dropped. Retention
+prunes only recorded, identity-checked generations and hash-checked backups,
+never an active or rollback generation. Close old MCP hosts if cleanup is blocked
+and re-run the command to finish pruning.
+
+Client state defaults to `%USERPROFILE%\.ccp-client` when `HOME` is absent. `HOME`
+retains precedence when set, and `CCP_CLIENT_HOME` overrides both. Keep credentials
+and workspace profiles on NTFS under your private Windows user profile: the
+client relies on inherited profile ACLs, which normally exclude other ordinary
+users. It does not inspect or repair Windows ACLs. Secure any custom home or
+explicit `--profile` directory with equivalent ACLs before use. Unix permission
+checks remain unchanged. Profile publication uses same-directory hard links and
+requires a filesystem supporting them. Hidden enrollment-link paste uses the
+Windows console through `rpassword`.
+
 ## Enroll and select a session
 
 Install the client using the [README instructions](../README.md#install). The
-installer supports Linux and macOS on x86_64 and ARM64. Ask the server operator for
-a `read` or `read_write` enrollment token. Replace `YOUR_TOKEN` below; this example
+shell installer supports Linux and macOS on x86_64 and ARM64; the
+[PowerShell installer](#windows-installation) supports the Windows x86_64 client.
+Ask the server operator for a `read` or `read_write` enrollment token. Replace `YOUR_TOKEN` below; this example
 uses the local server's enrollment endpoint:
 
 ```bash
