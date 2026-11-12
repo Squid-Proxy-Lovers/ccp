@@ -39,6 +39,7 @@ function Test-CcpNativeExit {
     if (-not $missingFailed) { throw 'Missing native verifier was accepted.' }
 }
 $nativeRunner = ${function:Invoke-CcpNative}
+$systemPython = Resolve-CcpApplication 'python'
 $engine = (Get-Process -Id $PID).Path
 foreach ($nativeErrorPreference in @($false, $true)) { Test-CcpNativeExit $engine $nativeErrorPreference }
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
@@ -49,6 +50,7 @@ $InstallDir = Join-Path $profileDirectory 'bin'
 $script:NativeCalls = [Collections.Generic.List[object]]::new()
 $script:RejectAttestation = $false
 $script:RejectCodex = $false
+$script:RejectPythonVersion = $false
 $script:DownloadUrls = [Collections.Generic.List[string]]::new()
 $savedEnvironment = @{}
 foreach ($name in @('OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'Path')) {
@@ -64,6 +66,53 @@ function Test-CcpBootstrapRef {
     return ($Ref -cmatch '^[0-9a-f]{40}$' -or
         ($Ref -cmatch '^v[0-9]+\.[0-9]+\.[0-9]+$' -and $Ref -ceq "v$SourceVersion"))
 }
+function Test-CcpApplicationResolution {
+    param([string]$Root, [string]$Interpreter)
+    $directory = Join-Path $Root 'application-resolution'
+    $first = Join-Path $directory 'first interpreter'
+    $second = Join-Path $directory 'second interpreter'
+    $aliases = Join-Path $directory 'Microsoft\WindowsApps'
+    $name = if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) { 'python.exe' } else { 'python' }
+    $otherName = if ($name.EndsWith('.exe')) { 'ccp-fixture-app.exe' } else { 'ccp-fixture-app' }
+    New-Item -ItemType Directory -Force -Path $first, $second, $aliases | Out-Null
+    $firstPython = Join-Path $first $name
+    $secondPython = Join-Path $second $name
+    $stub = Join-Path $aliases $name
+    [IO.File]::Copy($Interpreter, $firstPython, $false)
+    [IO.File]::Copy($Interpreter, $secondPython, $false)
+    [IO.File]::Copy($Interpreter, (Join-Path $first $otherName), $false)
+    [IO.File]::Copy($Interpreter, (Join-Path $second $otherName), $false)
+    # Model the zero-byte Store entry without launching it or requiring symlink privileges.
+    [IO.File]::WriteAllText($stub, '')
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        foreach ($file in @($firstPython, $secondPython, $stub, (Join-Path $first $otherName), (Join-Path $second $otherName))) {
+            [IO.File]::SetUnixFileMode($file, [IO.UnixFileMode]493)
+        }
+    }
+    $savedPath = $env:PATH
+    $savedLocal = $env:LOCALAPPDATA
+    try {
+        $env:LOCALAPPDATA = $directory
+        $env:PATH = @($first, $second, $aliases) -join [IO.Path]::PathSeparator
+        Confirm-TestCondition (@(Get-Command python -CommandType Application -All).Count -eq 3) 'PATH fixture did not expose several Python applications.'
+        Confirm-TestCondition ((Resolve-CcpApplication python) -eq $firstPython) 'First real Python on PATH was not selected.'
+        Confirm-TestCondition (@(Resolve-CcpApplication python).Count -eq 1) 'Python resolution returned several executables.'
+        Confirm-TestCondition ((Resolve-CcpApplication ccp-fixture-app) -eq (Join-Path $first $otherName)) 'Other applications did not resolve to the first PATH match.'
+        $env:PATH = $aliases
+        $message = ''
+        try { Resolve-CcpApplication python } catch { $message = $_.Exception.Message }
+        Confirm-TestCondition ($message.Contains('Install Python 3.10 or newer')) 'Only a Store alias did not fail with Python installation guidance.'
+        $env:PATH = @($aliases, $first, $second) -join [IO.Path]::PathSeparator
+        Confirm-TestCondition ((Resolve-CcpApplication python) -eq $firstPython) 'Store alias before a real interpreter was selected.'
+        $message = ''
+        try { Resolve-CcpApplication ccp-fixture-missing-app } catch { $message = $_.Exception.Message }
+        Confirm-TestCondition ($message.Contains('was not found on PATH')) 'Missing application did not fail with clear guidance.'
+    } finally {
+        $env:PATH = $savedPath
+        [Environment]::SetEnvironmentVariable('LOCALAPPDATA', $savedLocal, 'Process')
+        Remove-Item -LiteralPath $directory -Recurse -Force
+    }
+}
 function Confirm-TestFailure {
     param([scriptblock]$Action, [string]$Message)
     $failed = $false
@@ -73,6 +122,7 @@ function Confirm-TestFailure {
 function Invoke-CcpNative {
     param([string]$Executable, [string[]]$ArgumentList)
     $script:NativeCalls.Add(@{ Executable = $Executable; Arguments = $ArgumentList })
+    if ($script:RejectPythonVersion -and $ArgumentList -contains '-c') { throw 'Fixture unsupported Python version.' }
     if ($Executable -eq 'gh' -and $script:RejectAttestation) { throw 'Fixture attestation failure.' }
     if ($Executable -eq 'codex') {
         if ($script:RejectCodex) { throw 'Fixture interrupted Codex update.' }
@@ -117,6 +167,13 @@ try {
     $env:USERPROFILE = $profileDirectory
     $env:LOCALAPPDATA = $profileDirectory
     $env:APPDATA = $profileDirectory
+    Test-CcpApplicationResolution $testRoot $systemPython
+    $script:RejectPythonVersion = $true
+    try {
+        $message = ''
+        try { Resolve-CcpPython } catch { $message = $_.Exception.Message }
+        Confirm-TestCondition ($message.Contains('Install Python 3.10 or newer')) 'Unsupported Python version did not fail with installation guidance.'
+    } finally { $script:RejectPythonVersion = $false }
     $fixture = New-CcpPrivateStage $profileDirectory
     $packagedAssets = @($CcpClientAsset, 'ccp-mcp.tar.gz')
     foreach ($platform in @('linux-x86_64', 'linux-aarch64', 'darwin-x86_64', 'darwin-aarch64')) {

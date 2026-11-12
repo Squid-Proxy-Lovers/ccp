@@ -13,10 +13,47 @@ $ErrorActionPreference = 'Stop'
 $CcpRepository = 'Squid-Proxy-Lovers/ccp'
 $CcpClientAsset = 'ccp-client-windows-x86_64.exe'
 
+function Test-CcpPythonAlias {
+    param([string]$Path)
+    if (-not $env:LOCALAPPDATA) { return $false }
+    $aliases = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'))
+    $prefix = $aliases.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    return [IO.Path]::GetFullPath($Path).StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Resolve-CcpApplication {
+    param([string]$Executable)
+    $python = (Split-Path -Leaf $Executable) -imatch '^python(?:[0-9]+(?:\.[0-9]+)*)?(?:\.exe)?$'
+    $tool = Get-Command $Executable -CommandType Application -ErrorAction SilentlyContinue |
+        Where-Object { -not $python -or -not (Test-CcpPythonAlias $_.Source) } |
+        Select-Object -First 1
+    if (-not $tool) {
+        $message = if ($python) {
+            'Install Python 3.10 or newer and add its real interpreter to PATH; Microsoft Store app-execution aliases are not supported.'
+        } else { "Required executable '$Executable' was not found on PATH." }
+        $failure = [InvalidOperationException]::new($message)
+        $failure.Data['CcpPrerequisite'] = $message
+        throw $failure
+    }
+    return $tool.Source
+}
+
+function Resolve-CcpPython {
+    $python = Resolve-CcpApplication 'python'
+    try { Invoke-CcpNative $python @('-c', 'import sys; sys.exit(sys.version_info < (3, 10))') }
+    catch {
+        $message = 'Install Python 3.10 or newer with venv support and add its real interpreter to PATH.'
+        $failure = [InvalidOperationException]::new($message)
+        $failure.Data['CcpPrerequisite'] = $message
+        throw $failure
+    }
+    return $python
+}
+
 function Invoke-CcpNative {
     param([string]$Executable, [string[]]$ArgumentList)
     # Resolve first so a missing command cannot reuse a previous exit code.
-    $tool = Get-Command $Executable -CommandType Application -ErrorAction Stop
+    $tool = Resolve-CcpApplication $Executable
     # Windows PowerShell can turn native stderr into terminating errors even
     # on success. Suppress tool output (which may contain private details) and
     # use the exit code for success, with a function-local error preference.
@@ -24,7 +61,7 @@ function Invoke-CcpNative {
     # Disable PowerShell 7's native-error conversion locally; the explicit
     # exit-code check below always throws on failure, whatever the caller chose.
     $PSNativeCommandUseErrorActionPreference = $false
-    & $tool.Source @ArgumentList *> $null
+    & $tool @ArgumentList *> $null
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) { throw 'A required external command failed.' }
 }
@@ -256,7 +293,7 @@ function Install-CcpCommand {
     $owned = (Test-Path -LiteralPath $alias -PathType Leaf) -and
         (Test-Path -LiteralPath $client -PathType Leaf) -and
         ((Get-FileHash -LiteralPath $alias).Hash -eq (Get-FileHash -LiteralPath $client).Hash)
-    $existing = Get-Command ccp -ErrorAction SilentlyContinue
+    $existing = Get-Command ccp -ErrorAction SilentlyContinue | Select-Object -First 1
     $available = -not (Test-Path -LiteralPath $alias) -and -not $existing
     Publish-CcpFile $Source $client
     if ($owned -or $available) {
@@ -282,13 +319,13 @@ function Set-CcpUserPath {
 }
 
 function Install-CcpMcp {
-    param([string]$Stage, [string]$ProfileDirectory)
+    param([string]$Stage, [string]$ProfileDirectory, [string]$BootstrapPython)
     $venv = Join-Path $ProfileDirectory '.ccp-mcp\venv'
     Confirm-CcpPath $venv -AllowMissing
     $python = Join-Path $venv 'Scripts\python.exe'
     Confirm-CcpPath $python -AllowMissing
     if (-not (Test-Path -LiteralPath $python)) {
-        Invoke-CcpNative 'python' @('-m', 'venv', $venv)
+        Invoke-CcpNative $BootstrapPython @('-m', 'venv', $venv)
     }
     Confirm-CcpPath $python
     Invoke-CcpNative $python @('-m', 'pip', 'install', '--quiet', '--upgrade',
@@ -405,10 +442,8 @@ function Install-CcpWindows {
         throw 'This installer requires x86_64 Windows.'
     }
     if (-not $env:USERPROFILE -or -not $env:LOCALAPPDATA) { throw 'A Windows user profile is required.' }
-    foreach ($tool in @('gh', 'python')) {
-        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Install $tool before running this installer." }
-    }
-    Invoke-CcpNative 'python' @('-c', 'import sys; sys.exit(sys.version_info < (3, 10))')
+    Resolve-CcpApplication 'gh' | Out-Null
+    $python = Resolve-CcpPython
     $tag = Get-CcpReleaseTag $ReleaseChannel $RequestedVersion
     $bin = [IO.Path]::GetFullPath($BinDirectory)
     Confirm-CcpPath $bin -AllowMissing
@@ -422,7 +457,7 @@ function Install-CcpWindows {
         Set-CcpUserPath $bin
         Write-Information -InformationAction Continue "Installed verified Windows client from $tag."
         Write-Information -InformationAction Continue 'Installing the matching MCP bridge.'
-        $mcp = Install-CcpMcp $stage $env:USERPROFILE
+        $mcp = Install-CcpMcp $stage $env:USERPROFILE $python
         Set-CcpMcpHost $env:USERPROFILE $mcp (Join-Path $bin 'ccp-client.exe')
         Write-Information -InformationAction Continue 'Installation complete. Open a new terminal and restart MCP hosts. Re-run the same command to update.'
     } finally {
@@ -431,4 +466,8 @@ function Install-CcpWindows {
 }
 
 try { Install-CcpWindows $Channel $Version $InstallDir }
-catch { throw 'CCP installation failed. Required tools, verified release assets, and writable user directories are needed. No unverified software was installed.' }
+catch {
+    $prerequisite = $_.Exception.Data['CcpPrerequisite']
+    if ($prerequisite) { throw "CCP installation failed: $prerequisite" }
+    throw 'CCP installation failed. Required tools, verified release assets, and writable user directories are needed. No unverified software was installed.'
+}

@@ -20,6 +20,9 @@ Requirements: x86_64 Windows, PowerShell 5.1 or newer, Python 3.10+ available as
 `python`, and a recent GitHub CLI (`gh`) with the attestation policy flags described
 in [release bundle verification](client-release-bundles.md). Verification requires
 GitHub access and any GitHub CLI authentication needed by your environment.
+The installer selects the first real Python application on PATH and checks its
+minimum version. Microsoft Store aliases under `%LOCALAPPDATA%\Microsoft\WindowsApps`
+are ignored; install Python 3.10 or newer if no real interpreter is available.
 
 ```powershell
 irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1 | iex
