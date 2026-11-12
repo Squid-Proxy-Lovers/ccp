@@ -93,6 +93,7 @@ producing release artifacts.
 | Shell | ShellCheck for Git-visible Bash and POSIX scripts, including extensionless scripts |
 | Actions | actionlint and zizmor's regular policy; pinned actions and read-only default permissions |
 | Secrets | Gitleaks CLI on working source and Git history, with redacted output |
+| Tracked text | No em dashes or trailing whitespace; final LF and LF-only endings; explained Svelte suppressions; frozen published 0.1.1 changelog |
 | Dependencies | cargo-deny advisories, licenses, bans, and sources; pip-audit; npm audit |
 
 The Rust policy lives in the workspace manifest and `clippy.toml`, and every
@@ -124,6 +125,12 @@ A change is ready for review when:
 
 Every pull request needs approval from the code owner in `.github/CODEOWNERS`
 and passing required checks before it merges into `main`.
+
+`make lint-text` checks tracked working files, including staged additions. It
+preserves intentional Unicode fixtures; it does not ban emoji, en dashes or
+curly quotes. Generated panel output, lockfiles and the two upstream font
+licences have narrow, documented exclusions in `scripts/check-repo-hygiene.py`.
+The published 0.1.1 changelog section is matched against its exact original bytes.
 
 The frontend pins `@oss-cve-patches/deepmerge@4.3.2` for the Svelte Vite plugin's
 `deepmerge` dependency until an official fixed dependency is available. This is

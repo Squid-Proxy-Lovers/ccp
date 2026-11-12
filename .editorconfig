@@ -1,0 +1,21 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# Generated dependency metadata is checked by its package manager.
+[{Cargo.lock,crates/server/web/package-lock.json}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+
+# Preserve upstream font licences and generated panel output verbatim.
+[{crates/server/web/public/fonts/FragmentMono-OFL.txt,crates/server/web/public/fonts/OverusedGrotesk-OFL.txt,crates/server/web/dist/**}]
+charset = unset
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset

@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Package managers own their generated lockfiles.
+Cargo.lock -text
+crates/server/web/package-lock.json -text
+
+# Preserve upstream licence bytes and generated build output.
+crates/server/web/public/fonts/FragmentMono-OFL.txt -text
+crates/server/web/public/fonts/OverusedGrotesk-OFL.txt -text
+crates/server/web/dist/** -text
