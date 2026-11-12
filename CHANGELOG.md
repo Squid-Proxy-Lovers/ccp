@@ -12,6 +12,7 @@
 - `ccp-server up --data-dir` starts a workspace instance and prints a browser
   first-run setup link. The setup wizard creates the first workspace and returns
   its owner and instance admin keys once. Later starts preserve the identity.
+- The installer creates a `ccp` alias for `ccp-client` when that name is free.
 - Enrollment links issued in the panel and redeemed through `ccp enroll`, with
   hidden paste, bounded stdin and explicit-link input. The client verifies the
   CA pin, server name and instance identity before transmitting secrets.
@@ -19,9 +20,9 @@
   fragments are removed from the address bar; opening the page does not redeem them.
 - Scoped invitation controls with a 30-minute default, custom expiry, confirmed
   long-lived or non-expiring links, use limits and an initial-group enrollment window.
-- Local `server workspace-init`, `admin-info`, `reset-instance-key` and
+- Local `ccp-server workspace-init`, `admin-info`, `reset-instance-key` and
   `reset-owner-key` commands for provisioning and stopped-server key recovery.
-- `server workspace-tls-init`, `workspace-tls-info` and `workspace-tls-renew`
+- `ccp-server workspace-tls-init`, `workspace-tls-info` and `workspace-tls-renew`
   provision, export and renew instance TLS identity while preserving its CA.
 - `ccp-client workspace` adds `trust`, `enroll`, `join`, `renew`, `recover`
   and `selection` commands. Private profiles pin instance trust; recovery creates
@@ -59,8 +60,8 @@
   `workspace_create_book`, plus shelf lifecycle readers.
 - Workspace MCP `workspace_mutate_entry` and pending/resume/resolve controls,
   `workspace_guidance`, and status read, update, clear and pending-operation tools.
-- Offline native inventory with `server legacy-inspect` and conversion with
-  `server legacy-convert`. Scoped native provenance preserves original source
+- Offline native inventory with `ccp-server legacy-inspect` and conversion with
+  `ccp-server legacy-convert`. Scoped native provenance preserves original source
   rows; HTTP, CLI, MCP `workspace_native_history` and panel readers expose entry history.
 - Authenticated release manifests bind matching client/MCP artifacts and build
   metadata to GitHub build provenance. Managed bundles support verified staging,
@@ -81,9 +82,11 @@
   instead of several minutes in the recorded release test.
 - Docker defaults to workspace first-run setup on ports 8443 and 8444 with data
   at `/var/lib/ccp/server`. Explicit native-session arguments remain supported.
-- Docker images are published only for release tags. `:latest` now always
-  points to the newest stable release, not to the latest push to `main`, and
-  release candidates get only their own tag, such as `:v0.2.0-rc.2`.
+- Docker images are published only for release tags. `:latest` always points
+  to the newest stable release, which also gets a full commit-SHA tag but no
+  version tag (0.1.1 published `:v0.1.1`). Release candidates get their own
+  version tag, such as `:v0.2.0-rc.2`, alongside the commit-SHA tag, and leave
+  `:latest` unchanged.
 - Source builds require Rust 1.89+ and Node.js 24/npm for the embedded panel.
   Panel assets are built from locked sources; installed servers need no Node.js.
 - Release manifests accept additional future platform metadata while retaining
@@ -157,7 +160,7 @@
   matching producing binary. Rollback requires that backup; do not lower schema markers.
 - The native wire protocol stays at version 1, so existing native deployments
   keep working. Workspaces use schema 27 and do not adopt native data in place.
-- To move a native instance, stop it and run `server legacy-convert` into a new
+- To move a native instance, stop it and run `ccp-server legacy-convert` into a new
   location, following [the conversion guide](docs/native-conversion.md).
   Conversion leaves source files unchanged and preserves native source history.
 - The converted instance needs fresh TLS provisioning and administration. Old

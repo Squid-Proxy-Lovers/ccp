@@ -93,13 +93,15 @@ backups. Re-run it to update. The server is not supported on Windows. See the
 
 ```bash
 docker run --name ccp -p 127.0.0.1:8443:8443 -p 127.0.0.1:8444:8444 \
-  -v ccp-data:/var/lib/ccp/server ghcr.io/squid-proxy-lovers/ccp:v0.2.0
+  -v ccp-data:/var/lib/ccp/server ghcr.io/squid-proxy-lovers/ccp:latest
 ```
 
+For an exact v0.2.0 pin, use `ghcr.io/squid-proxy-lovers/ccp:2dd14e4f7966f93791485681269b4b8c386c5475`.
+
 The default command starts the browser setup flow. Keep the volume and read the
-setup link in the container log. Images publish for release tags: `:latest`
-selects the newest stable release; release candidates use their own tag, such as
-`:v0.2.0-rc.2`, and leave `:latest` unchanged. See
+setup link in the container log. Stable releases update `:latest` and a full
+commit-SHA tag. Release candidates use their own tag, such as `:v0.2.0-rc.2`, and
+leave `:latest` unchanged. See
 [Docker and remote names](docs/workspace-foundation.md#docker).
 
 ### Build from source
@@ -125,8 +127,8 @@ Installed servers embed the panel and do not need Node.js. See
 | --- | --- |
 | Workspace | A scoped context store with its own access, content and guidance. |
 | Owner | Manages the workspace, its admins and ownership transfer. |
-| Admin | Manages content, client access and workspace settings within its scope. |
-| Instance admin | Creates workspaces and manages instance lifecycle and global guidance; workspace administration uses separate scoped roles. |
+| Admin | Manages content, client access, guidance and retention within its workspace. Archiving and deleting the workspace are reserved for the owner and instance admins. |
+| Instance admin | Creates workspaces, appoints initial owners, archives or deletes workspaces and publishes global guidance. It can read workspace content but cannot admit clients or manage a workspace's team. |
 | Client and grant | A registered client authenticates with mTLS. Explicit grants control its access to each workspace. |
 | Shelf, book, entry | Shelves contain books; books contain text entries with revisions and history. Archives support recovery; permanent deletion requires confirmation. |
 | Guidance | Global and workspace instruction boards published by administrators and delivered alongside MCP results. Guidance cannot grant permissions. |
@@ -151,6 +153,10 @@ printed by enrollment:
 ```
 
 On Unix, run `chmod 600 workspace-mcp.json`. Use absolute paths throughout.
+The macOS/Linux installer places the entry point at
+`~/.ccp-mcp/venv/bin/ccp-workspace-mcp`. Expand `~` to your home directory's
+absolute path in the host configuration.
+
 For Claude's `~/.claude.json` or Cursor's `~/.cursor/mcp.json`, add this server
 entry to the existing configuration:
 
@@ -192,8 +198,8 @@ Workspace mode uses schema 27 and a separate HTTPS/mTLS interface; it does not
 adopt native contents in place.
 
 To move a complete native schema-2 instance, stop it and follow the
-[offline conversion guide](docs/native-conversion.md): `server legacy-inspect`
-checks the source and `server legacy-convert` creates a fresh instance at a new
+[offline conversion guide](docs/native-conversion.md): `ccp-server legacy-inspect`
+checks the source and `ccp-server legacy-convert` creates a fresh instance at a new
 destination. Source files remain intact. Provision its new TLS identity and
 **enroll every client again**; old native tokens and certificates grant no access.
 Unreleased HTTP schemas 3/4 and mixed databases cannot be converted.
