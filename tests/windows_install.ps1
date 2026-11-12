@@ -61,6 +61,7 @@ $script:BuildFailureReached = $false
 $script:CodexFailureReached = $false
 $script:BridgeBytes = 'fixture'
 $script:DownloadUrls = [Collections.Generic.List[string]]::new()
+$script:LatestStableTag = 'v0.2.0'
 $savedEnvironment = @{}
 foreach ($name in @('OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA', 'Path')) {
     $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -187,6 +188,9 @@ function Confirm-TestUpgradePair {
     Confirm-TestCondition ($claude.mcpServers.ccp.env.CCP_CLIENT_BIN -eq $state.mcp_client) 'Owned host config did not pin the matching client.'
     Confirm-TestCondition ($claude.mcpServers.ccp.command -eq $state.mcp_command) 'Owned host config did not switch to the matching bridge.'
     Confirm-TestCondition ($claude.other -eq 'keep') 'Upgrade lost unrelated host configuration.'
+    $claudeText = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $profileDirectory '.claude.json') -Raw
+    $lastSeen = [regex]::Match($claudeText, '"lastSeen"\s*:\s*"([^"]*)"').Groups[1].Value
+    Confirm-TestCondition ($lastSeen -ceq '2026-11-12T01:02:03.1200000+02:00') 'An untouched ISO timestamp string was reformatted.'
     $cursor = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $env:USERPROFILE '.cursor/mcp.json') -Raw | ConvertFrom-Json
     Confirm-TestCondition ($cursor.mcpServers.ccp.command -eq $state.mcp_command) 'Owned Cursor config did not switch to the matching bridge.'
     $codex = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $env:USERPROFILE '.codex/config.toml') -Raw
@@ -530,7 +534,7 @@ function Save-CcpReleaseFile {
 function Get-CcpReleaseResponse {
     param([string]$Uri)
     if ($Uri.EndsWith('/latest')) {
-        return @{ tag_name = 'v0.2.0'; draft = $false; prerelease = $false }
+        return @{ tag_name = $script:LatestStableTag; draft = $false; prerelease = $false }
     }
     return @(
         @{ tag_name = 'v0.2.0'; draft = $false; prerelease = $false; published_at = '2026-01-04' },
@@ -610,6 +614,12 @@ try {
     $manifest | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $manifestPath
     [IO.File]::WriteAllText((Join-Path $fixture 'ccp-provenance.json'), 'fixture attestation')
     Confirm-TestCondition ((Get-CcpReleaseTag stable '') -eq 'v0.2.0') 'Stable selection failed.'
+    try {
+        foreach ($invalid in @('v0.2.0-rc.1', 'v0.2.0-beta.1', 'v0.2.0+build', 'v00.2.0', 'v0.02.0', 'v0.2.00')) {
+            $script:LatestStableTag = $invalid
+            Confirm-TestFailure { Get-CcpReleaseTag stable '' } 'A malformed or prerelease latest tag was accepted as stable.'
+        }
+    } finally { $script:LatestStableTag = 'v0.2.0' }
     Confirm-TestCondition ((Get-CcpReleaseTag nightly '') -eq 'nightly-2026-01-02-aaaaaaaaaaaa') 'Nightly selection included a draft.'
     Confirm-TestFailure { Get-CcpReleaseTag stable 'nightly-2026-01-02-aaaaaaaaaaaa' } 'Stable accepted a nightly pin.'
     Confirm-TestFailure { Get-CcpReleaseTag nightly '../bad' } 'Invalid tag accepted.'
@@ -655,13 +665,21 @@ try {
     $env:USERPROFILE = $profileDirectory
     $env:LOCALAPPDATA = $profileDirectory
     $env:APPDATA = $profileDirectory
-    [IO.File]::WriteAllText((Join-Path $profileDirectory '.claude.json'), '{"other":"keep"}')
+    $claudeOriginal = '{"other":"keep","lastSeen":"2026-11-12T01:02:03.1200000+02:00","empty":[],"values":[null,false,1]}'
+    [IO.File]::WriteAllText((Join-Path $profileDirectory '.claude.json'), $claudeOriginal)
     New-Item -ItemType Directory -Path (Join-Path $profileDirectory '.cursor'), (Join-Path $profileDirectory '.codex') | Out-Null
     [IO.File]::WriteAllText((Join-Path $profileDirectory '.codex/config.toml'), '# keep')
     $legacyScripts = Join-Path $profileDirectory '.ccp-mcp/venv/Scripts'
     New-Item -ItemType Directory -Force -Path $legacyScripts | Out-Null
     [IO.File]::WriteAllText((Join-Path $legacyScripts 'python.exe'), 'legacy interpreter')
     [IO.File]::WriteAllText((Join-Path $legacyScripts 'ccp-mcp-server.exe'), 'legacy bridge')
+    $script:LatestStableTag = 'v0.2.0-rc.1'
+    $downloadsBefore = $script:DownloadUrls.Count
+    try {
+        Confirm-TestFailure { Install-CcpWindows stable '' $InstallDir } 'A mislabeled release candidate was installed as stable.'
+        Confirm-TestCondition ($script:LastFailureMessage.Contains('No valid stable release')) 'The mislabeled release was not rejected by stable discovery.'
+        Confirm-TestCondition ($script:DownloadUrls.Count -eq $downloadsBefore -and -not (Test-Path -LiteralPath $InstallDir)) 'Rejected stable discovery downloaded or installed files.'
+    } finally { $script:LatestStableTag = 'v0.2.0' }
     $script:RejectAttestation = $true
     Confirm-TestFailure { Install-CcpWindows stable '' $InstallDir } 'Full flow ignored attestation failure.'
     Confirm-TestCondition (-not (Test-Path -LiteralPath $InstallDir)) 'Failed verification created the install directory.'
@@ -671,11 +689,15 @@ try {
     Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $InstallDir 'ccp-client.exe')) 'Client was not installed.'
     $claude = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $profileDirectory '.claude.json') -Raw | ConvertFrom-Json
     Confirm-TestCondition ($claude.other -eq 'keep') 'Unrelated host setting was lost.'
+    Confirm-TestCondition (@($claude.empty).Count -eq 0 -and $claude.values.Count -eq 3 -and $null -eq $claude.values[0] -and $claude.values[1] -is [bool] -and -not $claude.values[1] -and $claude.values[2] -eq 1) 'Untouched JSON array or primitive values changed.'
+    $claudeText = Get-Content -Encoding UTF8 -LiteralPath (Join-Path $profileDirectory '.claude.json') -Raw
+    $lastSeen = [regex]::Match($claudeText, '"lastSeen"\s*:\s*"([^"]*)"').Groups[1].Value
+    Confirm-TestCondition ($lastSeen -ceq '2026-11-12T01:02:03.1200000+02:00') 'An untouched ISO timestamp string was reformatted.'
     Confirm-TestCondition ($claude.mcpServers.ccp.env.CCP_CLIENT_BIN -eq (Get-CcpInstallState $InstallDir).mcp_client) 'MCP client path was not encoded correctly.'
     Confirm-TestCondition ($script:NativeCalls.Executable -contains 'codex') 'Codex MCP command was not called.'
     $claudeBackup = @(Get-ChildItem -LiteralPath $profileDirectory -Force -Filter '.claude.json.backup.*')
     Confirm-TestCondition ($claudeBackup.Count -eq 1) 'Claude config backup was not written.'
-    Confirm-TestCondition (([IO.File]::ReadAllText($claudeBackup[0].FullName)) -eq '{"other":"keep"}') 'Claude backup differs from the original bytes.'
+    Confirm-TestCondition (([IO.File]::ReadAllText($claudeBackup[0].FullName)) -eq $claudeOriginal) 'Claude backup differs from the original bytes.'
     $codexDirectory = Join-Path $profileDirectory '.codex'
     $codexPath = Join-Path $codexDirectory 'config.toml'
     $codexBackup = @(Get-ChildItem -LiteralPath $codexDirectory -Filter 'config.toml.backup.*')

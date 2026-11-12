@@ -218,7 +218,7 @@ function Get-CcpReleaseTag {
     if ($ReleaseChannel -eq 'stable') {
         $release = Get-CcpReleaseResponse -Uri "$api/latest"
         if ($release.draft -or $release.prerelease -or
-            $release.tag_name -cnotmatch '^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+            $release.tag_name -cnotmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
             throw 'No valid stable release is available.'
         }
         return $release.tag_name
@@ -851,6 +851,38 @@ function Set-CcpCodexConfig {
     }
 }
 
+function ConvertFrom-CcpConfigToken {
+    param($Token)
+    switch ($Token.get_Type().ToString()) {
+        'Object' {
+            $properties = [ordered]@{}
+            foreach ($property in $Token.Properties()) { $properties.Add($property.Name, (ConvertFrom-CcpConfigToken $property.Value)) }
+            return [PSCustomObject]$properties
+        }
+        'Array' {
+            $values = [Collections.Generic.List[object]]::new()
+            foreach ($child in $Token.Children()) { $values.Add((ConvertFrom-CcpConfigToken $child)) }
+            return ,$values.ToArray()
+        }
+        default { return $Token.get_Value() }
+    }
+}
+
+function ConvertFrom-CcpConfigJson {
+    param([string]$Json)
+    # Windows PowerShell keeps ISO strings; Core introduced timestamp coercion.
+    if ($PSVersionTable.PSVersion.Major -lt 6) { return ($Json | ConvertFrom-Json) }
+    if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
+        return ($Json | ConvertFrom-Json -DateKind String)
+    }
+    # Older Core versions already bundle Json.NET, but lack -DateKind String.
+    $settings = [Newtonsoft.Json.JsonSerializerSettings]::new()
+    $settings.DateParseHandling = [Newtonsoft.Json.DateParseHandling]::None
+    $settings.MaxDepth = 100
+    $token = [Newtonsoft.Json.JsonConvert]::DeserializeObject($Json, $settings)
+    return (ConvertFrom-CcpConfigToken $token)
+}
+
 function Set-CcpJsonHost {
     [CmdletBinding(SupportsShouldProcess)]
     param([string]$Path, [string]$McpCommand, [string]$Client, [string]$PreviousMcp = '', [string]$PreviousClient = '')
@@ -858,7 +890,7 @@ function Set-CcpJsonHost {
     Confirm-CcpPath $Path -AllowMissing
     $config = [PSCustomObject]@{}
     if (Test-Path -LiteralPath $Path) {
-        $config = Get-Content -Encoding UTF8 -LiteralPath $Path -Raw | ConvertFrom-Json
+        $config = ConvertFrom-CcpConfigJson (Get-Content -Encoding UTF8 -LiteralPath $Path -Raw)
     }
     if (-not $config.PSObject.Properties['mcpServers']) {
         $config | Add-Member -NotePropertyName mcpServers -NotePropertyValue ([PSCustomObject]@{})
