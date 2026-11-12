@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "ccp-tests"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -222,7 +222,7 @@ dependencies = [
 
 [[package]]
 name = "ccp-transport"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "futures-util",
  "tokio",
@@ -294,7 +294,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "client"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1102,7 +1102,7 @@ dependencies = [
 
 [[package]]
 name = "protocol"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "base64 0.22.1",
  "bincode",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "server"
-version = "0.2.0-rc.1"
+version = "0.2.0-rc.2"
 dependencies = [
  "anyhow",
  "ccp-transport",

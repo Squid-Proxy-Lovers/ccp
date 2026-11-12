@@ -392,7 +392,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn(name, (self.dist / "SHA256SUMS").read_text())
         nightly.verify(self.dist, SHA)
         with patch.object(self.contract.subprocess, "run"):
-            result = self.contract.verify(self.dist, "stable", "v0.2.0", "windows-x86_64")
+            result = self.contract.verify(self.dist, self.channel, self.tag, "windows-x86_64")
         self.assertEqual(result.client_assets("windows-x86_64")[0], name)
         platforms = tuple(p for p in self.contract.PLATFORMS if p != "windows-x86_64")
         assets = tuple(a for a in self.contract.ASSETS if a != name)
@@ -403,7 +403,7 @@ class ReleaseContractTests(unittest.TestCase):
             patch.object(sys.modules[self.contract.decode.__module__], "ASSETS", assets),
             patch.object(self.contract.subprocess, "run"),
         ):
-            older = self.contract.verify(self.dist, "stable", "v0.2.0", "linux-x86_64")
+            older = self.contract.verify(self.dist, self.channel, self.tag, "linux-x86_64")
             self.assertEqual(older.value(), self.manifest.value())
             self.assertNotIn(name, older.artifacts)
             self.assertIn(name, older.unknown_artifacts)

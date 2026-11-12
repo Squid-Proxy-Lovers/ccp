@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0-rc.2] - 2026-11-12
+
+This release candidate adds the Windows client and PowerShell installer since
+rc.1. The release includes `ccp-client-windows-x86_64.exe`, its checksum in
+`SHA256SUMS`, and the release manifest and build provenance.
+
+Windows RC testers must download the exact `.exe` from the `v0.2.0-rc.2`
+release and verify it against that release's `SHA256SUMS`. Follow the
+[release verification guide](docs/client-release-bundles.md#install-a-release-candidate)
+for manifest and provenance verification. The one-line PowerShell installer
+follows stable releases only; it does not install this RC. Use the matching
+`ccp-mcp.tar.gz` archive from the rc.2 release for MCP.
+
 ## [0.2.0-rc.1] - 2026-11-12
 
 This is a release candidate for 0.2.0, not a stable release. See the
