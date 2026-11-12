@@ -36,7 +36,7 @@ class AttributionTextTests(unittest.TestCase):
             "Co-Authored-By: Claude Martin <claude.martin@example.com>\n"
             "Reviewed-by: Jane Developer <jane@example.com>\n"
         )
-        self.assertEqual(self.checker.text_findings(message, commit=True), [])
+        self.assertEqual(self.checker.text_findings(message), [])
         self.assertEqual(self.checker.text_findings("Providers:\nProvider: Codex"), [])
         self.assertEqual(
             self.checker.text_findings("![Cursor screenshot](https://example.com/a.png)"), []
@@ -47,17 +47,16 @@ class AttributionTextTests(unittest.TestCase):
             "cO-aUtHoReD-bY: cLaUdE <noreply@anthropic.com>",
             "Co-Authored-By:\n\tClaude Code <noreply@anthropic.com>",
             "Assisted-by: Claude\n Code",
-            "Custom-Trailer: OpenAI Codex",
+            "Assisted-by: implementation with Copilot",
+            "Reviewed-by: OpenAI Codex",
             "Signed-off-by: Cursor Agent <cursoragent@example.com>",
-            "Custom-Trailer: OpenAI Codex\n\n",
+            "Assisted-by: OpenAI Codex\n\n",
             "Co-Authored-By: OpenAI Codex <other@example.com>",
             "Co-Authored-By: Claude Sonnet 4.5 <other@example.com>",
             "Co-Authored-By \t: Claude <noreply@anthropic.com>",
         ):
             with self.subTest(trailer=trailer):
-                self.assertTrue(
-                    self.checker.text_findings("fix: repair\n\n" + trailer, commit=True)
-                )
+                self.assertTrue(self.checker.text_findings("fix: repair\n\n" + trailer))
 
     def test_generated_lines_and_linked_badges(self):
         for text in (
@@ -80,7 +79,6 @@ class AttributionTextTests(unittest.TestCase):
         self.assertEqual(
             self.checker.text_findings(
                 "chore(deps): refresh\n\nSigned-off-by: dependabot[bot] <support@github.com>\n",
-                commit=True,
             ),
             [],
         )
@@ -94,7 +92,63 @@ class AttributionTextTests(unittest.TestCase):
         self.assertFalse(
             self.checker.identity_problem("Claude Martin", "claude@example.com", "author")
         )
-        self.assertFalse(self.checker.identity_problem("Jane Human", "jane@openai.com", "author"))
+        self.assertTrue(self.checker.identity_problem("Jane Human", "jane@openai.com", "author"))
+
+    def test_model_names_are_rejected_with_unrecognized_mailboxes(self):
+        for name, email in (
+            ("Claude 3.5 Sonnet", "x@example.com"),
+            ("Claude Fable 5.2", "me@example.com"),
+            ("Gemini Code Assist", "x@google.com"),
+            ("GPT-5", "noreply@openai.com"),
+            ("GPT-5", "x@example.com"),
+            ("GPT5.1 Mini", "x@example.com"),
+            ("Gemini 2.5 Pro", "x@example.com"),
+            ("Anthropic Claude 3.5 Sonnet", "x@example.com"),
+            ("Claude Futurefamily 6.1", "x@example.com"),
+            ("devin-ai[bot]", "x@example.com"),
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(self.checker.text_findings(f"Co-Authored-By: {name} <{email}>"))
+                self.assertTrue(self.checker.identity_problem(name, email, "author"))
+                self.assertTrue(self.checker.identity_problem(name, email, "committer"))
+                self.assertTrue(self.checker.text_findings(f"Assisted-by: {name}"))
+
+    def test_vendor_domains_are_rejected_for_trailers_and_both_git_identities(self):
+        for email in ("person@anthropic.com", "new-mailbox@openai.com", "Person@OpenAI.COM"):
+            with self.subTest(email=email):
+                self.assertTrue(self.checker.identity_problem("Test Person", email, "author"))
+                self.assertTrue(self.checker.identity_problem("Test Person", email, "committer"))
+                self.assertTrue(self.checker.text_findings(f"Signed-off-by: Test Person <{email}>"))
+                self.assertTrue(self.checker.text_findings(f"Assisted-by: {email}"))
+
+    def test_human_names_remain_valid_without_model_or_version_words(self):
+        for name, email in (
+            ("Claude Monet", "claude@monet.example"),
+            ("Devin Smith", "devin@smith.example"),
+            ("Human Contributor", "12345+human@users.noreply.github.com"),
+            ("Test Person", "person@anthropic.com.example"),
+            ("Test Person", "person@notopenai.com"),
+        ):
+            with self.subTest(name=name, email=email):
+                self.assertEqual(
+                    self.checker.text_findings(f"Co-Authored-By: {name} <{email}>"), []
+                )
+                self.assertEqual(self.checker.text_findings(f"Reviewed-by: {name}"), [])
+                self.assertFalse(self.checker.identity_problem(name, email, "author"))
+                self.assertFalse(self.checker.identity_problem(name, email, "committer"))
+
+    def test_non_attribution_footers_do_not_turn_product_mentions_into_credits(self):
+        for footer in (
+            "Refs: codex review notes",
+            "Custom-Trailer: OpenAI Codex",
+            "Custom-Trailer: OpenAI Codex\n\n",
+            "BREAKING CHANGE: Claude profiles now require explicit configuration",
+            "Refs: codex review notes\n Co-Authored-By: Claude Code",
+        ):
+            with self.subTest(footer=footer):
+                message = "fix: repair\n\n" + footer
+                self.assertEqual(self.checker.text_findings(message), [])
+                self.assertEqual(self.checker.text_findings(message + "\n\n"), [])
 
     def test_tool_names_mailboxes_and_bot_aliases(self):
         for name, email in (
