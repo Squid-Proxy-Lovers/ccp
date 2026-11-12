@@ -29,8 +29,14 @@ impl ServerState {
             .with_context(|| {
                 format!("client certificate '{target_client_common_name}' not found")
             })?;
-        let mut revoked = self.revoked_cert_common_names.write().await;
-        let newly_revoked = revoked.insert(target_client_common_name.to_string());
+        // Mark revoked and release the lock immediately: every access check
+        // on the server takes this lock to read, so holding it across the
+        // SQLite persist below would stall all of them behind this call.
+        let newly_revoked = self
+            .revoked_cert_common_names
+            .write()
+            .await
+            .insert(target_client_common_name.to_string());
         grants.remove(target_client_common_name);
 
         if let Err(error) = super::super::database::persist_revoked_cert(
@@ -41,7 +47,10 @@ impl ServerState {
         ) {
             grants.insert(target_client_common_name.to_string(), grant);
             if newly_revoked {
-                revoked.remove(target_client_common_name);
+                self.revoked_cert_common_names
+                    .write()
+                    .await
+                    .remove(target_client_common_name);
             }
             return Err(error);
         }

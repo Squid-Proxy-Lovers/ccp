@@ -13,8 +13,8 @@ use anyhow::{Context, bail};
 use once_cell::sync::Lazy;
 use protocol::{
     AppendMetadata, AppendResult, ClientRequest, DeleteResult, DeletedEntrySummary, EntrySummary,
-    ErrorCode, ErrorResponse, MessageEntry, MessageHistoryEntry, RestoreResult, SearchContextMatch,
-    ServerResponse, decode, encode,
+    ErrorCode, ErrorResponse, MessageEntry, MessageHistoryEntry, RestoreResult, RevokeCertResult,
+    SearchContextMatch, ServerResponse, decode, encode,
 };
 use rcgen::{CertificateParams, DnType, KeyPair};
 use reqwest::StatusCode;
@@ -756,6 +756,20 @@ impl EnrolledClient {
             })
             .await?;
         let ServerResponse::Restored(result) = response else {
+            return Err(extract_protocol_error(response));
+        };
+        Ok(result)
+    }
+
+    pub async fn revoke(&self, target_common_name: &str) -> anyhow::Result<RevokeCertResult> {
+        let mut connection = self.connect().await?;
+        let response = connection
+            .request(ClientRequest::RevokeClientCert {
+                session_id: self.session_id,
+                client_common_name: target_common_name.to_string(),
+            })
+            .await?;
+        let ServerResponse::CertRevoked(result) = response else {
             return Err(extract_protocol_error(response));
         };
         Ok(result)
