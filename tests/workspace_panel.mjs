@@ -2683,16 +2683,16 @@ test('round 11: copy then Refresh and lock retain exact recovery and beforeunloa
   assert.match(app.recoveryText(), /ONLY RECOVERABLE TEXT/); assert.equal(unload(), true);
 });
 test('round 11: lock recovery is a human label and text without internal fields', () => {
-  const parts = draftsRecoveryParts({'context-recovery:workspace:one': {label: 'Entry “Selected entry” — unsaved text', text: 'EXACT BODY', copied: 'true'}});
-  assert.deepEqual(parts, ['Entry “Selected entry” — unsaved text\nEXACT BODY']);
+  const parts = draftsRecoveryParts({'context-recovery:workspace:one': {label: 'Unsaved text for entry “Selected entry”', text: 'EXACT BODY', copied: 'true'}});
+  assert.deepEqual(parts, ['Unsaved text for entry “Selected entry”\nEXACT BODY']);
   assert.deepEqual(draftsRecoveryParts({'context-recovery:w:empty': {label: 'empty', copied: 'true'}}), []);
 });
 test('round 11: capture names an existing or new entry', async t => {
   const {app} = realAppHarness(t);
   app.setDraft('existing text'); captureContextRecovery(app, 'context-recovery:w:one', 'First item');
   app.setDraft(JSON.stringify({entry: {name: 'New item', text: 'new text'}})); captureContextRecovery(app, 'context-recovery:w:two');
-  assert.equal(app.drafts['context-recovery:w:one'].label, 'Entry “First item” — unsaved text');
-  assert.equal(app.drafts['context-recovery:w:two'].label, 'Entry “New item” — unsaved text');
+  assert.equal(app.drafts['context-recovery:w:one'].label, 'Unsaved text for entry “First item”');
+  assert.equal(app.drafts['context-recovery:w:two'].label, 'Unsaved text for entry “New item”');
 });
 test('round 11 M12: two production retirement callbacks keep separate exact snapshots', async t => {
   const {app} = realAppHarness(t), api = app.forView(); let id = 0;

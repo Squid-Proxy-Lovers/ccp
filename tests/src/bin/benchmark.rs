@@ -73,7 +73,7 @@ async fn run_benchmark_suite(config: &BenchmarkConfig) -> anyhow::Result<Benchma
 
     for (idx, scenario) in scenarios.into_iter().enumerate() {
         eprint!(
-            "[{}/{}] {} — enrolling {} clients... ",
+            "[{}/{}] {}: enrolling {} clients... ",
             idx + 1,
             total,
             scenario.name,
