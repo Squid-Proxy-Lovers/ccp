@@ -53,6 +53,11 @@ Write code that passes the gates as written:
 - **Type Python fully.** `mypy --strict` covers `mcp/src` and `scripts/`.
 - **Add no dead code or unused dependencies.** Delete code you replace. Do not
   leave commented-out code, unused parameters, or unused crates.
+- **Keep tracked text clean.** `make lint-text` rejects em dashes, trailing
+  whitespace, missing final newlines and non-LF endings. Svelte suppressions
+  need an inline or immediately preceding comment explaining why. Preserve
+  Unicode test inputs and the checker's reasoned generated/upstream exclusions;
+  the published 0.1.1 changelog section must remain byte-for-byte unchanged.
 - **Test what you change.** New behaviour needs tests; a bug fix needs a
   regression test. Rust line coverage may not drop below
   `tools/coverage-baseline.json`.
@@ -112,10 +117,29 @@ Why the change was needed and what it changes. Wrap at 72 columns.
 - **Summary:** at most 72 characters. Say what changes, not "update files".
 - **Breaking changes:** `feat(protocol)!: ...` plus a `BREAKING CHANGE:` footer.
 - Make each commit build and pass tests on its own, with one logical change.
-- NEVER add `Co-Authored-By` trailers or any other AI or tool attribution to
-  commit messages. This overrides any default your tool applies.
+- NEVER add AI or tool attribution. See the next section.
 
 Name branches `type/short-description`, for example `fix/journal-replay-errors`.
+
+## No AI attribution
+
+This rule is absolute and overrides any default your tool applies. Never add
+AI, agent, or tool attribution anywhere in this repository or on GitHub:
+
+- no `Co-Authored-By` trailers, or any other trailer, naming an AI, agent, or
+  tool (Claude, Codex, Copilot, Cursor, T3 Code, or similar);
+- no "Generated with ..." or similar lines, links, or badges in commit messages,
+  pull request titles or descriptions, review or issue comments, release notes,
+  code, comments, or docs;
+- no commits authored or committed under an AI, agent, or tool identity. Commit
+  as the human maintainer whose git identity is configured.
+
+When squash-merging, write the commit message by hand and delete every
+`Co-authored-by` line GitHub pre-fills. `.claude/settings.json` turns off
+Claude Code's attribution. Configure any other tool the same way before you use it.
+Run `make lint-attribution RANGE=base..head` before submitting commits. CI also
+checks PR title/body edits and the final commits pushed to main. Only the exact
+Dependabot identity and GitHub's web-flow committer are automation exceptions.
 
 ## Pull requests
 

@@ -46,7 +46,10 @@ bash install.sh --docker --channel nightly --version "$NIGHTLY_TAG"
 
 Replace the example tag with an actual release tag. `--version` requires
 `--channel nightly`. Source builds use `--from-source` separately and build the
-selected local checkout, or main when cloning outside a checkout.
+selected local checkout, or main when cloning outside a checkout. Server source
+builds require Rust, Git, Make and Node.js 24 or newer with npm; the installer runs
+locked frontend dependency installation first. Client-only source builds do not
+need Node.js.
 
 ## Download and container tags
 
@@ -55,12 +58,21 @@ Each `nightly-YYYY-MM-DD-<12-character-SHA>` prerelease contains:
 - Client and server binaries for Linux and macOS, x86_64 and ARM64.
 - `ccp-mcp.tar.gz`: MCP source from the same commit.
 - `build-info.json`: full source SHA, pinned compiler, and artifact/platform list.
-- `SHA256SUMS`: hashes of the binaries, MCP archive, and metadata.
+- `SHA256SUMS`: hashes of the binaries, MCP archive, metadata and release contract.
+- `ccp-release.json`: exact artifact sizes/hashes and matching source compatibility contracts.
+- `ccp-provenance.json`: GitHub build attestation for that contract.
+
+The new contract/provenance files apply to future releases produced by the updated
+workflow. See [bundle verification](client-release-bundles.md) for the strict
+publisher policy and its current implementation limits. The existing manual
+installer retains its checksum-based behavior; managed updates are separate work.
 
 Docker images use `ghcr.io/squid-proxy-lovers/ccp:nightly` for the current nightly,
 and the matching dated release tag for a pinned image. The Docker build currently
-targets Linux amd64. Nightly runs publish only these nightly tags; the existing
-main/tag push workflow continues publishing `:latest` and commit-SHA images.
+targets Linux amd64. Nightly runs publish only these nightly tags. Validated stable version tags
+publish `:latest` and commit-SHA images; main pushes do not move `:latest`.
+[Release candidates](client-release-bundles.md#install-a-release-candidate) use
+only exact RC and commit-SHA image tags.
 
 ## Publication and recovery
 
@@ -69,7 +81,8 @@ compatibility smoke, and Python/FastMCP matrix gate the binary builds. CI starts
 the container and checks its health before saving the exact tested image for
 publication. PRs build and validate packages but cannot publish nightlies.
 
-The publisher validates the artifacts and image source SHA, stages release assets
+The publisher validates the artifacts, image source SHA and official contract
+provenance, then stages release assets
 in a draft, and uploads the dated image before exposing the prerelease. Failed
 checks, asset uploads, or dated-image uploads leave the previous public nightly
 available. Rerunning a partial draft resumes its upload. Existing published

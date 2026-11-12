@@ -22,7 +22,7 @@ impl ServerState {
         book_name: &str,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<(MessageEntry, Option<DuplicateWarning>)> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let _mutation = self.native_mutation(session_id, auth_context).await?;
         if name.trim().is_empty() {
             bail!("name is required for add_entry");
         }

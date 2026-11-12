@@ -17,11 +17,16 @@ binary protocol over mutually authenticated TLS (mTLS) for data operations.
 
 The [root README](../README.md#install) covers binary and Docker installation.
 Binaries install to `~/.local/bin`; change this with `--install-dir`. For an explicit
-source build, install Rust through rustup, Git, and Make, then run:
+source build, install Rust through rustup, Git, Make, and Node.js 24 or newer
+with npm, then run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --from-source
 ```
+
+The source installer installs locked frontend build dependencies before compiling
+the server. A client-only source install (`--client --from-source`) builds only the
+client and does not require Node.js. Installed binaries do not require Node.js.
 
 For a native local server, keep the process running while clients use it:
 
@@ -194,7 +199,14 @@ searches use the in-memory state.
 
 SQLite stores sessions, token records, issued/revoked certificates, active and
 deleted entries, and history. A journal records mutations for replay. The server
-loads state at startup and writes snapshots during shutdown. Back up the complete
+loads state at startup and writes snapshots during shutdown. Native entry deletion,
+shelf deletion, and import also take an exclusive mutation gate and write a full
+pre-change SQLite snapshot before the journal writer acknowledges its checkpoint.
+Each of those operations therefore rewrites the database and pauses other native
+mutations while it runs. Restore and certificate revocation use the gate without
+requiring a full checkpoint. Replayed appends with an existing nonempty operation
+ID are not applied twice; older empty IDs remain separate records. This is not
+an fsync or power-loss durability guarantee. Back up the complete
 data directory, including CA material, after a clean shutdown.
 
 ### Message pack model

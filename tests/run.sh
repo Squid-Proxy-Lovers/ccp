@@ -75,7 +75,7 @@ expect_contains() {
     if echo "$haystack" | grep -qi "$needle"; then
         pass "$desc"
     else
-        fail "$desc — expected '$needle' in output"
+        fail "$desc: expected '$needle' in output"
     fi
 }
 
@@ -84,7 +84,7 @@ expect_not_contains() {
     if ! echo "$haystack" | grep -qi "$needle"; then
         pass "$desc"
     else
-        fail "$desc — did not expect '$needle' in output"
+        fail "$desc: did not expect '$needle' in output"
     fi
 }
 
@@ -282,7 +282,7 @@ if [ -n "$ENTRY_KEY" ]; then
     LIST_RESTORED=$("$CLIENT_BIN" list integration-test 2>&1)
     expect_contains "entry back after restore" "$LIST_RESTORED" "day1"
 else
-    skip "restore — could not extract entry_key from delete output"
+    skip "Could not test restore: no entry_key in delete output"
 fi
 
 # ── Delete shelf ─────────────────────────────────────────────────────────────
@@ -325,7 +325,7 @@ else
     fail "export bundle missing sha256 hash"
 fi
 
-# scoped export — shelf only
+# Export only the selected shelf.
 SHELF_EXPORT="$WORK_DIR/export-shelf.droplet"
 expect_success "export shelf" "$CLIENT_BIN" export integration-test --shelf research --output "$SHELF_EXPORT"
 if python3 -c "import json; b=json.load(open('$SHELF_EXPORT')); assert b['selector']['scope']['Shelf']['shelf']=='research'" 2>/dev/null; then
@@ -334,7 +334,7 @@ else
     fail "shelf export scope incorrect"
 fi
 
-# scoped export — book
+# Export only the selected book.
 BOOK_EXPORT="$WORK_DIR/export-book.droplet"
 expect_success "export book" "$CLIENT_BIN" export integration-test --shelf research --book findings --output "$BOOK_EXPORT"
 if python3 -c "import json; b=json.load(open('$BOOK_EXPORT')); assert b['selector']['scope']['Book']['book']=='findings'" 2>/dev/null; then
@@ -388,11 +388,11 @@ section "Temporal queries"
 # get the current timestamp to use as "after all appends"
 CURRENT_TS=$(python3 -c "import time; print(int(time.time()))")
 
-# get entry at current time — should have all content
+# At the current timestamp, the entry should contain all content.
 ENTRY_NOW=$("$CLIENT_BIN" get-entry-at integration-test day1 --at "$CURRENT_TS" --shelf research --book findings 2>&1)
 expect_contains "entry at now has content" "$ENTRY_NOW" "initial content"
 
-# get entry at timestamp 0 — should have no content (no appends before epoch)
+# At timestamp 0, the entry should be empty because no appends predate the epoch.
 ENTRY_OLD=$("$CLIENT_BIN" get-entry-at integration-test day1 --at "0" --shelf research --book findings 2>&1)
 expect_not_contains "entry at epoch has no appended content" "$ENTRY_OLD" "appended follow-up"
 
@@ -449,7 +449,7 @@ if [ -n "$REVOKE_CN" ]; then
         fail "revoked client still has access"
     fi
 else
-    skip "revocation — could not extract client CN"
+    skip "Could not test revocation: no client CN was extracted"
 fi
 
 # ── Server health ────────────────────────────────────────────────────────────

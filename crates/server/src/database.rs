@@ -4,6 +4,9 @@
 
 use super::*;
 
+#[path = "database/replay.rs"]
+mod replay;
+
 impl ServerState {
     pub async fn load_from_storage(journal: Arc<JournalHandle>) -> anyhow::Result<Self> {
         let connection = open_sqlite_connection()?;
@@ -22,21 +25,35 @@ impl ServerState {
             cert_grants: RwLock::new(cert_grants),
             revoked_cert_common_names: RwLock::new(revoked_cert_common_names),
             append_locks: Mutex::new(HashMap::new()),
+            native_checkpoint: RwLock::new(()),
             journal,
         };
 
-        for entry in load_entries(state.journal.path())? {
-            state.apply_journal_entry(entry).await;
+        let entries = load_entries(state.journal.path())?;
+        let mut replay = replay::ReplayProgress::from_entries(&entries);
+        for (index, entry) in entries.into_iter().enumerate() {
+            if replay.accepts(index, &entry) {
+                state.apply_journal_entry(entry, &mut replay).await;
+            }
+        }
+
+        // SQLite and journal replay defer derived caches until all records apply.
+        for session in state.sessions.write().await.values_mut() {
+            session.finish_bulk_load();
         }
 
         Ok(state)
     }
 
     pub async fn persist_snapshot_to_sqlite(&self) -> anyhow::Result<()> {
+        let _checkpoint = self.native_checkpoint.write().await;
         persist_snapshot(Snapshot::capture(self).await)
     }
 
     pub fn try_persist_snapshot_to_sqlite(&self) -> anyhow::Result<bool> {
+        let Ok(_checkpoint) = self.native_checkpoint.try_write() else {
+            return Ok(false);
+        };
         let Some(snapshot) = Snapshot::try_capture(self) else {
             return Ok(false);
         };
@@ -44,11 +61,7 @@ impl ServerState {
         Ok(true)
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "legacy function predating the size and complexity limits; split it before extending"
-    )]
-    async fn apply_journal_entry(&self, entry: JournalEntry) {
+    async fn apply_journal_entry(&self, entry: JournalEntry, replay: &mut replay::ReplayProgress) {
         match entry {
             JournalEntry::AuthTokenUsed {
                 token_hash,
@@ -64,25 +77,7 @@ impl ServerState {
                     grant.last_used_at = Some(last_used_at);
                 }
             }
-            JournalEntry::IssuedCert {
-                session_id,
-                common_name,
-                access_level,
-                cert_pem,
-                created_at,
-                expires_at,
-            } => {
-                self.cert_grants.write().await.insert(
-                    common_name,
-                    CertGrant {
-                        session_id,
-                        access_level,
-                        cert_pem,
-                        created_at,
-                        expires_at,
-                    },
-                );
-            }
+            record @ JournalEntry::IssuedCert { .. } => self.replay_issued(record, replay).await,
             JournalEntry::AddShelf {
                 session_id,
                 shelf_name,
@@ -90,7 +85,7 @@ impl ServerState {
             } => {
                 if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
                     session.add_shelf(&shelf_name, Some(&description));
-                    session.refresh_library_metadata(&shelf_name, None);
+                    // Entry summaries pick up descriptions in finish_bulk_load.
                 }
             }
             JournalEntry::AddBook {
@@ -105,78 +100,17 @@ impl ServerState {
                         reason = "pre-existing replay behaviour: an already-present book is not a replay failure"
                     )]
                     let _ = session.add_book(&shelf_name, &book_name, Some(&description));
-                    session.refresh_library_metadata(&shelf_name, Some(&book_name));
+                    // Entry summaries pick up descriptions in finish_bulk_load.
                 }
             }
-            JournalEntry::AddEntry {
-                session_id,
-                name,
-                description,
-                labels,
-                context,
-                shelf_name,
-                book_name,
-                created_at,
-                updated_at,
-            } => {
-                if let Some(session) = self.sessions.write().await.get_mut(&session_id) {
-                    let (path, key) = entry_path_for(&name, Some(&shelf_name), Some(&book_name));
-                    let history = session
-                        .entries
-                        .get(&key)
-                        .map(|entry| entry.history.clone())
-                        .unwrap_or_default();
-                    let entry = session.build_entry(
-                        path,
-                        description,
-                        labels,
-                        context,
-                        created_at,
-                        updated_at,
-                        history,
-                    );
-                    session.insert_entry(key, entry);
-                }
-            }
+            record @ JournalEntry::AddEntry { .. } => self.replay_add(record).await,
             // Transfer journal entries are audit records only; state is fully
             // captured in the SQLite snapshot so replay is a no-op.
             JournalEntry::TransferExported { .. }
             | JournalEntry::TransferImported { .. }
             | JournalEntry::TransferImportFailed { .. } => {}
 
-            JournalEntry::AppendEntry {
-                session_id,
-                name,
-                operation_id,
-                client_common_name,
-                agent_name,
-                host_name,
-                reason,
-                appended_content,
-                shelf_name,
-                book_name,
-                created_at,
-            } => {
-                let mut sessions = self.sessions.write().await;
-                let Some(session) = sessions.get_mut(&session_id) else {
-                    return;
-                };
-                let (_, key) = entry_path_for(&name, Some(&shelf_name), Some(&book_name));
-                let Some(entry) = session.entries.get_mut(&key) else {
-                    return;
-                };
-                SessionCache::refresh_appended_context(entry, &appended_content);
-                entry.updated_at = created_at.clone();
-                entry.history.push(MessageHistoryEntry {
-                    operation_id,
-                    client_common_name,
-                    agent_name,
-                    host_name,
-                    reason,
-                    appended_content,
-                    created_at,
-                });
-            }
+            record @ JournalEntry::AppendEntry { .. } => self.replay_append(record, replay).await,
         }
     }
 }
@@ -259,6 +193,10 @@ pub(super) fn persist_transfer_log(
     created_at: &str,
     created_by: &str,
 ) -> anyhow::Result<()> {
+    #[cfg(test)]
+    if outcome.starts_with("rolled_back:") {
+        super::test_hooks::checkpoint_blocking("import_bundle::failure_log");
+    }
     let connection = open_sqlite_connection()?;
     connection
         .execute(
@@ -375,6 +313,8 @@ pub(super) fn persist_revoked_cert(
     grant: &CertGrant,
     revoked_at: &str,
 ) -> anyhow::Result<()> {
+    #[cfg(test)]
+    super::test_hooks::checkpoint_blocking("revoke_client_cert::persist");
     let mut connection = open_sqlite_connection()?;
     let transaction = connection
         .transaction()
@@ -851,7 +791,7 @@ fn load_message_packs(
                 updated_at,
                 Vec::new(),
             );
-            session.insert_entry(key, entry);
+            session.insert_entry_deferred(key, entry);
         }
     }
     Ok(())

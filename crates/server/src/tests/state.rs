@@ -1925,3 +1925,9 @@ async fn import_v2_flushes_query_caches() {
         "context_query_cache should be flushed after import"
     );
 }
+
+#[path = "native_recovery.rs"]
+mod native_recovery;
+
+#[path = "native_bulk_load.rs"]
+mod native_bulk_load;

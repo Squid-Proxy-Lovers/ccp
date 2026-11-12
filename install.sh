@@ -10,7 +10,7 @@ set -uo pipefail
 
 REPO="squid-proxy-lovers/ccp"
 REPO_RAW="https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
+REPO_ROOT="$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
 INSTALL_DIR="${HOME}/.local/bin"
 SESSION_NAME="my-session"
 MODE="both"
@@ -18,6 +18,8 @@ FROM_SOURCE=false
 CHANNEL="stable"
 RELEASE_VERSION=""
 RELEASE_STAGE=""
+PUBLISH_STAGE=""
+MCP_CONFIG_WARNINGS=""
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -39,24 +41,24 @@ step()  { echo -e "${BOLD}${CYAN}>>>${RESET} $1"; }
 banner() {
     echo ""
     echo -e "${MAGENTA}${BOLD}"
-    cat <<'SQUID'                                                                                                                        
-                                        ██████████                                      
-                                    ████░░░░░░░░░░████                                  
-                                  ██░░░░░░░░░░░░░░░░░░██                                
-                                ██░░░░░░░░░░░░░░░░░░░░░░██                              
-                                ██░░░░░░░░░░░░░░░░░░░░░░██                              
-                              ██░░░░░░░░░░░░░░░░░░░░░░░░░░██                            
-                              ██░░        ░░░░░░        ░░██                            
-                              ██░░          ░░          ░░██                            
-                              ██░░    ████  ░░  ████    ░░██                            
-                              ██░░    ██████████████    ░░██                            
-                                ██░░  ░░██░░░░░░██░░  ░░██                              
-                              ██░░██░░██░░██████░░██░░██░░██                            
-                            ██░░░░██████░░██████░░██████░░░░██                          
-                            ██░░██░░░░████░░░░░░████░░░░██░░██                          
-                              ████░░░░██░░██████░░██░░░░░░██                            
-                              ██░░░░████░░░░██░░░░████░░░░██                            
-                                ██████░░░░██  ██░░░░██████                              
+    cat <<'SQUID'
+                                        ██████████
+                                    ████░░░░░░░░░░████
+                                  ██░░░░░░░░░░░░░░░░░░██
+                                ██░░░░░░░░░░░░░░░░░░░░░░██
+                                ██░░░░░░░░░░░░░░░░░░░░░░██
+                              ██░░░░░░░░░░░░░░░░░░░░░░░░░░██
+                              ██░░        ░░░░░░        ░░██
+                              ██░░          ░░          ░░██
+                              ██░░    ████  ░░  ████    ░░██
+                              ██░░    ██████████████    ░░██
+                                ██░░  ░░██░░░░░░██░░  ░░██
+                              ██░░██░░██░░██████░░██░░██░░██
+                            ██░░░░██████░░██████░░██████░░░░██
+                            ██░░██░░░░████░░░░░░████░░░░██░░██
+                              ████░░░░██░░██████░░██░░░░░░██
+                              ██░░░░████░░░░██░░░░████░░░░██
+                                ██████░░░░██  ██░░░░██████
                                       ████      ████
 
                     ╔════════════════════════════════════════════════╗
@@ -120,6 +122,7 @@ fi
 
 cleanup_release() {
     if [ -n "$RELEASE_STAGE" ]; then rm -rf "$RELEASE_STAGE"; fi
+    if [ -n "$PUBLISH_STAGE" ]; then rm -f "$PUBLISH_STAGE"; fi
 }
 trap cleanup_release EXIT
 
@@ -145,21 +148,76 @@ detect_platform() {
     echo "${os}-${arch}"
 }
 
+resolve_destination() {
+    local dest="$1" link hops=0 parent
+    while true; do
+        parent="$(CDPATH='' cd -P -- "${dest%/*}" && pwd -P)" || return 1
+        dest="$parent/${dest##*/}"
+        if [ ! -L "$dest" ]; then break; fi
+        if [ "$hops" -ge 40 ] || [ ! -f "$dest" ]; then
+            err "$dest is not a symlink to a regular file." >&2
+            return 1
+        fi
+        link="$(readlink "$dest")" || return 1
+        case "$link" in
+            /*) dest="$link" ;;
+            *) dest="$parent/$link" ;;
+        esac
+        hops=$((hops + 1))
+    done
+    if [ -e "$dest" ] && [ ! -f "$dest" ]; then
+        err "$dest exists and is not a regular file; refusing to overwrite it." >&2
+        return 1
+    fi
+    printf '%s\n' "$dest"
+}
+
+finish_publish() {
+    local dest="$1"
+    # mv can succeed by moving the stage *inside* a concurrently created
+    # directory. Verify the postcondition before claiming publication.
+    if ! mv -f "$PUBLISH_STAGE" "$dest" || [ ! -f "$dest" ] || [ -e "$dest/${PUBLISH_STAGE##*/}" ]; then
+        err "Could not publish $dest."
+        if [ -d "$dest" ]; then rm -f "$dest/${PUBLISH_STAGE##*/}"; fi
+        rm -f "$PUBLISH_STAGE"
+        PUBLISH_STAGE=""
+        return 1
+    fi
+    PUBLISH_STAGE=""
+}
+
+publish_file() {
+    local source="$1" dest mode="$3"
+    dest="$(resolve_destination "$2")" || return 1
+    PUBLISH_STAGE="$(mktemp "${dest}.stage.XXXXXX")" || return 1
+    if ! cp "$source" "$PUBLISH_STAGE" || ! chmod "$mode" "$PUBLISH_STAGE"; then
+        err "Could not stage $dest."
+        return 1
+    fi
+    finish_publish "$dest"
+}
+
+publish_binary() {
+    publish_file "$1" "$2" 0755
+}
+
 download_binary() {
-    local name="$1" dest="$2"
+    local name="$1" dest
     local platform
+    dest="$(resolve_destination "$2")" || return 1
     platform="$(detect_platform)"
     local url="https://github.com/${REPO}/releases/latest/download/${name}-${platform}"
 
     step "Downloading ${BOLD}$name${RESET}${CYAN} for $platform${RESET}"
+    PUBLISH_STAGE="$(mktemp "${dest}.download.XXXXXX")" || return 1
     local ok=false
     if command -v curl &>/dev/null; then
-        curl -fsSL "$url" -o "$dest" && ok=true
+        curl -fsSL "$url" -o "$PUBLISH_STAGE" && ok=true
     elif command -v wget &>/dev/null; then
-        wget -q "$url" -O "$dest" && ok=true
+        wget -q "$url" -O "$PUBLISH_STAGE" && ok=true
     else
         err "Need curl or wget to download binaries."
-        exit 1
+        return 1
     fi
 
     if [ "$ok" = false ]; then
@@ -169,9 +227,13 @@ download_binary() {
         echo ""
         info "Try installing from source instead:"
         echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
-        exit 1
+        return 1
     fi
-    chmod +x "$dest"
+    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE"; then
+        err "Could not publish $dest."
+        return 1
+    fi
+    finish_publish "$dest"
 }
 
 download_release_file() {
@@ -251,12 +313,9 @@ PY
     # Verify every component before replacing any installed binary.
     for asset in "ccp-client" "ccp-server"; do
         if [ "$asset" = "ccp-server" ] && [ "$MODE" = "client" ]; then continue; fi
-        if ! chmod +x "$RELEASE_STAGE/$asset-$platform" || ! cp "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset"; then
-            err "Could not install $asset."
-            exit 1
-        fi
+        publish_binary "$RELEASE_STAGE/$asset-$platform" "$INSTALL_DIR/$asset" || exit 1
     done
-    cp "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" || exit 1
+    publish_file "$RELEASE_STAGE/build-info.json" "$INSTALL_DIR/ccp-nightly.json" 0644 || exit 1
 }
 
 build_from_source() {
@@ -264,6 +323,17 @@ build_from_source() {
         err "Rust is not installed."
         info "Get it at ${BOLD}https://rustup.rs${RESET}"
         exit 1
+    fi
+
+    if [ "$MODE" != "client" ]; then
+        if ! command -v npm &>/dev/null || ! command -v node &>/dev/null; then
+            err "Server source builds require Node.js 24 or newer and npm."
+            exit 1
+        fi
+        if ! node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 24 ? 0 : 1)'; then
+            err "Server source builds require Node.js 24 or newer."
+            exit 1
+        fi
     fi
 
     local build_dir="$REPO_ROOT"
@@ -277,24 +347,47 @@ build_from_source() {
         fi
     fi
 
+    local packages=(-p client)
+    if [ "$MODE" != "client" ]; then
+        step "Installing locked frontend build dependencies..."
+        if ! npm ci --prefix "$build_dir/crates/server/web" --ignore-scripts; then
+            err "Frontend dependency installation failed. No binaries installed."
+            exit 1
+        fi
+        packages+=(-p server)
+    fi
     step "Building ${BOLD}release${RESET}${CYAN} binaries...${RESET}"
-    if ! (cd "$build_dir" && cargo build --release --locked); then
+    if ! (CDPATH='' cd -P -- "$build_dir" && cargo build --release --locked "${packages[@]}"); then
         err "Build failed."
         exit 1
     fi
 
-    mkdir -p "$INSTALL_DIR"
-    if [ "$MODE" = "client" ]; then
-        cp "$build_dir/target/release/client" "$INSTALL_DIR/ccp-client"
-        chmod +x "$INSTALL_DIR/ccp-client"
-    else
-        cp "$build_dir/target/release/server" "$INSTALL_DIR/ccp-server"
-        cp "$build_dir/target/release/client" "$INSTALL_DIR/ccp-client"
-        chmod +x "$INSTALL_DIR/ccp-server" "$INSTALL_DIR/ccp-client"
+    mkdir -p "$INSTALL_DIR" || return 1
+    if [ "$MODE" != "client" ]; then
+        publish_binary "$build_dir/target/release/server" "$INSTALL_DIR/ccp-server" || return 1
     fi
+    publish_binary "$build_dir/target/release/client" "$INSTALL_DIR/ccp-client" || return 1
 
     if [ "$build_dir" != "$REPO_ROOT" ]; then
-        rm -rf "$build_dir"
+        rm -rf "$build_dir" || return 1
+    fi
+}
+
+install_ccp_alias() {
+    local alias_path="$INSTALL_DIR/ccp"
+    if [ -e "$alias_path" ] || [ -L "$alias_path" ]; then
+        if [ -L "$alias_path" ] && [ "$(readlink "$alias_path")" = "ccp-client" ]; then
+            return
+        fi
+        warn "An existing ccp path was retained. Use ccp-client for CCP."
+        return
+    fi
+    if command -v ccp &>/dev/null; then
+        warn "An existing ccp command was retained. Use ccp-client for CCP."
+        return
+    fi
+    if ! ln -s ccp-client "$alias_path"; then
+        warn "The ccp alias could not be created. Use ccp-client for CCP."
     fi
 }
 
@@ -308,8 +401,8 @@ ensure_path() {
 
 install_mcp_bridge() {
     if ! command -v python3 &>/dev/null; then
-        warn "Python 3 is required for the MCP bridge. Skipping."
-        return
+        err "Python 3 is required for the MCP bridge."
+        return 1
     fi
 
     local mcp_home="$HOME/.ccp-mcp"
@@ -328,30 +421,36 @@ install_mcp_bridge() {
         return
     fi
 
-    # find the mcp package — either in the repo or clone it
+    # Use the MCP package from the checkout, or download it.
     if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/mcp" ]; then
         mcp_src="$REPO_ROOT/mcp"
     else
         mcp_src="$mcp_home/src"
         if [ ! -d "$mcp_src" ]; then
             step "Downloading MCP bridge..."
-            mkdir -p "$mcp_home"
+            mkdir -p "$mcp_home" || return 1
             git clone --depth 1 "https://github.com/${REPO}.git" "$mcp_home/repo" 2>/dev/null || {
                 warn "Could not download MCP bridge. Install from the repo manually."
-                return
+                return 1
             }
-            mv "$mcp_home/repo/mcp" "$mcp_src"
-            rm -rf "$mcp_home/repo"
+            mv "$mcp_home/repo/mcp" "$mcp_src" || return 1
+            rm -rf "$mcp_home/repo" || return 1
         fi
     fi
 
     step "Installing MCP bridge..."
     if [ ! -d "$venv_dir" ]; then
-        python3 -m venv "$venv_dir"
+        python3 -m venv "$venv_dir" || return 1
     fi
-    "$venv_dir/bin/pip" install --quiet --upgrade pip
-    "$venv_dir/bin/pip" install --quiet -e "$mcp_src"
+    "$venv_dir/bin/pip" install --quiet --upgrade pip || return 1
+    "$venv_dir/bin/pip" install --quiet -e "$mcp_src" || return 1
     ok "MCP bridge installed in $venv_dir"
+}
+
+mcp_config_warning() {
+    warn "$2"
+    if [ -n "$MCP_CONFIG_WARNINGS" ]; then MCP_CONFIG_WARNINGS+="; "; fi
+    MCP_CONFIG_WARNINGS+="the $1 MCP config was not written"
 }
 
 configure_mcp() {
@@ -360,7 +459,7 @@ configure_mcp() {
     local mcp_cmd="$venv_dir/bin/ccp-mcp-server"
 
     if [ ! -f "$mcp_cmd" ]; then
-        warn "MCP bridge not found at $mcp_cmd — skipping config"
+        warn "MCP bridge not found at $mcp_cmd. Skipping configuration."
         return
     fi
 
@@ -394,7 +493,7 @@ MCPEOF
                 codex_env="$codex_env
 CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
             fi
-            cat >> "$codex_config" <<TOMLEOF
+            if cat >> "$codex_config" <<TOMLEOF
 
 [mcp_servers.ccp]
 command = "$mcp_cmd"
@@ -402,7 +501,11 @@ command = "$mcp_cmd"
 [mcp_servers.ccp.env]
 $codex_env
 TOMLEOF
-            ok "Added to $codex_config"
+            then
+                ok "Added to $codex_config"
+            else
+                mcp_config_warning "Codex" "Could not update $codex_config"
+            fi
         else
             ok "$codex_config already configured"
         fi
@@ -427,7 +530,7 @@ with open('$tmp', 'w') as f:
 " 2>/dev/null && mv "$tmp" "$claude_config"; then
                 ok "Added to $claude_config"
             else
-                warn "Could not update $claude_config"
+                mcp_config_warning "Claude" "Could not update $claude_config"
             fi
         else
             ok "$claude_config already configured"
@@ -439,8 +542,11 @@ with open('$tmp', 'w') as f:
     if [ -d "$HOME/.cursor" ] || [ -d "$HOME/Library/Application Support/Cursor" ]; then
         mkdir -p "$HOME/.cursor"
         if [ ! -f "$cursor_config" ]; then
-            echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"
-            ok "Created $cursor_config"
+            if echo "{\"mcpServers\": $mcp_block}" > "$cursor_config"; then
+                ok "Created $cursor_config"
+            else
+                mcp_config_warning "Cursor" "Could not create $cursor_config"
+            fi
         elif ! python3 -c "import json; cfg=json.load(open('$cursor_config')); exit(0 if 'ccp' in cfg.get('mcpServers',{}) else 1)" 2>/dev/null; then
             local tmp
             tmp="$(mktemp)"
@@ -457,7 +563,7 @@ with open('$tmp', 'w') as f:
 " 2>/dev/null && mv "$tmp" "$cursor_config"; then
                 ok "Added to $cursor_config"
             else
-                warn "Could not update $cursor_config"
+                mcp_config_warning "Cursor" "Could not update $cursor_config"
             fi
         else
             ok "$cursor_config already configured"
@@ -560,18 +666,26 @@ fi
 # ── Binary install ───────────────────────────────────────────────────────────
 
 step "Installing CCP ${BOLD}($MODE)${RESET}"
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$INSTALL_DIR" || exit 1
+
+# Validate every destination before publishing the first component, for all
+# channels and source builds. Publication rechecks each resolved destination.
+resolve_destination "$INSTALL_DIR/ccp-client" >/dev/null || exit 1
+if [ "$MODE" = "both" ]; then
+    resolve_destination "$INSTALL_DIR/ccp-server" >/dev/null || exit 1
+fi
+resolve_destination "$INSTALL_DIR/ccp-nightly.json" >/dev/null || exit 1
 
 if [ "$FROM_SOURCE" = true ]; then
-    build_from_source
+    build_from_source || exit 1
 elif [ "$CHANNEL" = "nightly" ]; then
-    install_nightly_binaries
+    install_nightly_binaries || exit 1
 else
     if [ "$MODE" = "client" ]; then
-        download_binary "ccp-client" "$INSTALL_DIR/ccp-client"
+        download_binary "ccp-client" "$INSTALL_DIR/ccp-client" || exit 1
     else
-        download_binary "ccp-server" "$INSTALL_DIR/ccp-server"
-        download_binary "ccp-client" "$INSTALL_DIR/ccp-client"
+        download_binary "ccp-server" "$INSTALL_DIR/ccp-server" || exit 1
+        download_binary "ccp-client" "$INSTALL_DIR/ccp-client" || exit 1
     fi
 fi
 
@@ -587,10 +701,13 @@ else
     ok "Installed ${BOLD}ccp-client${RESET}${GREEN} -> $INSTALL_DIR/ccp-client${RESET}"
 fi
 
+# The alias always executes the same installed client and follows its updates.
+install_ccp_alias
+
 # ── MCP bridge ───────────────────────────────────────────────────────────────
 
 if [ "$MODE" = "client" ]; then
-    install_mcp_bridge
+    install_mcp_bridge || exit 1
     configure_mcp
 elif [ "$MODE" = "both" ]; then
     echo ""
@@ -598,7 +715,7 @@ elif [ "$MODE" = "both" ]; then
     read -r INSTALL_MCP_ANSWER </dev/tty 2>/dev/null || INSTALL_MCP_ANSWER="n"
     case "$INSTALL_MCP_ANSWER" in
         [yY]|[yY][eE][sS])
-            install_mcp_bridge
+            install_mcp_bridge || exit 1
             configure_mcp
             ;;
         *)
@@ -609,8 +726,6 @@ fi
 
 ensure_path
 
-echo ""
-echo -e "${BOLD}${GREEN}Done.${RESET}"
 echo ""
 if [ "$MODE" = "client" ]; then
     info "Enroll with a server:"
@@ -623,3 +738,8 @@ else
     echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"
 fi
 echo ""
+if [ -n "$MCP_CONFIG_WARNINGS" ]; then
+    echo -e "${BOLD}${GREEN}Done, with warnings: $MCP_CONFIG_WARNINGS; see above.${RESET}"
+else
+    echo -e "${BOLD}${GREEN}Done.${RESET}"
+fi

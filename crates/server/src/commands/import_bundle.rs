@@ -11,10 +11,6 @@ use protocol::{ConflictPolicy, ImportBundleResult, TransferBundle};
 use super::super::*;
 
 impl ServerState {
-    #[expect(
-        clippy::too_many_lines,
-        reason = "legacy function predating the size and complexity limits; split it before extending"
-    )]
     pub async fn import_bundle(
         &self,
         session_id: i64,
@@ -22,8 +18,21 @@ impl ServerState {
         policy: &ConflictPolicy,
         auth_context: &ConnectionAuthContext,
     ) -> anyhow::Result<ImportBundleResult> {
-        self.ensure_write_access(session_id, auth_context).await?;
+        let checkpoint = self
+            .native_exclusive_mutation(session_id, auth_context)
+            .await?;
+        self.validate_import(session_id, bundle, policy).await?;
+        self.checkpoint_before_mutation(&checkpoint).await?;
+        self.import_bundle_inner(session_id, bundle, policy, auth_context)
+            .await
+    }
 
+    async fn validate_import(
+        &self,
+        session_id: i64,
+        bundle: &TransferBundle,
+        policy: &ConflictPolicy,
+    ) -> anyhow::Result<()> {
         // Verify bundle integrity.
         let entries_bytes = serde_json::to_vec(&bundle.entries)
             .context("failed to serialise entries for hash verification")?;
@@ -34,10 +43,6 @@ impl ServerState {
         if computed_sha256 != bundle.bundle_sha256 {
             bail!("bundle integrity check failed: hash mismatch");
         }
-
-        let scope_json =
-            serde_json::to_string(&bundle.selector.scope).context("failed to serialise scope")?;
-        let policy_str = policy_to_str(policy);
 
         // Validate all names up-front before taking the write lock.
         for entry in &bundle.entries {
@@ -65,6 +70,26 @@ impl ServerState {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "legacy function predating the size and complexity limits; split it before extending"
+    )]
+    async fn import_bundle_inner(
+        &self,
+        session_id: i64,
+        bundle: &TransferBundle,
+        policy: &ConflictPolicy,
+        auth_context: &ConnectionAuthContext,
+    ) -> anyhow::Result<ImportBundleResult> {
+        self.ensure_write_access(session_id, auth_context).await?;
+
+        let scope_json =
+            serde_json::to_string(&bundle.selector.scope).context("failed to serialise scope")?;
+        let policy_str = policy_to_str(policy);
 
         // Snapshots for rollback.
         let shelves_snapshot;
@@ -147,7 +172,10 @@ impl ServerState {
                         } else {
                             imported_entries += 1;
                         }
-                        previous_entries.insert(key.clone(), prior);
+                        // A bundle can list the same path twice; keep only the
+                        // value that existed before this import call, not an
+                        // intermediate value this same call already wrote.
+                        previous_entries.entry(key.clone()).or_insert(prior);
                         let imported = session.build_entry(
                             path,
                             entry.description.clone(),
@@ -189,7 +217,11 @@ impl ServerState {
                     ConflictPolicy::MergeHistory => {
                         if let Some(existing) = session.entries.get_mut(&key) {
                             // Keep existing context/description/labels; union history rows.
-                            previous_entries.insert(key.clone(), Some(existing.clone()));
+                            // A bundle can list the same path twice; keep only the
+                            // value that existed before this import call.
+                            previous_entries
+                                .entry(key.clone())
+                                .or_insert_with(|| Some(existing.clone()));
                             let known_op_ids: HashSet<_> = existing
                                 .history
                                 .iter()
@@ -221,7 +253,7 @@ impl ServerState {
                                 path.shelf_name(),
                                 Some(path.book_name()),
                             );
-                            previous_entries.insert(key.clone(), None);
+                            previous_entries.entry(key.clone()).or_insert(None);
                             let imported = session.build_entry(
                                 path,
                                 entry.description.clone(),
@@ -246,32 +278,38 @@ impl ServerState {
         let created_at = current_timestamp_string()?;
         let total_affected = imported_entries + overwritten_entries;
 
+        #[cfg(test)]
+        super::super::test_hooks::checkpoint("import_bundle::persist").await;
         if let Err(error) = super::super::database::persist_snapshot(
             super::super::database::Snapshot::capture(self).await,
         ) {
-            // Revert in-memory state.
-            let mut sessions = self.sessions.write().await;
-            if let Some(session) = sessions.get_mut(&session_id) {
-                for (key, maybe_previous) in previous_entries {
-                    match maybe_previous {
-                        Some(previous) => {
-                            session.insert_entry(key, previous);
-                        }
-                        None => {
-                            session.remove_entry(&key);
+            // Revert in-memory state, releasing the sessions lock before the
+            // journal and SQLite writes below so other readers are not
+            // stuck behind this call's failure bookkeeping.
+            {
+                let mut sessions = self.sessions.write().await;
+                if let Some(session) = sessions.get_mut(&session_id) {
+                    for (key, maybe_previous) in previous_entries {
+                        match maybe_previous {
+                            Some(previous) => {
+                                session.insert_entry(key, previous);
+                            }
+                            None => {
+                                session.remove_entry(&key);
+                            }
                         }
                     }
+                    let affected_shelves: Vec<String> = session.shelves.keys().cloned().collect();
+                    session.shelves = shelves_snapshot;
+                    session.books = books_snapshot;
+                    session.book_entry_counts = book_counts_snapshot;
+                    session.shelf_book_counts = shelf_book_counts_snapshot;
+                    session.shelf_entry_counts = shelf_entry_counts_snapshot;
+                    for shelf in &affected_shelves {
+                        session.refresh_library_metadata(shelf, None);
+                    }
+                    session.rebuild_list_entries_cache();
                 }
-                let affected_shelves: Vec<String> = session.shelves.keys().cloned().collect();
-                session.shelves = shelves_snapshot;
-                session.books = books_snapshot;
-                session.book_entry_counts = book_counts_snapshot;
-                session.shelf_book_counts = shelf_book_counts_snapshot;
-                session.shelf_entry_counts = shelf_entry_counts_snapshot;
-                for shelf in &affected_shelves {
-                    session.refresh_library_metadata(shelf, None);
-                }
-                session.rebuild_list_entries_cache();
             }
 
             let reason = error.to_string();
@@ -321,8 +359,6 @@ impl ServerState {
             &created_at,
             &auth_context.common_name,
         )?;
-
-        checkpoint_journal(&self.journal);
 
         Ok(ImportBundleResult {
             imported_entries,

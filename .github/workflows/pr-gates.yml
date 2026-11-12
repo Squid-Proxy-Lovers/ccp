@@ -5,17 +5,42 @@ name: PR gates
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled, unlabeled]
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to check, including stacked pull requests
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-gates-${{ github.event.pull_request.number }}
+  group: pr-gates-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
+  attribution:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Check commit and pull request attribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python scripts/check-attribution.py --event "$GITHUB_EVENT_PATH"
+
   test-integrity:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,6 +57,7 @@ jobs:
         run: python scripts/check-test-integrity.py --base "$BASE_REF"
 
   semver:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
