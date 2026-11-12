@@ -1077,7 +1077,7 @@ class ReleaseTagTests(unittest.TestCase):
         )
         self.assertIn("startsWith(github.ref, 'refs/tags/v')", self.jobs["docker-publish"])
 
-    def test_actual_docker_step_pushes_only_sha_and_channel_tag(self):
+    def test_actual_docker_step_pushes_sha_and_release_tags(self):
         body = self.jobs["docker-publish"]
         script = body.split("        run: |\n", 1)[1]
         script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
@@ -1090,8 +1090,8 @@ class ReleaseTagTests(unittest.TestCase):
         docker.chmod(0o700)
         log = self.root / "docker-log"
         for channel, tag, expected in [
-            ("stable", "v0.2.0", "latest"),
-            ("rc", "v0.2.0-rc.1", "v0.2.0-rc.1"),
+            ("stable", "v0.2.0", ["latest", "v0.2.0"]),
+            ("rc", "v0.2.0-rc.1", ["v0.2.0-rc.1"]),
         ]:
             log.write_text("")
             environment = {
@@ -1116,7 +1116,7 @@ class ReleaseTagTests(unittest.TestCase):
                 pushes,
                 [
                     f"ghcr.io/squid-proxy-lovers/ccp:{SHA}",
-                    f"ghcr.io/squid-proxy-lovers/ccp:{expected}",
+                    *(f"ghcr.io/squid-proxy-lovers/ccp:{tag}" for tag in expected),
                 ],
             )
 

@@ -652,6 +652,10 @@ jobs:
           docker push "ghcr.io/squid-proxy-lovers/ccp:$GITHUB_SHA"
           docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$alias"
           docker push "ghcr.io/squid-proxy-lovers/ccp:$alias"
+          if [ "$CHANNEL" = stable ]; then
+            docker tag "ccp-ci:$GITHUB_SHA" "ghcr.io/squid-proxy-lovers/ccp:$RELEASE_TAG"
+            docker push "ghcr.io/squid-proxy-lovers/ccp:$RELEASE_TAG"
+          fi
 
   nightly:
     needs: [package, docker, provenance]
