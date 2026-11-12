@@ -206,34 +206,66 @@ download_binary() {
     local platform
     dest="$(resolve_destination "$2")" || return 1
     platform="$(detect_platform)"
-    local url="https://github.com/${REPO}/releases/latest/download/${name}-${platform}"
+    publish_binary "$RELEASE_STAGE/$name-$platform" "$dest"
+}
 
-    step "Downloading ${BOLD}$name${RESET}${CYAN} for $platform${RESET}"
-    PUBLISH_STAGE="$(mktemp "${dest}.download.XXXXXX")" || return 1
-    local ok=false
-    if command -v curl &>/dev/null; then
-        curl -fsSL "$url" -o "$PUBLISH_STAGE" && ok=true
-    elif command -v wget &>/dev/null; then
-        wget -q "$url" -O "$PUBLISH_STAGE" && ok=true
-    else
-        err "Need curl or wget to download binaries."
+prepare_stable_release() {
+    if ! command -v python3 &>/dev/null; then
+        err "Python 3 is required to select and verify stable releases."
         return 1
     fi
+    RELEASE_STAGE="$(mktemp -d)" || return 1
+    local api="https://api.github.com/repos/${REPO}/releases/latest"
+    if ! download_release_file "$api" "$RELEASE_STAGE/release.json"; then
+        stable_release_error "Stable release discovery failed. No binaries installed."
+        return 1
+    fi
+    RELEASE_VERSION="$(python3 - "$RELEASE_STAGE/release.json" <<'PY'
+import json, re, sys
+release = json.load(open(sys.argv[1]))
+tag = release.get("tag_name", "")
+if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", tag):
+    sys.exit("Invalid stable release")
+print(tag)
+PY
+    )" || {
+        stable_release_error "Stable release selection failed. No binaries installed."
+        return 1
+    }
+    local platform base asset
+    platform="$(detect_platform)" || return 1
+    base="https://github.com/${REPO}/releases/download/${RELEASE_VERSION}"
+    local assets=("ccp-client-$platform" "ccp-mcp.tar.gz")
+    if [ "$MODE" = both ]; then assets+=("ccp-server-$platform"); fi
+    for asset in SHA256SUMS "${assets[@]}"; do
+        if ! download_release_file "$base/$asset" "$RELEASE_STAGE/$asset"; then
+            stable_release_error "Stable download failed: $asset. No binaries installed."
+            return 1
+        fi
+    done
+    if ! python3 - "$RELEASE_STAGE" "${assets[@]}" <<'PY'
+import hashlib, pathlib, re, sys
+stage = pathlib.Path(sys.argv[1])
+checksums = {}
+for line in (stage / "SHA256SUMS").read_text().splitlines():
+    match = re.fullmatch(r"([0-9a-f]{64})  ([a-zA-Z0-9_.-]+)", line)
+    if not match or match[2] in checksums:
+        sys.exit("Invalid stable checksum manifest")
+    checksums[match[2]] = match[1]
+for name in sys.argv[2:]:
+    if hashlib.sha256((stage / name).read_bytes()).hexdigest() != checksums.get(name):
+        sys.exit(f"Stable checksum mismatch: {name}")
+PY
+    then
+        stable_release_error "Stable verification failed. No binaries installed."
+        return 1
+    fi
+}
 
-    if [ "$ok" = false ]; then
-        echo ""
-        err "Download failed. No release binaries found for ${BOLD}$platform${RESET}."
-        warn "This usually means there's no published release yet."
-        echo ""
-        info "Try installing from source instead:"
-        echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
-        return 1
-    fi
-    if ! [ -s "$PUBLISH_STAGE" ] || ! chmod 0755 "$PUBLISH_STAGE"; then
-        err "Could not publish $dest."
-        return 1
-    fi
-    finish_publish "$dest"
+stable_release_error() {
+    err "$1"
+    info "Try installing from source instead:"
+    echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
 }
 
 download_release_file() {
@@ -409,30 +441,25 @@ install_mcp_bridge() {
     local venv_dir="$mcp_home/venv"
     local mcp_src
 
-    if [ "$CHANNEL" = "nightly" ]; then
+    if [ "$FROM_SOURCE" = false ]; then
         step "Installing MCP bridge from $RELEASE_VERSION"
         if [ ! -d "$venv_dir" ] && ! python3 -m venv "$venv_dir"; then
             err "Could not create the MCP environment."; exit 1
         fi
         if ! "$venv_dir/bin/pip" install --quiet --upgrade --force-reinstall "$RELEASE_STAGE/ccp-mcp.tar.gz"; then
-            err "Nightly MCP installation failed."; exit 1
+            err "Release MCP installation failed."; exit 1
         fi
         ok "MCP bridge installed in $venv_dir"
         return
     fi
 
-    # Use the MCP package from the checkout, or download it.
-    if [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/mcp" ]; then
+    if [ "$FROM_SOURCE" = true ] && [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/mcp" ]; then
         mcp_src="$REPO_ROOT/mcp"
     else
         mcp_src="$mcp_home/src"
         if [ ! -d "$mcp_src" ]; then
-            step "Downloading MCP bridge..."
             mkdir -p "$mcp_home" || return 1
-            git clone --depth 1 "https://github.com/${REPO}.git" "$mcp_home/repo" 2>/dev/null || {
-                warn "Could not download MCP bridge. Install from the repo manually."
-                return 1
-            }
+            git clone --depth 1 "https://github.com/${REPO}.git" "$mcp_home/repo" || return 1
             mv "$mcp_home/repo/mcp" "$mcp_src" || return 1
             rm -rf "$mcp_home/repo" || return 1
         fi
@@ -681,6 +708,7 @@ if [ "$FROM_SOURCE" = true ]; then
 elif [ "$CHANNEL" = "nightly" ]; then
     install_nightly_binaries || exit 1
 else
+    prepare_stable_release || exit 1
     if [ "$MODE" = "client" ]; then
         download_binary "ccp-client" "$INSTALL_DIR/ccp-client" || exit 1
     else
