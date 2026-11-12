@@ -16,9 +16,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = (
-    r"claude(?:[ -](?:code|opus|sonnet|haiku)(?:[ -][0-9.]+)?)?|anthropic|open[ -]?ai"
+    r"claude|anthropic|open[ -]?ai|gpt-?\d[\w.-]*(?:[ -][\w.]+){0,3}"
     r"|codex|chatgpt|(?:(?:github|microsoft)[ -]?)?copilot"
-    r"(?:[ -]swe[ -]agent)?|cursor(?:[ -]?agent)?|t3[ -]?code|gemini|aider|devin"
+    r"(?:[ -]swe[ -]agent)?|cursor(?:[ -]?agent)?|t3[ -]?code"
+    r"|gemini(?:[ -](?:code[ -]assist|\d[\w.]*)(?:[ -][\w.]+){0,2})?|aider|devin(?:[ -]ai)?"
     r"|sweep(?:[ -]?ai)?|windsurf|codeium|tabnine|amazon[ -]q|augment(?:[ -]code)?"
     r"|cline|roo[ -]code|amp[ -]code|opencode|kiro|junie|replit[ -]agent"
 )
@@ -26,14 +27,22 @@ TOOL_MENTION = re.compile(rf"(?<!\w)(?:{TOOL})(?!\w)", re.I)
 TOOL_IDENTITY = re.compile(
     rf"(?:(?:anthropic|open[ -]?ai)[ -]+)?(?:{TOOL})(?:[ -]?(?:bot|agent|assistant))?", re.I
 )
+CLAUDE_NAME = re.compile(r"claude(?:[ -][\w.]+){0,3}", re.I)
+# Surnames alone are ambiguous. Require a known model/tool word or version token.
+CLAUDE_MARKER = re.compile(
+    r"code|opus|sonnet|haiku|fable|bot|agent|assistant|v?\d+(?:\.\d+)*", re.I
+)
 DEPENDABOT = ("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com")
 # Dependabot's standard Signed-off-by trailer uses its support mailbox.
 DEPENDABOT_SIGNOFF = ("dependabot[bot]", "support@github.com")
 WEB_FLOW = ("github", "noreply@github.com")
-TOOL_MAILBOXES = {"noreply@anthropic.com", "claude@anthropic.com", "codex@openai.com"}
+TOOL_DOMAINS = {"anthropic.com", "openai.com"}
+TOOL_EMAIL = re.compile(r"[^\s<>@]+@(?:anthropic|openai)\.com(?![\w.-])", re.I)
 TRAILER = re.compile(r"^([A-Za-z][A-Za-z0-9-]*)[ \t]*:[ \t]*(.*)$")
 ATTRIBUTION_KEY = re.compile(
-    r"^(?:(?:co-)?authored|signed-off|reviewed|generated|assisted|powered|helped)-by$", re.I
+    r"^(?:(?:co-)?(?:authored|developed|created)|signed-off|reviewed|generated|assisted"
+    r"|powered|helped|suggested|contributed|tested|acked|reported|written)-by$",
+    re.I,
 )
 GENERATED = re.compile(
     r"^[\W_]*(?:generated|created|written|co-authored|assisted|powered)"
@@ -51,6 +60,14 @@ def normalized(text: str) -> str:
     return unicodedata.normalize("NFKC", text).casefold()
 
 
+def model_identity(name: str) -> bool:
+    candidate = re.sub(r"^(?:anthropic|open[ -]?ai)[ -]+", "", name)
+    if CLAUDE_NAME.fullmatch(candidate) is None:
+        return False
+    suffix = re.split(r"[ -]", candidate)[1:]
+    return not suffix or any(CLAUDE_MARKER.fullmatch(word) for word in suffix)
+
+
 def identity_problem(name: str, email: str, role: str) -> bool:
     identity = (normalized(name.strip()), normalized(email.strip()))
     if (
@@ -63,26 +80,24 @@ def identity_problem(name: str, email: str, role: str) -> bool:
     bot_name = identity[0].removesuffix("[bot]").strip()
     return bool(
         TOOL_IDENTITY.fullmatch(bot_name)
+        or model_identity(bot_name)
         or "[bot]" in identity[0]
         or "[bot]" in local
-        or identity[1] in TOOL_MAILBOXES
+        or identity[1].rpartition("@")[2] in TOOL_DOMAINS
         or identity[1] == WEB_FLOW[1]
         or identity[0]
         in {"github-actions", "github actions", "github", "dependabot", "dependabot[bot]"}
     )
 
 
-def trailer_values(message: str, commit: bool) -> list[str]:
+def trailer_values(message: str) -> list[str]:
     lines = message.rstrip("\r\n").splitlines()
-    last_blank = max((i for i, line in enumerate(lines) if not line.strip()), default=-1)
     values: list[str] = []
     active = False
-    for index, line in enumerate(lines):
+    for line in lines:
         match = TRAILER.fullmatch(line)
         if match:
-            active = bool(
-                ATTRIBUTION_KEY.fullmatch(match[1]) or (commit and index > last_blank and index > 0)
-            )
+            active = bool(ATTRIBUTION_KEY.fullmatch(match[1]))
             if active:
                 values.append(match[2])
         elif active and line.startswith((" ", "\t")):
@@ -96,10 +111,15 @@ def attributed_trailer(value: str) -> bool:
     identity = re.fullmatch(r"\s*(.*?)\s*<([^<>]+)>\s*", value)
     if identity:
         return identity_problem(identity[1], identity[2], "co-author")
-    return bool(TOOL_MENTION.search(normalized(value)))
+    value = normalized(value.strip())
+    if re.fullmatch(r"[^\s<>@]+@[^\s<>@]+", value):
+        return identity_problem("", value, "co-author")
+    if re.fullmatch(r"(?:claude|devin)(?:[ -][\w.]+)+", value):
+        return identity_problem(value, "", "co-author")
+    return bool(TOOL_EMAIL.search(value) or TOOL_MENTION.search(value))
 
 
-def text_findings(text: str, *, commit: bool = False) -> list[str]:
+def text_findings(text: str) -> list[str]:
     problems = []
     for line in text.splitlines():
         # A normal product reference or documentation link is not an attribution.
@@ -108,7 +128,7 @@ def text_findings(text: str, *, commit: bool = False) -> list[str]:
             problems.append("robot attribution badge")
         elif tool and (GENERATED.search(line) or BADGE.search(line)):
             problems.append("generated-with/by attribution or linked tool badge")
-    if any(attributed_trailer(value) for value in trailer_values(text, commit)):
+    if any(attributed_trailer(value) for value in trailer_values(text)):
         problems.append("trailer attributes work to a tool")
     return sorted(set(problems))
 
@@ -152,7 +172,7 @@ def commit_findings(root: Path, sha: str) -> list[str]:
     headers, separator, message = raw.partition("\n\n")
     if not separator:
         raise ValueError("commit metadata is incomplete")
-    problems = text_findings(message, commit=True)
+    problems = text_findings(message)
     for role in ("author", "committer"):
         match = re.search(rf"^{role} (.*?) <([^<>]*)> -?\d+ [+-]\d{{4}}$", headers, re.M)
         if match is None:
