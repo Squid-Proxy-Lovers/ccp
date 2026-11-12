@@ -7,7 +7,7 @@ COPY crates/server/web/public ./public
 COPY crates/server/web/index.html crates/server/web/vite.config.ts crates/server/web/tsconfig.json ./
 RUN npm run check && npm run build
 
-FROM rust:1.99.0-bookworm AS builder
+FROM rust:1.99.1-bookworm AS builder
 
 WORKDIR /app
 
