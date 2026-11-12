@@ -163,6 +163,7 @@ docs/             architecture and format contracts
 - Preserve public CLI, response, wire, and persisted-data contracts in maintenance changes.
 - Keep generated credentials, databases, local environments, and build outputs out of Git.
 - Keep PRs as drafts while required checks or design decisions are outstanding.
+- Never add AI, agent or tool attribution to commits, PRs, comments, release notes, code or docs. That includes `Co-Authored-By` trailers, "Generated with ..." lines and commits under a tool identity. When squash-merging, delete the `Co-authored-by` lines GitHub pre-fills. See [AGENTS.md](AGENTS.md#no-ai-attribution).
 
 ## Dependencies and versions
 

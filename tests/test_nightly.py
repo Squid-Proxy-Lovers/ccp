@@ -366,7 +366,7 @@ class ReleaseContractTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             raw = (ROOT / name).read_text()
             raw = raw.replace(
-                'version = "' + self.contract.source_version(ROOT) + '"', 'version = "0.2.0"'
+                'version = "' + self.contract.source_version(ROOT) + '"', 'version = "0.3.0"'
             )
             raw = re.sub(
                 r"(const (?:PROTOCOL_VERSION|API_VERSION|PROFILE_MIN_FORMAT|PROFILE_FORMAT|SCHEMA_VERSION): u32 = )([0-9]+)",
@@ -377,7 +377,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.prepare_legacy_inventory(source)
         self.assertEqual(
             self.contract.decode((self.dist / self.contract.MANIFEST).read_bytes()).package_version,
-            "0.2.0",
+            "0.3.0",
         )
         for name, expected in self.pre_compatibility_output(source).items():
             with self.subTest(name=name):
