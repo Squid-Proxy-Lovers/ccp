@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## [0.2.0] - 2026-11-12
 
 ### Added
 
@@ -15,8 +15,22 @@
   messages.
 - Managed client installs and updates that verify release provenance.
 - Offline conversion of native instances with `server legacy-convert`.
+- A Windows client (`ccp-client-windows-x86_64.exe`) and a PowerShell installer.
+  The installer verifies the release's checksum and provenance before it
+  installs anything, installs per user, configures MCP hosts with backups, and
+  rolls back a failed upgrade. Re-run it to update. The server is not supported
+  on Windows.
 - An optional WebSocket server carrier, off by default. Client support is not
   included, so treat it as experimental.
+
+### Changed
+
+- Native-mode startup loads stored sessions in near-linear time. A session with
+  26,000 entries and an 80,000-record journal now starts in under a second
+  instead of several minutes.
+- Docker images are published only for release tags. `:latest` now always
+  points to the newest stable release, not to the latest push to `main`, and
+  release candidates get only their own tag, such as `:v0.2.0-rc.2`.
 
 ### Release candidates
 
@@ -28,11 +42,16 @@
 
 ### Security
 
+- Includes the 0.1.1 certificate revocation fix. Native-mode revoke, import,
+  restore and delete are also hardened against concurrent requests:
+  - revoking no longer makes other requests wait while it saves;
+  - a failed import restores the original values even when a bundle lists a
+    path twice.
 - Bundled SQLite is now 3.54.1 (rusqlite 0.41.1), fixing RUSTSEC-2026-0459.
 
-### Upgrading from 0.1.0
+### Upgrading from 0.1.x
 
-Building from source now needs Rust 1.89 or later; 0.1.0 needed 1.88.
+Building from source now needs Rust 1.89 or later; 0.1.x needed 1.88.
 
 The native wire protocol stays at version 1, so existing native deployments
 keep working. Workspaces use a new database schema (27) and do not adopt native
