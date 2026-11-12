@@ -111,8 +111,8 @@ class ManagedBundleTests(unittest.TestCase):
     def future_manifest(self):
         path = self.inputs / contract.MANIFEST
         data = json.loads(path.read_bytes())
-        data["platforms"].append("windows-x86_64")
-        for name in ("ccp-client-windows-x86_64.exe", "release-notes.txt"):
+        data["platforms"].append("freebsd-x86_64")
+        for name in ("ccp-client-freebsd-x86_64.exe", "release-notes.txt"):
             data["artifacts"][name] = {"size": 1, "sha256": "a" * 64}
         path.write_text(json.dumps(data))
         return data
@@ -128,14 +128,14 @@ class ManagedBundleTests(unittest.TestCase):
                 self.assertEqual(generation.manifest.value(), data)
                 self.assertEqual(
                     (generation.path / "client").read_bytes(),
-                    (self.inputs / f"ccp-client-{platform}").read_bytes(),
+                    (self.inputs / contract.client_filename(platform)).read_bytes(),
                 )
                 self.assertEqual(
                     {p.name for p in (generation.path / "release").iterdir()},
                     {
                         contract.MANIFEST,
                         contract.PROVENANCE,
-                        f"ccp-client-{platform}",
+                        contract.client_filename(platform),
                         "ccp-mcp.tar.gz",
                         "build-info.json",
                     },
@@ -145,7 +145,7 @@ class ManagedBundleTests(unittest.TestCase):
 
     def test_stage_never_copies_or_builds_opaque_future_assets(self):
         data = self.future_manifest()
-        future = "ccp-client-windows-x86_64.exe"
+        future = "ccp-client-freebsd-x86_64.exe"
         data["artifacts"][future] = {"size": contract.MAX_ARTIFACT + 1, "url": "file:///outside"}
         data["artifacts"]["release-notes.txt"] = {"size": 0, "signature": "future-format"}
         (self.inputs / contract.MANIFEST).write_text(json.dumps(data))
@@ -178,7 +178,7 @@ class ManagedBundleTests(unittest.TestCase):
             elif change == "platform":
                 data["platforms"].remove(build_module.host_platform())
             elif change == "duplicate":
-                data["platforms"].append("windows-x86_64")
+                data["platforms"].append("freebsd-x86_64")
             elif change == "asset-name":
                 data["artifacts"]["../escape"] = data["artifacts"][local]
             elif change == "platform-name":
@@ -226,7 +226,7 @@ class ManagedBundleTests(unittest.TestCase):
             data = json.loads(json.dumps(original))
             row = dict(ready)
             if change in ("host", "future-host"):
-                row["platform"] = "windows-x86_64"
+                row["platform"] = "freebsd-x86_64"
             elif change == "platform":
                 data["platforms"].remove(local)
             else:
@@ -239,7 +239,7 @@ class ManagedBundleTests(unittest.TestCase):
                 patch.object(
                     build_module,
                     "host_platform",
-                    return_value="windows-x86_64" if change == "future-host" else local,
+                    return_value="freebsd-x86_64" if change == "future-host" else local,
                 ),
                 self.assertRaisesRegex(ValueError, "^" + reason + "$"),
             ):

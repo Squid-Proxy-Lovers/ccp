@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
 use std::{fs::OpenOptions, io::Write};
 use time::{Duration as TimeDuration, OffsetDateTime};
 use url::Url;

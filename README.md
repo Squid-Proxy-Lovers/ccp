@@ -46,6 +46,31 @@ See the [MCP guide](mcp/README.md) for agent setup and the
 [server deployment guide](docs/server.md#deployment) for Docker, source builds,
 and remote enrollment.
 
+### Windows client
+
+On x86_64 Windows, use PowerShell 5.1 or newer with Python 3.10+ (`python` on
+PATH) and a recent GitHub CLI (`gh`) that supports attestation verification:
+
+```powershell
+irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1 | iex
+```
+
+This URL pins the bootstrap to a release tag, signed and immutable by project
+policy. The bootstrap script is trusted when fetched; its own execution precedes
+attestation checks.
+Everything it installs is verified against the authenticated release manifest.
+Review a new release before changing the pinned URL.
+
+The installer requires an official release containing the Windows client and
+signed manifest. It refuses older releases without those assets. The authenticated
+release includes the client-only `windows-x86_64` platform.
+
+The installer verifies provenance and SHA-256, installs under
+`%LOCALAPPDATA%\ccp\bin`, adds the user PATH, and sets up the MCP bridge. Re-run the
+same command to update. Use `ccp-client` if another program owns `ccp`. See the
+[Windows installation guide](docs/client.md#windows-installation) for nightlies,
+MCP configuration, and credential storage. The native Windows package is client-only.
+
 ### Nightly builds
 
 Standard installs use stable releases. To preview changes merged into `main`,

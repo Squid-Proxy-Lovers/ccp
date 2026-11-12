@@ -14,10 +14,8 @@ from pathlib import Path
 import release_contract
 
 ROOT = Path(__file__).resolve().parents[1]
-PLATFORMS = ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-aarch64")
-ASSETS = tuple(
-    f"ccp-{binary}-{platform}" for platform in PLATFORMS for binary in ("client", "server")
-) + ("ccp-mcp.tar.gz",)
+PLATFORMS = release_contract.PLATFORMS
+ASSETS = tuple(name for name in release_contract.ASSETS if name != "build-info.json")
 TAG_PATTERN = re.compile(r"nightly-\d{4}-\d{2}-\d{2}-[0-9a-f]{12}")
 
 

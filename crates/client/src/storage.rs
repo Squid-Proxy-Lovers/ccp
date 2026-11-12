@@ -250,7 +250,12 @@ pub(crate) fn client_home_dir() -> anyhow::Result<PathBuf> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
+    let home = std::env::var_os("HOME");
+    // Native Windows shells need not define HOME. Preserve HOME precedence
+    // for existing installations and leave Unix resolution unchanged.
+    #[cfg(windows)]
+    let home = home.or_else(|| std::env::var_os("USERPROFILE"));
+    home.map(PathBuf::from)
 }
 
 fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
@@ -271,6 +276,8 @@ fn write_private_file(path: &Path, contents: &[u8]) -> anyhow::Result<()> {
     }
     #[cfg(not(unix))]
     {
+        // Windows relies on inherited user-profile ACLs. Custom client homes
+        // must provide equally private ACLs; readonly is not access control.
         fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
     }
 }
@@ -601,11 +608,10 @@ mod tests {
             client_key_pem: "key".to_string(),
         };
 
-        let stored = save_enrollment_to_dir(&material, &base_dir).expect("save should work");
-
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let stored = save_enrollment_to_dir(&material, &base_dir).expect("save should work");
             let key_mode = fs::metadata(stored.directory.join("client.key"))
                 .expect("client.key should exist")
                 .permissions()
@@ -619,6 +625,9 @@ mod tests {
             assert_eq!(key_mode, 0o600, "client.key should be owner-only");
             assert_eq!(id_mode, 0o600, "identity.pem should be owner-only");
         }
+
+        #[cfg(not(unix))]
+        save_enrollment_to_dir(&material, &base_dir).expect("save should work");
 
         fs::remove_dir_all(base_dir).expect("cleanup");
     }

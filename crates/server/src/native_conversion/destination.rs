@@ -96,7 +96,9 @@ impl Stage {
     }
 }
 fn private_directory(path: &Path) -> std::io::Result<()> {
-    let mut builder = fs::DirBuilder::new();
+    let builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    let mut builder = builder;
     #[cfg(unix)]
     builder.mode(0o700);
     builder.create(path)

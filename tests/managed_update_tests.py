@@ -149,7 +149,7 @@ class ManagedUpdateTests(unittest.TestCase):
         self.configure(True)
         self.f.prepare("b" * 40)
         data = self.f.future_manifest()
-        data["artifacts"]["ccp-client-windows-x86_64.exe"] = {
+        data["artifacts"]["ccp-client-freebsd-x86_64.exe"] = {
             "size": contract.MAX_ARTIFACT + 1,
             "url": "https://attacker.invalid/client",
         }

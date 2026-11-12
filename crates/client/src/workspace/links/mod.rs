@@ -2,6 +2,7 @@
 //! Link enrollment composes the existing pinned trust and durable profile APIs.
 pub(crate) mod cli;
 mod discovery;
+mod path_display;
 mod profiles;
 use super::{Operation, WorkspaceProfile, crypto, network, store};
 use anyhow::{Context, bail};
@@ -46,8 +47,8 @@ pub async fn enroll_link(
         })
     {
         bail!(
-            "profile {:?} has an unfinished enrollment for a different invitation. Retry the original link. If an administrator confirms it was never accepted, move this directory aside before using the new link. An explicit --profile keeps both profiles and requires explicit profile selection thereafter",
-            directory
+            "profile {} has an unfinished enrollment for a different invitation. Retry the original link. If an administrator confirms it was never accepted, move this directory aside before using the new link. An explicit --profile keeps both profiles and requires explicit profile selection thereafter",
+            path_display::quoted_path(&directory)
         );
     }
     let completed: bool = profile.connection.query_row(
@@ -61,7 +62,7 @@ pub async fn enroll_link(
         } else {
             profile.enroll(link.invitation()).await
         };
-        admission.with_context(|| format!("enrollment state is saved at {:?}; preserve the profile and retry the original link if the outcome is uncertain", directory))?;
+        admission.with_context(|| format!("enrollment state is saved at {}; preserve the profile and retry the original link if the outcome is uncertain", path_display::quoted_path(&directory)))?;
     } else if !reused {
         bail!("completed invitation has no usable registration; preserve the profile for recovery");
     }
