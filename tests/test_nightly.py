@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
+import tomllib
 from managed_bundle_tests import ManagedBundleTests as ManagedBundleTests
 from managed_install_tests import ManagedInstallTests as ManagedInstallTests
 from managed_install_tests import ManagedOperationalTests as ManagedOperationalTests
@@ -1492,6 +1493,108 @@ elif name == 'cat':
         mcp_cmd = self.home_dir / ".ccp-mcp/venv/bin/ccp-mcp-server"
         mcp_cmd.write_text("stub")
         mcp_cmd.chmod(0o755)
+
+    def test_codex_other_entries_do_not_block_native_entry(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        for original in (
+            '[mcp_servers.ccp-workspace]\ncommand = "workspace"\n',
+            '[mcp_servers.ccp_extra]\ncommand = "extra"\n',
+            "# [mcp_servers.ccp]\n",
+        ):
+            with self.subTest(original=original):
+                config.write_text(original)
+                result, _ = self.install("--client")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(config.read_text().startswith(original))
+                self.assertIn("[mcp_servers.ccp]\n", config.read_text())
+                self.assertIn("ccp", tomllib.loads(config.read_text())["mcp_servers"])
+
+    def test_existing_native_codex_entry_is_retained(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        for original in (
+            '  [mcp_servers.ccp] # existing\ncommand = "custom"\n',
+            'mcp_servers.ccp.command = "c"\n',
+            '[mcp_servers.ccp.env]\nA = "1"\n',
+            '[ mcp_servers.ccp ]\ncommand = "c"\n',
+            '[mcp_servers."ccp"]\ncommand = "c"\n',
+            "[mcp_servers.'ccp']\ncommand = 'c'\n",
+            '[mcp_servers]\nccp = { command = "c" }\n',
+            '[mcp_servers.ccp]\r\ncommand = "c"\r\n',
+        ):
+            with self.subTest(original=original):
+                config.write_bytes(original.encode())
+                result, _ = self.install("--client")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(config.read_bytes(), original.encode())
+                self.assertIn("ccp", tomllib.loads(original)["mcp_servers"])
+
+    def test_unparseable_codex_config_is_retained_with_warning(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        for original in ("[mcp_servers\n", 'mcp_servers = "invalid"\n'):
+            with self.subTest(original=original):
+                config.write_text(original)
+                result, _ = self.install("--client")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(config.read_text(), original)
+                self.assertIn("the Codex MCP config was not written", result.stdout)
+                self.assertNotIn(f"Added to {config}", result.stdout)
+
+    def test_inline_codex_servers_table_is_retained_with_warning(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = 'mcp_servers = { other = { command = "o" } }\n'
+        config.write_text(original)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertEqual(tomllib.loads(config.read_text()), tomllib.loads(original))
+        self.assertIn(
+            f"Cannot add [mcp_servers.ccp] to {config} safely; add it manually", result.stdout
+        )
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+
+    def test_codex_config_is_retained_without_tomllib(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = '[mcp_servers.other]\ncommand = "o"\n'
+        config.write_text(original)
+        python = self.bin_dir / "python3"
+        # Exercise the real import failure branch even on a newer interpreter.
+        python.write_text(
+            f"#!{sys.executable}\n"
+            + """import os, sys
+if sys.argv[1:3] == ['-I', '-']:
+    source = sys.stdin.read()
+    class WithoutTomllib:
+        def find_spec(self, fullname, path, target=None):
+            if fullname == 'tomllib':
+                raise ModuleNotFoundError(fullname)
+            return None
+    sys.meta_path.insert(0, WithoutTomllib())
+    sys.argv = sys.argv[2:]
+    exec(compile(source, '<installer>', 'exec'))
+else:
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+"""
+        )
+        python.chmod(0o755)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(f"Could not check {config}: Python 3.11+ is required", result.stdout)
+        self.assertIn("add [mcp_servers.ccp] manually", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Could not parse {config}", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
 
     def test_codex_config_write_failure_is_reported_honestly(self):
         # A chmod-based permission denial is silently bypassed when the test

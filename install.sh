@@ -487,13 +487,33 @@ MCPEOF
     # Codex: ~/.codex/config.toml
     local codex_config="$HOME/.codex/config.toml"
     if [ -f "$codex_config" ]; then
-        if ! grep -q "mcp_servers.ccp" "$codex_config" 2>/dev/null; then
+        local codex_state
+        codex_state="$(python3 -I - "$codex_config" <<'PY'
+import sys
+try:
+    import tomllib
+except ModuleNotFoundError:
+    print("unsupported")
+    sys.exit(0)
+try:
+    with open(sys.argv[1], "rb") as stream:
+        config = tomllib.load(stream)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit("Could not parse Codex configuration")
+servers = config.get("mcp_servers", {})
+if not isinstance(servers, dict):
+    sys.exit("Invalid Codex MCP servers table")
+print("present" if "ccp" in servers else "absent")
+PY
+        )" || codex_state="invalid"
+        if [ "$codex_state" = absent ]; then
             local codex_env="CCP_CLIENT_BIN = \"$client_bin\""
             if [ -f "$INSTALL_DIR/ccp-server" ]; then
                 codex_env="$codex_env
 CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
             fi
-            if cat >> "$codex_config" <<TOMLEOF
+            local codex_block
+            if ! codex_block="$(cat <<TOMLEOF
 
 [mcp_servers.ccp]
 command = "$mcp_cmd"
@@ -501,13 +521,36 @@ command = "$mcp_cmd"
 [mcp_servers.ccp.env]
 $codex_env
 TOMLEOF
-            then
-                ok "Added to $codex_config"
-            else
+            )"; then
                 mcp_config_warning "Codex" "Could not update $codex_config"
+            elif python3 -I - "$codex_config" "$codex_block" <<'PY'
+import pathlib, sys, tomllib
+try:
+    candidate = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8") + sys.argv[2]
+    config = tomllib.loads(candidate)
+except (OSError, tomllib.TOMLDecodeError):
+    sys.exit(1)
+servers = config.get("mcp_servers", {})
+sys.exit(0 if isinstance(servers, dict) and "ccp" in servers else 1)
+PY
+            then
+                if cat >> "$codex_config" <<TOMLEOF
+$codex_block
+TOMLEOF
+                then
+                    ok "Added to $codex_config"
+                else
+                    mcp_config_warning "Codex" "Could not update $codex_config"
+                fi
+            else
+                mcp_config_warning "Codex" "Cannot add [mcp_servers.ccp] to $codex_config safely; add it manually"
             fi
-        else
+        elif [ "$codex_state" = present ]; then
             ok "$codex_config already configured"
+        elif [ "$codex_state" = unsupported ]; then
+            mcp_config_warning "Codex" "Could not check $codex_config: Python 3.11+ is required; add [mcp_servers.ccp] manually"
+        else
+            mcp_config_warning "Codex" "Could not parse $codex_config; add [mcp_servers.ccp] manually"
         fi
     fi
 
