@@ -216,7 +216,10 @@ prepare_stable_release() {
     fi
     RELEASE_STAGE="$(mktemp -d)" || return 1
     local api="https://api.github.com/repos/${REPO}/releases/latest"
-    download_release_file "$api" "$RELEASE_STAGE/release.json" || return 1
+    if ! download_release_file "$api" "$RELEASE_STAGE/release.json"; then
+        stable_release_error "Stable release discovery failed. No binaries installed."
+        return 1
+    fi
     RELEASE_VERSION="$(python3 - "$RELEASE_STAGE/release.json" <<'PY'
 import json, re, sys
 release = json.load(open(sys.argv[1]))
@@ -225,25 +228,22 @@ if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v(0|[
     sys.exit("Invalid stable release")
 print(tag)
 PY
-    )" || return 1
+    )" || {
+        stable_release_error "Stable release selection failed. No binaries installed."
+        return 1
+    }
     local platform base asset
     platform="$(detect_platform)" || return 1
     base="https://github.com/${REPO}/releases/download/${RELEASE_VERSION}"
-    local assets=("ccp-client-$platform")
+    local assets=("ccp-client-$platform" "ccp-mcp.tar.gz")
     if [ "$MODE" = both ]; then assets+=("ccp-server-$platform"); fi
-    # Only an absent asset permits the legacy tagged-source fallback.
-    if python3 - "$RELEASE_STAGE/release.json" <<'PY'
-import json, sys
-release = json.load(open(sys.argv[1]))
-sys.exit(0 if any(asset["name"] == "ccp-mcp.tar.gz" for asset in release["assets"]) else 1)
-PY
-    then
-        assets+=("ccp-mcp.tar.gz")
-    fi
     for asset in SHA256SUMS "${assets[@]}"; do
-        download_release_file "$base/$asset" "$RELEASE_STAGE/$asset" || return 1
+        if ! download_release_file "$base/$asset" "$RELEASE_STAGE/$asset"; then
+            stable_release_error "Stable download failed: $asset. No binaries installed."
+            return 1
+        fi
     done
-    python3 - "$RELEASE_STAGE" "${assets[@]}" <<'PY'
+    if ! python3 - "$RELEASE_STAGE" "${assets[@]}" <<'PY'
 import hashlib, pathlib, re, sys
 stage = pathlib.Path(sys.argv[1])
 checksums = {}
@@ -256,6 +256,16 @@ for name in sys.argv[2:]:
     if hashlib.sha256((stage / name).read_bytes()).hexdigest() != checksums.get(name):
         sys.exit(f"Stable checksum mismatch: {name}")
 PY
+    then
+        stable_release_error "Stable verification failed. No binaries installed."
+        return 1
+    fi
+}
+
+stable_release_error() {
+    err "$1"
+    info "Try installing from source instead:"
+    echo -e "  ${DIM}curl -fsSL ${REPO_RAW}/install.sh | bash -s -- --from-source${RESET}"
 }
 
 download_release_file() {
@@ -431,7 +441,7 @@ install_mcp_bridge() {
     local venv_dir="$mcp_home/venv"
     local mcp_src
 
-    if [ "$FROM_SOURCE" = false ] && [ -f "$RELEASE_STAGE/ccp-mcp.tar.gz" ]; then
+    if [ "$FROM_SOURCE" = false ]; then
         step "Installing MCP bridge from $RELEASE_VERSION"
         if [ ! -d "$venv_dir" ] && ! python3 -m venv "$venv_dir"; then
             err "Could not create the MCP environment."; exit 1
@@ -445,7 +455,7 @@ install_mcp_bridge() {
 
     if [ "$FROM_SOURCE" = true ] && [ -n "$REPO_ROOT" ] && [ -d "$REPO_ROOT/mcp" ]; then
         mcp_src="$REPO_ROOT/mcp"
-    elif [ "$FROM_SOURCE" = true ]; then
+    else
         mcp_src="$mcp_home/src"
         if [ ! -d "$mcp_src" ]; then
             mkdir -p "$mcp_home" || return 1
@@ -453,10 +463,6 @@ install_mcp_bridge() {
             mv "$mcp_home/repo/mcp" "$mcp_src" || return 1
             rm -rf "$mcp_home/repo" || return 1
         fi
-    else
-        step "Downloading MCP bridge from $RELEASE_VERSION..."
-        git clone --depth 1 --branch "$RELEASE_VERSION" "https://github.com/${REPO}.git" "$RELEASE_STAGE/repo" || return 1
-        mcp_src="$RELEASE_STAGE/repo/mcp"
     fi
 
     step "Installing MCP bridge..."
@@ -464,11 +470,7 @@ install_mcp_bridge() {
         python3 -m venv "$venv_dir" || return 1
     fi
     "$venv_dir/bin/pip" install --quiet --upgrade pip || return 1
-    if [ "$FROM_SOURCE" = true ]; then
-        "$venv_dir/bin/pip" install --quiet -e "$mcp_src" || return 1
-    else
-        "$venv_dir/bin/pip" install --quiet --upgrade --force-reinstall "$mcp_src" || return 1
-    fi
+    "$venv_dir/bin/pip" install --quiet -e "$mcp_src" || return 1
     ok "MCP bridge installed in $venv_dir"
 }
 

@@ -29,6 +29,10 @@ permissions. SQLite and a journal preserve state across clean restarts.
 
 ## Install
 
+Stable native installs require `python3` and access to the GitHub releases API.
+The installer requires the release's checksum-verified MCP archive and fails if
+it is unavailable. Use `--from-source` to install from a source checkout instead.
+
 ```bash
 # Server and client
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash
