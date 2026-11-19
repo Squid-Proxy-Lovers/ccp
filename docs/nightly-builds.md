@@ -69,8 +69,9 @@ installer retains its checksum-based behavior; managed updates are separate work
 
 Docker images use `ghcr.io/squid-proxy-lovers/ccp:nightly` for the current nightly,
 and the matching dated release tag for a pinned image. The Docker build currently
-targets Linux amd64. Nightly runs publish only these nightly tags. Validated stable version tags
-publish `:latest` and commit-SHA images; main pushes do not move `:latest`.
+targets Linux amd64. Nightly runs publish only these nightly tags. Validated stable
+version tags publish the exact release tag, `:latest`, and commit-SHA images;
+main pushes do not move `:latest`.
 [Release candidates](client-release-bundles.md#install-a-release-candidate) use
 only exact RC and commit-SHA image tags.
 
