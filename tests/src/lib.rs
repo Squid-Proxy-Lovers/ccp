@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 #![expect(
-    clippy::indexing_slicing,
     clippy::unreachable,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

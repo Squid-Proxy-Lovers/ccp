@@ -2,11 +2,6 @@
 // Copyright (C) 2026 Squid Proxy Lovers
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-#![expect(
-    clippy::indexing_slicing,
-    reason = "test and benchmark support code: a panic here is a failed test, not a production crash"
-)]
-
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
