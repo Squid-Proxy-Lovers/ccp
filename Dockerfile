@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS panel
+FROM node:26-bookworm-slim AS panel
 WORKDIR /panel
 COPY crates/server/web/package.json crates/server/web/package-lock.json ./
 RUN npm ci --ignore-scripts
