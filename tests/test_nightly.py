@@ -1608,6 +1608,20 @@ elif name == 'cat':
         self.assertFalse(any(call[0] == "git" for call in calls))
         self.assertFalse((self.install_dir / "ccp-nightly.json").exists())
 
+    def test_server_install_without_mcp_skips_the_mcp_archive(self):
+        # The test run has no terminal, so the MCP prompt reads as "no".
+        for channel in ((), ("--channel", "nightly", "--version", TAG)):
+            with self.subTest(channel=channel or "stable"):
+                self.log.unlink(missing_ok=True)
+                result, calls = self.install(*channel, failure="ccp-mcp.tar.gz")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((self.install_dir / "ccp-server").exists())
+                self.assertTrue((self.install_dir / "ccp-client").exists())
+                downloads = [call[2] for call in calls if call[0] == "curl"]
+                self.assertFalse(any(url.endswith("/ccp-mcp.tar.gz") for url in downloads))
+                self.assertFalse(any(call[0] in ("pip", "git") for call in calls))
+                self.assertIn("MCP bridge skipped", result.stdout)
+
     def test_stable_release_without_mcp_asset_fails_closed(self):
         for assets in ([], None, "invalid", [{}]):
             with self.subTest(assets=assets):

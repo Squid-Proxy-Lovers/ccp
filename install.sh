@@ -235,7 +235,8 @@ PY
     local platform base asset
     platform="$(detect_platform)" || return 1
     base="https://github.com/${REPO}/releases/download/${RELEASE_VERSION}"
-    local assets=("ccp-client-$platform" "ccp-mcp.tar.gz")
+    local assets=("ccp-client-$platform")
+    if [ "$INSTALL_MCP" = true ]; then assets+=("ccp-mcp.tar.gz"); fi
     if [ "$MODE" = both ]; then assets+=("ccp-server-$platform"); fi
     for asset in SHA256SUMS "${assets[@]}"; do
         if ! download_release_file "$base/$asset" "$RELEASE_STAGE/$asset"; then
@@ -314,7 +315,8 @@ PY
     platform="$(detect_platform)" || exit 1
     base="https://github.com/${REPO}/releases/download/${RELEASE_VERSION}"
     step "Downloading nightly ${BOLD}$RELEASE_VERSION${RESET} for $platform"
-    local assets=("ccp-client-$platform" "ccp-mcp.tar.gz" "build-info.json")
+    local assets=("ccp-client-$platform" "build-info.json")
+    if [ "$INSTALL_MCP" = true ]; then assets+=("ccp-mcp.tar.gz"); fi
     if [ "$MODE" = "both" ]; then assets+=("ccp-server-$platform"); fi
     for asset in SHA256SUMS "${assets[@]}"; do
         if ! download_release_file "$base/$asset" "$RELEASE_STAGE/$asset"; then
@@ -692,6 +694,20 @@ fi
 
 # ── Binary install ───────────────────────────────────────────────────────────
 
+# Decide on the MCP bridge first, so release downloads fetch and verify its
+# archive only when it will be installed.
+INSTALL_MCP=false
+if [ "$MODE" = "client" ]; then
+    INSTALL_MCP=true
+elif [ "$MODE" = "both" ]; then
+    printf '%b>>>%b Install the MCP bridge for Claude/Cursor/Codex? [y/N] ' "$CYAN" "$RESET"
+    read -r INSTALL_MCP_ANSWER </dev/tty 2>/dev/null || INSTALL_MCP_ANSWER="n"
+    case "$INSTALL_MCP_ANSWER" in
+        [yY]|[yY][eE][sS]) INSTALL_MCP=true ;;
+    esac
+    echo ""
+fi
+
 step "Installing CCP ${BOLD}($MODE)${RESET}"
 mkdir -p "$INSTALL_DIR" || exit 1
 
@@ -734,22 +750,11 @@ install_ccp_alias
 
 # ── MCP bridge ───────────────────────────────────────────────────────────────
 
-if [ "$MODE" = "client" ]; then
+if [ "$INSTALL_MCP" = true ]; then
     install_mcp_bridge || exit 1
     configure_mcp
 elif [ "$MODE" = "both" ]; then
-    echo ""
-    printf '%b>>>%b Install the MCP bridge for Claude/Cursor/Codex? [y/N] ' "$CYAN" "$RESET"
-    read -r INSTALL_MCP_ANSWER </dev/tty 2>/dev/null || INSTALL_MCP_ANSWER="n"
-    case "$INSTALL_MCP_ANSWER" in
-        [yY]|[yY][eE][sS])
-            install_mcp_bridge || exit 1
-            configure_mcp
-            ;;
-        *)
-            info "Skipped. Run with ${DIM}--client${RESET} later to set up MCP."
-            ;;
-    esac
+    info "MCP bridge skipped. Run with ${DIM}--client${RESET} later to set up MCP."
 fi
 
 ensure_path
