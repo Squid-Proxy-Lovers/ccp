@@ -1907,6 +1907,7 @@ else:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_symlinked_codex_config_keeps_its_link_and_mode(self):
+        """Compatibility check: the link and mode survive; it also passes on main."""
         self.mcp_bridge_fixture()
         codex_dir = self.home_dir / ".codex"
         codex_dir.mkdir(parents=True)
@@ -1925,6 +1926,54 @@ else:
         self.assertEqual(target.read_text().count("[mcp_servers.ccp]"), 1)
         self.assertEqual(target.stat().st_mode & 0o777, 0o640)
         self.assertEqual(sorted(path.name for path in target.parent.iterdir()), ["codex.toml"])
+
+    def test_codex_append_keeps_the_config_inode_mode_and_acl(self):
+        config, original = self.codex_config_without_ccp()
+        config.chmod(0o640)
+        acl_applied = False
+        if sys.platform == "darwin":
+            acl = subprocess.run(  # noqa: S603 -- fixed macOS chmod and a test-owned file.
+                ["/bin/chmod", "+a", "group:everyone allow read", str(config)],
+                capture_output=True,
+                check=False,
+            )
+            acl_applied = acl.returncode == 0
+
+        def acl_entries():
+            listing = subprocess.run(  # noqa: S603 -- fixed macOS ls and a test-owned file.
+                ["/bin/ls", "-le", str(config)], capture_output=True, text=True, check=True
+            ).stdout
+            return [line.strip() for line in listing.splitlines()[1:]]
+
+        before_inode = config.stat().st_ino
+        before_acl = acl_entries() if acl_applied else []
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"Added to {config}", result.stdout)
+        self.assertTrue(config.read_text().startswith(original))
+        self.assertEqual(config.stat().st_ino, before_inode, "the config must not be replaced")
+        self.assertEqual(config.stat().st_mode & 0o777, 0o640)
+        if acl_applied:
+            self.assertTrue(any("everyone allow read" in entry for entry in before_acl))
+            self.assertEqual(acl_entries(), before_acl)
+
+    def test_read_only_codex_config_is_left_alone_with_a_warning(self):
+        if os.geteuid() == 0:
+            self.skipTest("root bypasses file mode bits, so a 0444 file stays writable")
+        config, original = self.codex_config_without_ccp()
+        config.chmod(0o444)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertEqual(config.stat().st_mode & 0o777, 0o444)
+        self.assertIn(f"Could not update {config}", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(
+            sorted(path.name for path in config.parent.iterdir()),
+            ["config.toml", "config.toml.ccp-lock"],
+        )
 
     def test_deeply_nested_codex_config_asks_for_repair_without_a_traceback(self):
         self.mcp_bridge_fixture()

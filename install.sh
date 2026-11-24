@@ -488,17 +488,17 @@ mcp_config_warning() {
 # Mode "append CONFIG COMMAND CLIENT SERVER" builds the entry with escaped TOML
 # strings, takes an flock on the sidecar file CONFIG.ccp-lock, retrying for
 # about two seconds (CCP_CODEX_LOCK_RETRIES tenths of a second, for tests),
-# then re-checks and publishes the config plus the entry through a temporary
-# file and an atomic rename, all in that one process, so the kernel drops the
-# lock however the process ends and the config is never left half written.
-# A symlinked config keeps its link: the target file is replaced. It prints added,
-# locked (contention), failed (lock or write error), badentry (the entry
-# itself is not valid TOML) or a check state. The lock file itself is left in
-# place; only the lock on it matters.
+# then re-checks and appends the entry to the config in place, all in that one
+# process, so the kernel drops the lock however the process ends. A failed or
+# interrupted write is truncated back to the original size, so the config is
+# never left half written; a read-only config is never replaced. It prints
+# added, locked (contention), failed (lock or write error), badentry (the
+# entry itself is not valid TOML) or a check state. The lock file itself is
+# left in place; only the lock on it matters.
 codex_config_tool() {
     local out
     out="$(python3 -I - "$@" <<'PY'
-import os, signal, stat, sys, tempfile, time
+import os, signal, sys, time
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -569,43 +569,42 @@ def acquire(path):
     return False
 
 
-def publish(target, data):
-    mode = stat.S_IMODE(os.stat(target).st_mode)
-    fd, temp = tempfile.mkstemp(prefix=".ccp-config-", dir=os.path.dirname(target))
+def publish(path, size, tail):
+    # Append in place, so the inode, mode, ACLs, xattrs and owner all stay.
+    # Opening the path follows a symlink and fails on a read-only file.
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND)
     try:
+        if os.fstat(fd).st_size != size:
+            raise OSError("config changed while it was being checked")
         try:
-            view = memoryview(data)
+            view = memoryview(tail)
             while view:
                 view = view[os.write(fd, view):]
-            os.fchmod(fd, mode)
             os.fsync(fd)
-        finally:
-            os.close(fd)
-        os.replace(temp, target)
-    except BaseException:
-        if os.path.lexists(temp):
-            os.unlink(temp)
-        raise
+        except BaseException:
+            os.ftruncate(fd, size)
+            os.fsync(fd)
+            raise
+    finally:
+        os.close(fd)
 
 
 def append(path, block):
-    # A symlinked config is resolved and its target replaced, so the link stays.
-    target = os.path.realpath(path)
-    state = check(target)
+    state = check(path)
     if state != "absent":
         return state
+    tail = (block + "\n").encode("utf-8")
     try:
-        with open(target, "rb") as stream:
+        with open(path, "rb") as stream:
             original = stream.read()
-        data = original + (block + "\n").encode("utf-8")
-        candidate = tomllib.loads(data.decode("utf-8"))
+        candidate = tomllib.loads((original + tail).decode("utf-8"))
     except (UnicodeDecodeError, RecursionError, MemoryError):
         return "invalid"
     except tomllib.TOMLDecodeError:
         return "unsafe"
     if classify(candidate) != "present":
         return "unsafe"
-    publish(target, data)
+    publish(path, len(original), tail)
     return "added"
 
 
