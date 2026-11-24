@@ -492,10 +492,11 @@ mcp_config_warning() {
 # config, in place, all in that one process, so the kernel drops the lock
 # however the process ends. If the write fails, or the path stops naming the
 # file that was written, or the process gets HUP, INT or TERM, the config is
-# truncated back to its original size, but only when every byte past it is
-# ours; another process's in-place edits are never cut off. SIGKILL or power loss mid-write can
-# still leave a partial append, as the old "cat >>" could; nothing rolls that
-# back. A read-only config is never replaced. It prints added, locked
+# truncated back to its original size, but only when the file is exactly the
+# validated bytes plus the bytes this process wrote; another process's
+# in-place edits are never cut off, and nothing is cut when nothing was
+# written. SIGKILL or power loss mid-write can still leave a partial append,
+# as the old "cat >>" could; nothing rolls that back. A read-only config is never replaced. It prints added, locked
 # (contention), failed (lock or write error), changed (the file differed
 # from what was validated, nothing written), damaged (a write failed and
 # someone else's bytes made a rollback unsafe), badentry (the
@@ -598,25 +599,28 @@ class Damaged(Exception):
     """The config changed under a failed write, so it was not rolled back."""
 
 
-def write_tail(fd, before, path, tail):
+def write_tail(fd, before, path, tail, written):
     view = memoryview(tail)
     while view:
-        view = view[os.write(fd, view):]
+        count = os.write(fd, view)
+        written[0] += count
+        view = view[count:]
     os.fsync(fd)
     current = os.stat(path)
     if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
         raise OSError("config was replaced during the update")
 
 
-def roll_back(fd, original, tail):
-    # Truncate only what this process appended: the file must still be the
-    # validated bytes followed by a prefix of the tail. Anything else was
-    # written by someone else, and cutting it off would destroy their work.
-    size = len(original)
-    data = read_all(fd, os.fstat(fd).st_size)
-    if data[:size] != original or not tail.startswith(data[size:]):
+def roll_back(fd, original, tail, written):
+    # Undo only what this process appended. With nothing written there is
+    # nothing of ours to remove. Otherwise the file must be exactly the
+    # validated bytes plus the bytes os.write reported; anything else includes
+    # edits by another writer, and cutting it off would destroy that work.
+    if written == 0:
+        return
+    if read_all(fd, os.fstat(fd).st_size) != original + tail[:written]:
         raise Damaged
-    os.ftruncate(fd, size)
+    os.ftruncate(fd, len(original))
     os.fsync(fd)
 
 
@@ -645,10 +649,11 @@ def append(path, block):
             return "unsafe"
         if read_all(fd, os.fstat(fd).st_size) != original:
             return "changed"
+        written = [0]
         try:
-            write_tail(fd, before, path, tail)
+            write_tail(fd, before, path, tail, written)
         except BaseException:
-            roll_back(fd, original, tail)
+            roll_back(fd, original, tail, written[0])
             raise
         return "added"
     finally:

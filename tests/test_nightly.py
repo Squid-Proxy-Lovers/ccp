@@ -1691,16 +1691,27 @@ if sys.argv[1:3] == ['-I', '-']:
     short_write = os.environ.get('CODEX_TEST_SHORT_WRITE')
     if short_write:
         real_write = os.write
+        calls = []
         def failing_write(fd, data):
+            if calls:
+                raise OSError(28, 'injected ENOSPC after a short write')
+            calls.append(fd)
             concurrent = os.environ.get('CODEX_TEST_CONCURRENT_APPEND')
             if concurrent:
                 path, _, text = concurrent.partition('|')
                 with open(path, 'ab') as other:
                     other.write(text.encode())
-            real_write(fd, bytes(data[:12]))
+            written = real_write(fd, bytes(data[:12]))
             open(short_write, 'w').close()
-            raise OSError(28, 'injected short write')
+            return written
         os.write = failing_write
+    zero_write = os.environ.get('CODEX_TEST_ZERO_WRITE_PATH')
+    if zero_write:
+        def failing_zero_write(fd, data):
+            with open(zero_write, 'ab') as other:
+                other.write(bytes(data))
+            raise OSError(27, 'injected EFBIG with nothing written')
+        os.write = failing_zero_write
     real_os_open = os.open
     def hooked_open(path, flags, *args, **kwargs):
         writable = flags & (os.O_WRONLY | os.O_RDWR)
@@ -2059,6 +2070,23 @@ else:
         self.edit_config_after_the_installer_read_it(config, extra)
         self.assertEqual(config.read_bytes(), (original + extra).encode())
         self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+
+    def test_zero_byte_write_failure_never_removes_an_identical_entry_saved_by_another_writer(self):
+        config, original = self.codex_config_without_ccp()
+        self.codex_python_hooks()
+        # The write fails having stored nothing, and another process then
+        # saves exactly the entry this installer meant to add.
+        with patch.dict(os.environ, CODEX_TEST_ZERO_WRITE_PATH=str(config)):
+            result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        content = config.read_text()
+        self.assertTrue(content.startswith(original))
+        self.assertEqual(content.count("[mcp_servers.ccp]"), 1)
+        self.assertIsInstance(tomllib.loads(content)["mcp_servers"]["ccp"], dict)
+        self.assertIn(f"Could not update {config}", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_failed_write_does_not_truncate_another_writers_bytes(self):
         config, original = self.codex_config_without_ccp()
