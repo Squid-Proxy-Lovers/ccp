@@ -122,6 +122,13 @@ schema versions match. A deliberate migration needs its own migration tests.
 
 ## Quality and security
 
+The nightly packaging and installer suite (`make nightly-tests`) requires
+Python 3.11+ for its `tomllib` assertions. Use the repository's Python 3.13
+development environment, also pinned by the source-lint CI job. The separate
+Python 3.10 compatibility matrix tests the MCP package; it does not run this
+suite. On Python 3.10, the installer leaves Codex configuration unchanged and
+explains that automatic configuration requires Python 3.11+.
+
 ```bash
 make lint-fast
 make installer-tests
