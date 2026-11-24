@@ -1,5 +1,6 @@
 """Exercise artifact integrity, publication recovery, and the actual installer."""
 
+import fcntl
 import hashlib
 import importlib.util
 import json
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1564,7 +1566,8 @@ elif name == 'cat':
         self.assertEqual(config.read_bytes(), original.encode())
         self.assertEqual(tomllib.loads(config.read_text()), tomllib.loads(original))
         self.assertIn(
-            f"Cannot add [mcp_servers.ccp] to {config} safely; add it manually", result.stdout
+            f"Cannot add [mcp_servers.ccp] to {config} safely: mcp_servers or mcp_servers.ccp is not a table",
+            result.stdout,
         )
         self.assertIn("the Codex MCP config was not written", result.stdout)
         self.assertNotIn(f"Added to {config}", result.stdout)
@@ -1574,7 +1577,8 @@ elif name == 'cat':
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(config.read_bytes(), original.encode())
         self.assertIn(
-            f"Cannot add [mcp_servers.ccp] to {config} safely; add it manually", result.stdout
+            f"Cannot add [mcp_servers.ccp] to {config} safely: mcp_servers or mcp_servers.ccp is not a table",
+            result.stdout,
         )
         self.assertEqual(
             re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()[-1],
@@ -1607,28 +1611,140 @@ elif name == 'cat':
                 config.write_bytes(original.encode())
                 self.assert_codex_config_retained_with_unsafe_warning(config, original)
 
-    def test_held_codex_lock_prevents_write_and_warns(self):
+    def codex_lock_holder(self, lock):
+        holder = subprocess.Popen(  # noqa: S603
+            [
+                sys.executable,
+                "-c",
+                "import fcntl, sys, time\n"
+                "fd = open(sys.argv[1], 'a')\n"
+                "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+                "print('ready', flush=True)\n"
+                "time.sleep(60)\n",
+                str(lock),
+            ],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(holder.stdout.close)
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        self.assertEqual(holder.stdout.readline().strip(), "ready")
+        return holder
+
+    def codex_config_without_ccp(self):
         self.mcp_bridge_fixture()
         config = self.home_dir / ".codex/config.toml"
         config.parent.mkdir(parents=True)
         original = '[mcp_servers.other]\ncommand = "o"\n'
         config.write_bytes(original.encode())
+        return config, original
+
+    def test_held_codex_lock_prevents_write_and_warns(self):
+        config, original = self.codex_config_without_ccp()
         lock = Path(f"{config}.ccp-lock")
-        lock.mkdir()
-        result, _ = self.install("--client")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(config.read_bytes(), original.encode())
-        self.assertIn(f"Another installer is updating {config}", result.stdout)
-        self.assertIn("the Codex MCP config was not written", result.stdout)
-        self.assertNotIn(f"Added to {config}", result.stdout)
-        self.assertTrue(lock.is_dir(), "a lock held by another installer must be left alone")
-        # With the lock gone the append succeeds and releases its own lock.
-        lock.rmdir()
+        with open(lock, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            result, _ = self.install("--client")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(config.read_bytes(), original.encode())
+            self.assertIn(f"Another installer is updating {config}", result.stdout)
+            self.assertIn(f"lock file {lock} is held", result.stdout)
+            self.assertIn("retry later or add [mcp_servers.ccp] manually", result.stdout)
+            self.assertIn("the Codex MCP config was not written", result.stdout)
+            self.assertNotIn(f"Added to {config}", result.stdout)
+        # Once released, the append succeeds and leaves the plain lock file behind.
         result, _ = self.install("--client")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
         self.assertIn(f"Added to {config}", result.stdout)
-        self.assertFalse(lock.exists())
+        self.assertTrue(lock.is_file())
+
+    def test_killed_codex_lock_holder_does_not_block_the_next_run(self):
+        config, original = self.codex_config_without_ccp()
+        lock = Path(f"{config}.ccp-lock")
+        holder = self.codex_lock_holder(lock)
+        holder.kill()
+        holder.wait()
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"Added to {config}", result.stdout)
+        self.assertTrue(config.read_text().startswith(original))
+        self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+        self.assertTrue(lock.is_file(), "the lock is a file; only the kernel lock matters")
+
+    def test_waiting_installer_proceeds_when_lock_holder_is_killed(self):
+        config, original = self.codex_config_without_ccp()
+        holder = self.codex_lock_holder(Path(f"{config}.ccp-lock"))
+        env = dict(
+            os.environ,
+            HOME=str(self.home_dir),
+            TMPDIR=str(self.root),
+            PATH=f"{self.bin_dir}:{os.environ['PATH']}",
+            NIGHTLY_TEST_LOG=str(self.log),
+            NIGHTLY_TEST_FIXTURES=str(self.fixtures),
+            NIGHTLY_TEST_FAILURE="",
+        )
+        argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), "--client"]
+        waiter = subprocess.Popen(  # noqa: S603
+            argv, cwd=self.root, env=env, stdout=subprocess.PIPE, text=True
+        )
+        self.addCleanup(waiter.wait)
+        self.addCleanup(waiter.kill)
+        self.addCleanup(waiter.stdout.close)
+        time.sleep(0.8)
+        self.assertEqual(config.read_bytes(), original.encode())
+        holder.kill()
+        holder.wait()
+        output, _ = waiter.communicate(timeout=60)
+        self.assertEqual(waiter.returncode, 0, output)
+        self.assertIn(f"Added to {config}", output)
+        self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+
+    def test_codex_lock_file_error_is_an_update_failure_not_contention(self):
+        config, original = self.codex_config_without_ccp()
+        # A directory where the lock file belongs fails the open regardless of privileges.
+        Path(f"{config}.ccp-lock").mkdir()
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(f"Could not update {config}", result.stdout)
+        self.assertNotIn("Another installer", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+
+    def test_unparseable_codex_config_asks_for_repair(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = "[mcp_servers\n"
+        config.write_bytes(original.encode())
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(f"Could not parse {config}; repair the TOML, then add", result.stdout)
+        self.assertFalse(Path(f"{config}.ccp-lock").exists())
+
+    def test_codex_parser_crash_is_reported_as_invalid(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = '[mcp_servers.other]\ncommand = "o"\n'
+        config.write_bytes(original.encode())
+        python = self.bin_dir / "python3"
+        python.write_text(
+            f"#!{sys.executable}\n"
+            "import os, sys\n"
+            "if sys.argv[1:3] == ['-I', '-']:\n"
+            "    sys.stdin.read()\n"
+            "    sys.exit(3)\n"
+            f"os.execv({sys.executable!r}, [{sys.executable!r}, *sys.argv[1:]])\n"
+        )
+        python.chmod(0o755)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(f"Could not parse {config}; repair the TOML", result.stdout)
+        self.assertNotIn("Cannot add", result.stdout)
 
     def test_codex_config_is_retained_without_tomllib(self):
         self.mcp_bridge_fixture()
