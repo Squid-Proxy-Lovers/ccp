@@ -489,6 +489,131 @@ function Test-CcpBoundedRetention {
         }
     } finally { Set-Item Function:Register-CcpBackup $script:R3BackupRegistrar }
 }
+function Initialize-TestUninstall {
+    param([string]$Root, [string]$Name)
+    $profilePath = Join-Path $Root $Name
+    $bin = Join-Path $profilePath 'bin'
+    New-Item -ItemType Directory -Force -Path $bin | Out-Null
+    $env:USERPROFILE = $profilePath
+    $script:CcpRetentionDirectory = $bin
+    try {
+        $generations = Join-Path $profilePath '.ccp-mcp\generations'
+        New-CcpDirectory $generations
+        $generation = New-CcpPrivateStage $generations
+        Register-CcpGeneration $generation
+    } finally { $script:CcpRetentionDirectory = $null }
+    $scripts = Join-Path $generation 'venv\Scripts'
+    New-Item -ItemType Directory -Force -Path $scripts | Out-Null
+    $command = Join-Path $scripts 'ccp-mcp-server.exe'
+    $client = Join-Path $generation 'ccp-client.exe'
+    [IO.File]::WriteAllText($command, 'bridge')
+    [IO.File]::WriteAllText($client, 'client bytes')
+    foreach ($name in @('ccp-client.exe', 'ccp.exe')) { [IO.File]::WriteAllText((Join-Path $bin $name), 'client bytes') }
+    $hash = Get-CcpFileDigest (Join-Path $bin 'ccp-client.exe')
+    $record = @{ format = 1; client_sha256 = $hash; alias_sha256 = $hash; mcp_command = $command; mcp_client = $client }
+    [IO.File]::WriteAllText((Join-Path $bin '.ccp-install.json'), ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    return @{ profile = $profilePath; bin = $bin; command = $command; client = $client; generation = $generation }
+}
+function Write-TestMcpHost {
+    param([string]$Path, [string]$Command, [string]$Client)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+    $config = [ordered]@{ other = 'keep'; mcpServers = [ordered]@{
+        ccp = [ordered]@{ command = $Command; env = [ordered]@{ CCP_CLIENT_BIN = $Client } }
+        neighbor = [ordered]@{ command = 'other-server' } } }
+    [IO.File]::WriteAllText($Path, ($config | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+}
+function Invoke-TestUninstall {
+    param([string]$Bin)
+    $script:RemovedPathDirectory = $null
+    $records = @(Uninstall-CcpWindows $Bin *>&1)
+    return (($records | ForEach-Object { "$_" }) -join "`n")
+}
+function Test-CcpUninstall {
+    param([string]$Root)
+    $savedProfile = $env:USERPROFILE
+    $savedClientHome = $env:CCP_CLIENT_HOME
+    try {
+        # Full removal, data untouched, Codex instruction, and a second run that finds nothing.
+        $f = Initialize-TestUninstall $Root 'uninstall-full'
+        $claudePath = Join-Path $f.profile '.claude.json'
+        $cursorPath = Join-Path $f.profile '.cursor\mcp.json'
+        $codexPath = Join-Path $f.profile '.codex\config.toml'
+        Write-TestMcpHost $claudePath $f.command $f.client
+        Write-TestMcpHost $cursorPath $f.command $f.client
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $codexPath) | Out-Null
+        $codexText = "# keep`n[mcp_servers.ccp]`ncommand = `"x`"`n"
+        [IO.File]::WriteAllText($codexPath, $codexText)
+        $env:CCP_CLIENT_HOME = Join-Path $f.profile '.ccp-client'
+        $keyPath = Join-Path $env:CCP_CLIENT_HOME 'enrollments\one\client.key'
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $keyPath) | Out-Null
+        [IO.File]::WriteAllText($keyPath, 'private key')
+        $text = Invoke-TestUninstall $f.bin
+        Confirm-TestCondition (-not (Test-Path -LiteralPath $f.bin)) 'Uninstall left the install directory.'
+        Confirm-TestCondition (-not (Test-Path -LiteralPath (Join-Path $f.profile '.ccp-mcp'))) 'Uninstall left the MCP directory.'
+        Confirm-TestCondition ($script:RemovedPathDirectory -eq $f.bin) 'Uninstall did not remove the PATH entry.'
+        foreach ($path in @($claudePath, $cursorPath)) {
+            $after = Get-Content -Encoding UTF8 -LiteralPath $path -Raw | ConvertFrom-Json
+            Confirm-TestCondition ($null -eq $after.mcpServers.PSObject.Properties['ccp']) 'The ccp host entry was not removed.'
+            Confirm-TestCondition ($after.mcpServers.neighbor.command -eq 'other-server' -and $after.other -eq 'keep') 'Unrelated host settings were lost.'
+            Confirm-TestCondition (@(Get-ChildItem -LiteralPath (Split-Path -Parent $path) -Force -Filter ((Split-Path -Leaf $path) + '.backup.*')).Count -eq 1) 'Host config backup was not kept.'
+        }
+        Confirm-TestCondition (([IO.File]::ReadAllText($codexPath)) -eq $codexText) 'Codex TOML was modified.'
+        Confirm-TestCondition ($text.Contains('[mcp_servers.ccp]') -and $text.Contains('by hand')) 'Codex removal instruction was not printed.'
+        Confirm-TestCondition (([IO.File]::ReadAllText($keyPath)) -eq 'private key') 'Client state was touched.'
+        Confirm-TestCondition ($text.Contains($env:CCP_CLIENT_HOME)) 'Client state location was not printed.'
+        $text = Invoke-TestUninstall $f.bin
+        Confirm-TestCondition ($text.Contains('Nothing left to remove')) 'A second uninstall did not report nothing left.'
+        Confirm-TestCondition (([IO.File]::ReadAllText($keyPath)) -eq 'private key') 'Second uninstall touched client state.'
+
+        # A ccp.exe the installer does not own, a changed client, and an unrecorded MCP directory are kept.
+        $f = Initialize-TestUninstall $Root 'uninstall-foreign'
+        [IO.File]::WriteAllText((Join-Path $f.bin 'ccp.exe'), 'someone else')
+        $stray = New-CcpPrivateStage (Join-Path $f.profile '.ccp-mcp\generations')
+        $text = Invoke-TestUninstall $f.bin
+        Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $f.bin 'ccp.exe') -Raw) -eq 'someone else') 'A foreign ccp.exe was removed.'
+        Confirm-TestCondition (-not (Test-Path -LiteralPath (Join-Path $f.bin 'ccp-client.exe'))) 'The owned client was not removed.'
+        Confirm-TestCondition ($text.Contains('differs from the file CCP installed')) 'The kept ccp.exe was not reported.'
+        Confirm-TestCondition ((Test-Path -LiteralPath $stray) -and -not (Test-Path -LiteralPath $f.generation)) 'Unrecorded MCP directory handling is wrong.'
+        Confirm-TestCondition ($null -eq $script:RemovedPathDirectory -and (Test-Path -LiteralPath $f.bin)) 'A non-empty install directory was removed.'
+
+        $f = Initialize-TestUninstall $Root 'uninstall-changed'
+        [IO.File]::WriteAllText((Join-Path $f.bin 'ccp-client.exe'), 'replaced by the user')
+        Invoke-TestUninstall $f.bin | Out-Null
+        Confirm-TestCondition ((Get-Content -Encoding UTF8 -LiteralPath (Join-Path $f.bin 'ccp-client.exe') -Raw) -eq 'replaced by the user') 'A changed client was removed.'
+
+        # Host entries that are not the installer's are kept byte for byte, with a warning.
+        $f = Initialize-TestUninstall $Root 'uninstall-hosts'
+        $claudePath = Join-Path $f.profile '.claude.json'
+        $cursorPath = Join-Path $f.profile '.cursor\mcp.json'
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $cursorPath) | Out-Null
+        [IO.File]::WriteAllText($claudePath, '{"mcpServers":{"ccp":{"command":"custom"}}}')
+        Write-TestMcpHost $cursorPath $f.command (Join-Path $f.profile 'other-client.exe')
+        $claudeBefore = [IO.File]::ReadAllBytes($claudePath)
+        $cursorBefore = [IO.File]::ReadAllBytes($cursorPath)
+        $text = Invoke-TestUninstall $f.bin
+        Confirm-TestCondition (([Convert]::ToBase64String($claudeBefore)) -eq ([Convert]::ToBase64String([IO.File]::ReadAllBytes($claudePath)))) 'A foreign Claude ccp entry was changed.'
+        Confirm-TestCondition (([Convert]::ToBase64String($cursorBefore)) -eq ([Convert]::ToBase64String([IO.File]::ReadAllBytes($cursorPath)))) 'A Cursor ccp entry with another client was changed.'
+        Confirm-TestCondition ($text.Contains('does not match the CCP installation record')) 'Kept host entries were not reported.'
+        Confirm-TestCondition (@(Get-ChildItem -LiteralPath $f.profile -Force -Filter '.claude.json.backup.*').Count -eq 0) 'A backup was made for an unchanged config.'
+
+        # Without an installation record nothing is proven installer-owned.
+        $f = Initialize-TestUninstall $Root 'uninstall-unrecorded'
+        Remove-Item -LiteralPath (Join-Path $f.bin '.ccp-install.json')
+        $text = Invoke-TestUninstall $f.bin
+        Confirm-TestCondition ((Test-Path -LiteralPath (Join-Path $f.bin 'ccp-client.exe')) -and (Test-Path -LiteralPath (Join-Path $f.bin 'ccp.exe'))) 'Unrecorded executables were removed.'
+        Confirm-TestCondition ($text.Contains('does not claim it')) 'Unrecorded executables were not reported.'
+
+        # An interrupted upgrade must be recovered by the installer first.
+        $f = Initialize-TestUninstall $Root 'uninstall-pending'
+        [IO.File]::WriteAllText((Join-Path $f.bin '.ccp-upgrade.json'), '{}')
+        Confirm-TestFailure { Uninstall-CcpWindows $f.bin } 'Uninstall ran during a pending upgrade.'
+        Confirm-TestCondition ((Test-Path -LiteralPath (Join-Path $f.bin 'ccp-client.exe')) -and (Test-Path -LiteralPath $f.generation)) 'A pending upgrade lost files.'
+    } finally {
+        $script:CcpRetentionDirectory = $null
+        $env:USERPROFILE = $savedProfile
+        [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $savedClientHome, 'Process')
+    }
+}
 function Invoke-CcpNative {
     param([string]$Executable, [string[]]$ArgumentList, [switch]$Capture)
     $script:NativeCalls.Add(@{ Executable = $Executable; Arguments = $ArgumentList })
@@ -549,6 +674,13 @@ function Set-CcpUserPath {
     param([string]$BinDirectory)
     if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Configure CCP')) { return }
     $script:ObservedBinDirectory = $BinDirectory
+}
+$removeUserPath = ${function:Remove-CcpUserPath}
+function Remove-CcpUserPath {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$BinDirectory)
+    if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Remove CCP from the user PATH')) { return }
+    $script:RemovedPathDirectory = $BinDirectory
 }
 
 try {
@@ -775,6 +907,8 @@ try {
         Remove-CcpPrivateStage $private
     }
     Test-CcpBoundedRetention $fixture $InstallDir $manifest $manifestPath
+    Test-CcpUninstall $testRoot
+    Confirm-TestCondition ($ast.ParamBlock.Parameters.Name.VariablePath.UserPath -contains 'Uninstall') 'The installer has no -Uninstall switch.'
     $directoryTarget = Join-Path $InstallDir 'directory'
     New-Item -ItemType Directory -Path $directoryTarget | Out-Null
     Confirm-TestFailure { Publish-CcpFile (Join-Path $fixture $CcpClientAsset) $directoryTarget } 'Directory destination accepted.'
@@ -789,6 +923,14 @@ try {
             & $setUserPath $InstallDir
             $entries = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
             Confirm-TestCondition (@($entries | Where-Object { $_ -eq $InstallDir }).Count -eq 1) 'User PATH update was not idempotent.'
+        } finally { [Environment]::SetEnvironmentVariable('Path', $savedPath, 'User') }
+        $savedPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+        try {
+            & $setUserPath $InstallDir
+            [Environment]::SetEnvironmentVariable('Path', "$savedPath;$InstallDir", 'User')
+            & $removeUserPath $InstallDir
+            $entries = [Environment]::GetEnvironmentVariable('Path', 'User') -split ';'
+            Confirm-TestCondition (@($entries | Where-Object { $_ -eq $InstallDir }).Count -eq 0) 'Uninstall left the user PATH entry.'
         } finally { [Environment]::SetEnvironmentVariable('Path', $savedPath, 'User') }
     }
 } finally {

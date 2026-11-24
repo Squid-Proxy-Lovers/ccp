@@ -90,6 +90,27 @@ require Python 3 and verify download checksums. The
 [nightly guide](docs/nightly-builds.md) covers all modes and version pinning;
 [prereleases](https://github.com/Squid-Proxy-Lovers/ccp/releases) list available builds.
 
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --uninstall
+```
+
+Add `--install-dir` if you installed somewhere other than `~/.local/bin`. This
+removes `ccp-client`, `ccp-server` and `ccp-nightly.json` from that directory,
+the `ccp` link if it points at `ccp-client`, the MCP bridge in `~/.ccp-mcp`, and
+the `ccp` entry in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs
+the bridge. Other settings and servers in those files stay. Close Claude Code and
+Cursor first so they do not rewrite the file. For Codex, remove the
+`[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall never
+edits TOML.
+
+Uninstall never deletes enrollment profiles, certificates, keys, server data or
+Docker volumes, and it never asks a question. It prints where they are and the
+commands to delete them yourself. Running it again is safe. On Windows, run the
+bootstrap with `-Uninstall`; see the [Windows guide](docs/client.md#uninstall-on-windows).
+To stop a `--docker` server, see [Docker](docs/server.md#remove-a-docker-server).
+
 ## Quick start
 
 Start a local server and save the enrollment tokens printed on its first run:

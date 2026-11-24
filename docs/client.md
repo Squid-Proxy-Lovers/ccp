@@ -114,6 +114,33 @@ checks remain unchanged. Profile publication uses same-directory hard links and
 requires a filesystem supporting them. Hidden enrollment-link paste uses the
 Windows console through `rpassword`.
 
+### Uninstall on Windows
+
+Run the same bootstrap with `-Uninstall`, and with `-InstallDir` if you chose one:
+
+```powershell
+$installer = irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1
+& ([scriptblock]::Create($installer)) -Uninstall
+```
+
+Uninstall uses the ownership record, `.ccp-install.json`. It removes `ccp-client.exe`
+and `ccp.exe` only when each file still matches the hash the installer recorded; a
+changed file, or an unrelated `ccp.exe`, is kept with a warning. It removes the
+recorded MCP generations under `%USERPROFILE%\.ccp-mcp` and the installer's metadata.
+Directories it does not recognize are kept. It removes the `ccp` entry from
+`.claude.json` and `.cursor\mcp.json` only when its command and `CCP_CLIENT_BIN`
+match the record, saves a `.backup.*` copy of each file it changes, and leaves those
+backups for you to delete. For Codex it prints a reminder to remove the
+`[mcp_servers.ccp]` table by hand and does not edit `config.toml`. When the install
+directory is empty afterwards it is deleted and removed from the user PATH.
+
+Without a record, or while an interrupted upgrade is pending, nothing is removed.
+Re-run the install command first to finish recovery. Close CCP and MCP processes if
+Windows reports a file in use, then re-run uninstall; it can be repeated safely.
+Enrollments, certificates, keys and workspaces in `%USERPROFILE%\.ccp-client` (or
+`CCP_CLIENT_HOME`) are never deleted. Uninstall prints that path and the
+`Remove-Item` command to delete it yourself.
+
 ## Enroll and select a session
 
 Install the client using the [README instructions](../README.md#install). The

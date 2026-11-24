@@ -20,6 +20,9 @@ RELEASE_VERSION=""
 RELEASE_STAGE=""
 PUBLISH_STAGE=""
 MCP_CONFIG_WARNINGS=""
+UNINSTALL=false
+UNINSTALL_REMOVED=0
+UNINSTALL_FAILED=0
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 
@@ -77,6 +80,7 @@ while [[ $# -gt 0 ]]; do
         --install-dir) INSTALL_DIR="$2"; shift 2 ;;
         --session)     SESSION_NAME="$2"; shift 2 ;;
         --from-source) FROM_SOURCE=true; shift ;;
+        --uninstall)   UNINSTALL=true; shift ;;
         --channel|--version)
             if [ $# -lt 2 ] || [[ "$2" == --* ]] || [ -z "$2" ]; then
                 err "$1 requires a value."; exit 1
@@ -91,13 +95,23 @@ Usage: bash install.sh [--client | --docker] [OPTIONS]
   (default)        Install server + client
   --client         Client only + auto-configure MCP for Claude/Cursor/Codex
   --docker         Pull and start the server container
+  --uninstall      Remove what this installer installed (see below)
 
 Options:
   --install-dir <path>   Binary install directory (default: ~/.local/bin)
+                         With --uninstall: the directory to remove from
   --session <name>       Docker session name (default: my-session)
   --from-source          Build from repo instead of downloading release binaries
   --channel <channel>    stable (default) or nightly
   --version <tag>        Pin an exact nightly release (requires --channel nightly)
+
+Uninstall (bash install.sh --uninstall [--install-dir <path>]) removes
+ccp-client, ccp-server and ccp-nightly.json from the install directory, the
+ccp alias if it links to ccp-client, the MCP bridge in ~/.ccp-mcp, and the
+"ccp" entry in the Claude and Cursor MCP configs when it points at that
+bridge. It never deletes enrollment profiles, client state, server data or
+Docker volumes. It prints where they are and how to remove them. It does not
+edit Codex config.toml; remove the [mcp_servers.ccp] table by hand.
 EOF
             exit 0
             ;;
@@ -114,6 +128,11 @@ if [ -n "$RELEASE_VERSION" ]; then
         err "--version requires --channel nightly and a nightly-YYYY-MM-DD-<12-character SHA> tag."
         exit 1
     fi
+fi
+if [ "$UNINSTALL" = true ] && { [ "$MODE" != "both" ] || [ "$FROM_SOURCE" = true ] \
+    || [ "$CHANNEL" != "stable" ] || [ -n "$RELEASE_VERSION" ]; }; then
+    err "--uninstall only accepts --install-dir; it cannot be combined with install options."
+    exit 1
 fi
 if [ "$CHANNEL" = "nightly" ] && [ "$FROM_SOURCE" = true ]; then
     err "Choose --channel nightly for published builds or --from-source for your checkout."
@@ -606,9 +625,174 @@ with open('$tmp', 'w') as f:
     fi
 }
 
+# -- Uninstall ----------------------------------------------------------------
+
+uninstall_removed() {
+    ok "Removed $1"
+    UNINSTALL_REMOVED=$((UNINSTALL_REMOVED + 1))
+}
+
+uninstall_failed() {
+    err "$1"
+    UNINSTALL_FAILED=$((UNINSTALL_FAILED + 1))
+}
+
+# Remove one installer-created regular file. A symlink was made by the user
+# (the installer writes through it), so it is kept along with its target.
+uninstall_file() {
+    local path="$1"
+    if [ -L "$path" ]; then
+        warn "$path is a symlink and was kept. Remove it, and the file it points to, yourself if CCP installed it."
+    elif [ -f "$path" ]; then
+        if rm -f -- "$path"; then uninstall_removed "$path"; else uninstall_failed "Could not remove $path"; fi
+    elif [ -e "$path" ]; then
+        warn "$path is not a regular file and was kept."
+    fi
+}
+
+# Mirror install_ccp_alias: the alias is ours only as a link to ccp-client.
+uninstall_alias() {
+    local alias_path="$INSTALL_DIR/ccp"
+    if [ -L "$alias_path" ] && [ "$(readlink "$alias_path")" = "ccp-client" ]; then
+        if rm -f -- "$alias_path"; then uninstall_removed "$alias_path"; else uninstall_failed "Could not remove $alias_path"; fi
+    elif [ -e "$alias_path" ] || [ -L "$alias_path" ]; then
+        warn "$alias_path was not created by this installer and was kept."
+    fi
+}
+
+uninstall_mcp_bridge() {
+    local mcp_home="$HOME/.ccp-mcp"
+    if [ -L "$mcp_home" ]; then
+        warn "$mcp_home is a symlink and was kept."
+    elif [ -d "$mcp_home" ]; then
+        if rm -rf -- "$mcp_home"; then uninstall_removed "$mcp_home"; else uninstall_failed "Could not remove $mcp_home"; fi
+    elif [ -e "$mcp_home" ]; then
+        warn "$mcp_home is not a directory and was kept."
+    fi
+}
+
+# Drop mcpServers.ccp from a Claude or Cursor JSON config, but only when its
+# command is this installer's bridge. The file is rewritten through a temporary
+# file in the same directory and an atomic rename.
+uninstall_json_host() {
+    local label="$1" config="$2" bridge="$HOME/.ccp-mcp/venv/bin/ccp-mcp-server" status
+    if [ ! -e "$config" ]; then return; fi
+    if ! command -v python3 &>/dev/null; then
+        if grep -q '"ccp"' "$config" 2>/dev/null; then
+            warn "python3 was not found, so $config was not edited. Remove the \"ccp\" entry under mcpServers by hand."
+        fi
+        return
+    fi
+    status="$(python3 - "$config" "$bridge" <<'PY'
+import json, os, sys, tempfile
+path, bridge = sys.argv[1], sys.argv[2]
+real = os.path.realpath(path)
+try:
+    with open(real, encoding="utf-8") as handle:
+        raw = handle.read()
+    cfg = json.loads(raw)
+except (OSError, ValueError):
+    print("error")
+    sys.exit(0)
+servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
+if not isinstance(servers, dict) or "ccp" not in servers:
+    print("absent")
+    sys.exit(0)
+entry = servers["ccp"]
+if not isinstance(entry, dict) or entry.get("command") != bridge:
+    print("foreign")
+    sys.exit(0)
+del servers["ccp"]
+text = json.dumps(cfg, indent=2, ensure_ascii=False)
+if raw.endswith("\n"):
+    text += "\n"
+temp = ""
+try:
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(real), prefix=os.path.basename(real) + ".ccp-")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp, os.stat(real).st_mode & 0o7777)
+    os.replace(temp, real)
+except OSError:
+    if temp:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+    print("error")
+    sys.exit(0)
+print("removed")
+PY
+    )" || status="error"
+    case "$status" in
+        removed) uninstall_removed "the ccp entry from $label config $config" ;;
+        absent) ;;
+        foreign) warn "The ccp entry in $config does not point at $bridge and was kept." ;;
+        *) warn "Could not read or update $config; it was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present." ;;
+    esac
+}
+
+# The Codex config is TOML; this installer never rewrites it.
+uninstall_codex_notice() {
+    local codex_config="$HOME/.codex/config.toml"
+    if [ -f "$codex_config" ] && grep -q "mcp_servers.ccp" "$codex_config" 2>/dev/null; then
+        warn "Codex: $codex_config still has a CCP entry. Remove the [mcp_servers.ccp] table, and the [mcp_servers.ccp.env] table under it, by hand. This installer does not edit TOML."
+    fi
+}
+
+uninstall_data_notice() {
+    local client_home="${CCP_CLIENT_HOME:-$HOME/.ccp-client}"
+    echo ""
+    info "Not removed. These hold your enrollments, keys and server data:"
+    echo -e "  Client state (enrollment profiles, certificates, keys, workspaces):"
+    echo -e "    $client_home"
+    echo -e "    ${DIM}rm -rf \"$client_home\"${RESET}"
+    echo -e "  Server data (database, CA and server certificates). ccp-server writes it"
+    echo -e "  under the directory it was started from, at ./sessions/<session-name>"
+    echo -e "  (older versions: ./data), unless CCP_SERVER_HOME or CCP_SERVER_DATA_DIR is set:"
+    if [ -n "${CCP_SERVER_DATA_DIR:-}" ]; then echo -e "    CCP_SERVER_DATA_DIR=$CCP_SERVER_DATA_DIR"; fi
+    if [ -n "${CCP_SERVER_HOME:-}" ]; then echo -e "    CCP_SERVER_HOME=$CCP_SERVER_HOME"; fi
+    echo -e "  Docker server (started by --docker): container ccp-server, volume ccp-server-data."
+    echo -e "    ${DIM}docker stop ccp-server && docker rm ccp-server${RESET}"
+    echo -e "    ${DIM}docker volume rm ccp-server-data${RESET}  (deletes the server database and keys)"
+}
+
+uninstall_ccp() {
+    if [ -z "${HOME:-}" ]; then
+        err "HOME is not set; cannot find the MCP bridge or host configs."
+        return 1
+    fi
+    step "Uninstalling CCP from ${BOLD}$INSTALL_DIR${RESET}"
+    uninstall_file "$INSTALL_DIR/ccp-client"
+    uninstall_file "$INSTALL_DIR/ccp-server"
+    uninstall_file "$INSTALL_DIR/ccp-nightly.json"
+    uninstall_alias
+    uninstall_json_host "Claude" "$HOME/.claude.json"
+    uninstall_json_host "Cursor" "$HOME/.cursor/mcp.json"
+    uninstall_codex_notice
+    uninstall_mcp_bridge
+    echo ""
+    if [ "$UNINSTALL_FAILED" -gt 0 ]; then
+        err "Uninstall finished with errors; see above. Re-run it after fixing them."
+    elif [ "$UNINSTALL_REMOVED" -eq 0 ]; then
+        ok "Nothing left to remove."
+    else
+        ok "CCP uninstalled."
+    fi
+    uninstall_data_notice
+    [ "$UNINSTALL_FAILED" -eq 0 ]
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 banner
+
+if [ "$UNINSTALL" = true ]; then
+    uninstall_ccp
+    exit $?
+fi
 
 # ── Docker mode ──────────────────────────────────────────────────────────────
 

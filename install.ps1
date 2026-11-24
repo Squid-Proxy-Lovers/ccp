@@ -6,7 +6,8 @@
 param(
     [ValidateSet('stable', 'nightly')][string]$Channel = 'stable',
     [string]$Version = '',
-    [string]$InstallDir = "$env:LOCALAPPDATA\ccp\bin"
+    [string]$InstallDir = "$env:LOCALAPPDATA\ccp\bin",
+    [switch]$Uninstall
 )
 
 $ErrorActionPreference = 'Stop'
@@ -961,6 +962,271 @@ function Set-CcpMcpHost {
     }
 }
 
+function Get-CcpPrerequisiteFailure {
+    param([string]$Message)
+    $failure = [InvalidOperationException]::new($Message)
+    $failure.Data['CcpPrerequisite'] = $Message
+    return $failure
+}
+
+function Write-CcpRemoved {
+    param([string]$What)
+    Write-Information -InformationAction Continue "Removed $What"
+    $script:CcpUninstallRemoved++
+}
+
+# Run one removal step. A failure keeps the item, warns, and marks the run
+# incomplete so the exit status is not success; the other steps still run.
+function Invoke-CcpUninstallStep {
+    param([string]$What, [scriptblock]$Action)
+    try { & $Action }
+    catch {
+        $script:CcpUninstallFailed = $true
+        Write-Warning "$What could not be removed and was kept. Check that it is valid and not in use (close CCP and MCP processes), then re-run the same command."
+    }
+}
+
+function Read-CcpInstallRecord {
+    param([string]$BinDirectory)
+    $path = Join-Path $BinDirectory '.ccp-install.json'
+    Confirm-CcpPath $path -AllowMissing
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    if ((Get-Item -LiteralPath $path -Force).Length -gt 65536) { throw 'Invalid installation ownership record.' }
+    $record = Get-Content -Encoding UTF8 -LiteralPath $path -Raw | ConvertFrom-Json
+    if ($record.format -ne 1 -or $record.client_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        ($null -ne $record.alias_sha256 -and $record.alias_sha256 -cnotmatch '^[0-9a-f]{64}$')) { throw 'Invalid installation ownership record.' }
+    return $record
+}
+
+# A file is removed only when its SHA-256 equals the hash the installer recorded.
+function Remove-CcpOwnedExecutable {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Path, [string]$ExpectedHash)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Remove installer-owned executable')) { return }
+    Confirm-CcpPath $Path -AllowMissing
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    if (Test-Path -LiteralPath $Path -PathType Container) {
+        Write-Warning "$Path is a directory and was kept."
+        return
+    }
+    if (-not $ExpectedHash) {
+        Write-Warning "$Path was kept: the installation record does not claim it."
+        return
+    }
+    if ((Get-CcpFileDigest $Path) -ne $ExpectedHash) {
+        Write-Warning "$Path differs from the file CCP installed and was kept."
+        return
+    }
+    [IO.File]::Delete($Path)
+    Write-CcpRemoved $Path
+}
+
+function Remove-CcpUserPath {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$BinDirectory)
+    if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Remove CCP from the user PATH')) { return }
+    $target = $BinDirectory.TrimEnd('\', '/')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $entries = @($userPath -split ';' | Where-Object { $_ })
+    $kept = @($entries | Where-Object { $_.TrimEnd('\', '/') -ne $target })
+    if ($kept.Count -ne $entries.Count) {
+        [Environment]::SetEnvironmentVariable('Path', ($kept -join ';'), 'User')
+        Write-CcpRemoved "$BinDirectory from the user PATH"
+    }
+    $processEntries = @($env:Path -split ';' | Where-Object { $_ })
+    $env:Path = (@($processEntries | Where-Object { $_.TrimEnd('\', '/') -ne $target }) -join ';')
+}
+
+# Drop mcpServers.ccp from a Claude or Cursor JSON config when it is the entry
+# this installer wrote: same command and CCP_CLIENT_BIN as the install record.
+function Remove-CcpJsonHost {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Path, [string]$McpCommand, [string]$Client)
+    if (-not $PSCmdlet.ShouldProcess($Path, 'Remove CCP MCP entry')) { return }
+    Confirm-CcpPath $Path -AllowMissing
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    $config = ConvertFrom-CcpConfigJson (Get-Content -Encoding UTF8 -LiteralPath $Path -Raw)
+    if (-not $config -or -not $config.PSObject.Properties['mcpServers'] -or -not $config.mcpServers -or
+        -not $config.mcpServers.PSObject.Properties['ccp']) { return }
+    $current = $config.mcpServers.ccp
+    $owned = $McpCommand -and $current -and $current.PSObject.Properties['command'] -and $current.command -eq $McpCommand
+    if ($owned -and $Client) {
+        $owned = $current.PSObject.Properties['env'] -and $current.env -and
+            $current.env.PSObject.Properties['CCP_CLIENT_BIN'] -and $current.env.CCP_CLIENT_BIN -eq $Client
+    }
+    if (-not $owned) {
+        Write-Warning "The ccp entry in $Path does not match the CCP installation record and was kept."
+        return
+    }
+    [void]$config.mcpServers.PSObject.Properties.Remove('ccp')
+    $stageDirectory = New-CcpPrivateStage (Split-Path -Parent $Path)
+    try {
+        $stage = Join-Path $stageDirectory 'config.json'
+        [IO.File]::WriteAllText($stage, ($config | ConvertTo-Json -Depth 100 -WarningAction Stop), [Text.UTF8Encoding]::new($false))
+        Backup-CcpConfig $Path
+        Publish-CcpFile $stage $Path
+    } finally { Remove-CcpPrivateStage $stageDirectory }
+    Write-CcpRemoved "the ccp entry from $Path (a .backup copy of the original was kept beside it)"
+}
+
+# The Codex config is TOML; it is never rewritten here.
+function Write-CcpCodexNotice {
+    param([string]$Path)
+    Confirm-CcpPath $Path -AllowMissing
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return }
+    if ((Get-Content -Encoding UTF8 -LiteralPath $Path -Raw) -match '(?m)^\s*\[mcp_servers\.ccp(?:\]|\.)') {
+        Write-Warning "Codex: $Path still has a CCP entry. Remove the [mcp_servers.ccp] table, and the [mcp_servers.ccp.env] table under it, by hand. This installer does not edit TOML."
+    }
+}
+
+function Remove-CcpGenerationDirectory {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$Directory, [string]$BinDirectory, [string]$MarkerHash = '', [bool]$Deleting = $false)
+    if (-not $PSCmdlet.ShouldProcess($Directory, 'Remove installer-owned MCP generation')) { return }
+    $parent = Join-Path $env:USERPROFILE '.ccp-mcp\generations'
+    $full = [IO.Path]::GetFullPath($Directory)
+    if ((Split-Path -Parent $full) -ne $parent -or (Split-Path -Leaf $full) -cnotmatch '^\.ccp-stage-[0-9a-f]{32}$') {
+        Write-Warning "$Directory is not an installer MCP directory and was kept."
+        return
+    }
+    Confirm-CcpPath $full -AllowMissing
+    if (-not (Test-Path -LiteralPath $full)) { return }
+    $marker = Join-Path $full '.ccp-generation.json'
+    $hash = Get-CcpFileDigest $marker
+    $recognized = $false
+    if ($hash -and $MarkerHash) { $recognized = $hash -eq $MarkerHash }
+    elseif ($hash) {
+        $content = Get-Content -Encoding UTF8 -LiteralPath $marker -Raw | ConvertFrom-Json
+        $recognized = $content.format -eq 1 -and $content.install_root -eq $BinDirectory
+    } else { $recognized = $Deleting }
+    if (-not $recognized) {
+        Write-Warning "$Directory is not recorded as installer-owned and was kept."
+        return
+    }
+    Remove-CcpPrivateStage $full
+    Write-CcpRemoved $full
+}
+
+function Remove-CcpMcpGeneration {
+    [CmdletBinding(SupportsShouldProcess)]
+    param([string]$BinDirectory, $Record)
+    if (-not $PSCmdlet.ShouldProcess($BinDirectory, 'Remove installer-owned MCP bridge')) { return }
+    $planned = [Collections.Generic.List[object]]::new()
+    $retention = $null
+    try { $retention = Get-CcpRetention $BinDirectory }
+    catch { Write-Warning 'The retention record is invalid; only the active MCP bridge directory is considered.' }
+    if ($retention) {
+        foreach ($entry in @($retention.generations)) {
+            if ($entry.marker_hash -cmatch '^[0-9a-f]{64}$') {
+                $planned.Add(@{ directory = $entry.directory; hash = $entry.marker_hash; deleting = ($entry.status -eq 'deleting') })
+            }
+        }
+    }
+    # Recorded directories first, so a recorded marker hash wins over the marker's own content.
+    if ($Record -and $Record.PSObject.Properties['mcp_command']) {
+        $active = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $Record.mcp_command))
+        $planned.Add(@{ directory = $active; hash = ''; deleting = $false })
+    }
+    $seen = @{}
+    foreach ($item in $planned) {
+        $key = [IO.Path]::GetFullPath($item.directory).ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        Invoke-CcpUninstallStep "MCP directory $($item.directory)" {
+            Remove-CcpGenerationDirectory $item.directory $BinDirectory $item.hash $item.deleting
+        }
+    }
+    if ($retention) {
+        foreach ($entry in @($retention.backups)) {
+            if ($entry.path -and (Test-Path -LiteralPath $entry.path)) {
+                Write-Information -InformationAction Continue "Kept configuration backup $($entry.path); delete it yourself when you no longer need it."
+            }
+        }
+    }
+    $mcpHome = Join-Path $env:USERPROFILE '.ccp-mcp'
+    foreach ($directory in @((Join-Path $mcpHome 'generations'), $mcpHome)) {
+        Confirm-CcpPath $directory -AllowMissing
+        if ((Test-Path -LiteralPath $directory -PathType Container) -and @(Get-ChildItem -LiteralPath $directory -Force).Count -eq 0) {
+            [IO.Directory]::Delete($directory, $false)
+        }
+    }
+    if (Test-Path -LiteralPath $mcpHome) {
+        Write-Warning "$mcpHome still has files that CCP did not record and was kept."
+    }
+}
+
+function Write-CcpDataNotice {
+    $clientHome = $env:CCP_CLIENT_HOME
+    if (-not $clientHome) {
+        $userHome = if ($env:HOME) { $env:HOME } else { $env:USERPROFILE }
+        $clientHome = Join-Path $userHome '.ccp-client'
+    }
+    Write-Information -InformationAction Continue @"
+
+Not removed. Your enrollments, certificates, keys and workspaces stay in:
+  $clientHome
+To delete them yourself:
+  Remove-Item -LiteralPath '$clientHome' -Recurse -Force
+"@
+}
+
+function Uninstall-CcpWindows {
+    param([string]$BinDirectory)
+    if (-not $env:USERPROFILE) { throw (Get-CcpPrerequisiteFailure 'A Windows user profile is required.') }
+    $script:CcpUninstallRemoved = 0
+    $script:CcpUninstallFailed = $false
+    $bin = [IO.Path]::GetFullPath($BinDirectory)
+    Confirm-CcpPath $bin -AllowMissing
+    $profileDirectory = $env:USERPROFILE
+    $lock = $null
+    $lockPath = Join-Path $bin '.ccp-upgrade.lock'
+    if (Test-Path -LiteralPath $bin) {
+        Confirm-CcpPath $lockPath -AllowMissing
+        $lock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    }
+    try {
+        if (Test-Path -LiteralPath (Join-Path $bin '.ccp-upgrade.json')) {
+            throw (Get-CcpPrerequisiteFailure 'An interrupted CCP upgrade is pending. Re-run the install command to finish recovery, then uninstall.')
+        }
+        $record = $null
+        try { $record = Read-CcpInstallRecord $bin }
+        catch { Write-Warning 'The installation record is invalid, so no file is proven to belong to CCP; files were kept.' }
+        $mcpCommand = ''
+        $mcpClient = ''
+        if ($record -and $record.PSObject.Properties['mcp_command']) { $mcpCommand = [string]$record.mcp_command }
+        if ($record) {
+            $mcpClient = if ($record.PSObject.Properties['mcp_client']) { [string]$record.mcp_client } else { Join-Path $bin 'ccp-client.exe' }
+        }
+        Invoke-CcpUninstallStep 'The Claude MCP entry' { Remove-CcpJsonHost (Join-Path $profileDirectory '.claude.json') $mcpCommand $mcpClient }
+        Invoke-CcpUninstallStep 'The Cursor MCP entry' { Remove-CcpJsonHost (Join-Path $profileDirectory '.cursor\mcp.json') $mcpCommand $mcpClient }
+        Invoke-CcpUninstallStep 'The Codex notice' { Write-CcpCodexNotice (Join-Path $profileDirectory '.codex\config.toml') }
+        $clientHash = if ($record) { $record.client_sha256 } else { '' }
+        $aliasHash = if ($record -and $record.alias_sha256) { $record.alias_sha256 } else { '' }
+        Invoke-CcpUninstallStep 'ccp.exe' { Remove-CcpOwnedExecutable (Join-Path $bin 'ccp.exe') $aliasHash }
+        Invoke-CcpUninstallStep 'ccp-client.exe' { Remove-CcpOwnedExecutable (Join-Path $bin 'ccp-client.exe') $clientHash }
+        Invoke-CcpUninstallStep 'The MCP bridge' { Remove-CcpMcpGeneration $bin $record }
+        if (-not $script:CcpUninstallFailed) {
+            foreach ($name in @('.ccp-retention.json', '.ccp-install.json')) {
+                $path = Join-Path $bin $name
+                Confirm-CcpPath $path -AllowMissing
+                if (Test-Path -LiteralPath $path -PathType Leaf) { [IO.File]::Delete($path); Write-CcpRemoved $path }
+            }
+        }
+    } finally { if ($lock) { $lock.Dispose() } }
+    if (Test-Path -LiteralPath $lockPath -PathType Leaf) { [IO.File]::Delete($lockPath) }
+    if ((Test-Path -LiteralPath $bin -PathType Container) -and @(Get-ChildItem -LiteralPath $bin -Force).Count -eq 0) {
+        [IO.Directory]::Delete($bin, $false)
+        Write-CcpRemoved $bin
+        Remove-CcpUserPath $bin
+    } elseif (Test-Path -LiteralPath $bin) {
+        Write-Warning "$bin still has files that CCP did not install and was kept, along with its user PATH entry."
+    }
+    if ($script:CcpUninstallFailed) { throw (Get-CcpPrerequisiteFailure 'Some items could not be removed; see the warnings above and re-run the same command.') }
+    if ($script:CcpUninstallRemoved -eq 0) { Write-Information -InformationAction Continue 'Nothing left to remove.' }
+    else { Write-Information -InformationAction Continue 'CCP uninstalled.' }
+    Write-CcpDataNotice
+}
+
 function Install-CcpWindows {
     param([string]$ReleaseChannel, [string]$RequestedVersion, [string]$BinDirectory)
     if ($env:OS -ne 'Windows_NT' -or
@@ -1013,9 +1279,20 @@ function Install-CcpWindows {
     }
 }
 
-try { Install-CcpWindows $Channel $Version $InstallDir }
+try {
+    if ($Uninstall) {
+        if ($PSBoundParameters.ContainsKey('Channel') -or $Version) {
+            throw (Get-CcpPrerequisiteFailure '-Uninstall only accepts -InstallDir; it cannot be combined with -Channel or -Version.')
+        }
+        Uninstall-CcpWindows $InstallDir
+    } else { Install-CcpWindows $Channel $Version $InstallDir }
+}
 catch {
     $prerequisite = $_.Exception.Data['CcpPrerequisite']
+    if ($Uninstall) {
+        if ($prerequisite) { throw "CCP uninstall failed: $prerequisite" }
+        throw 'CCP uninstall failed. Close CCP and MCP processes and re-run the same command. Only files recorded as installed by CCP are removed.'
+    }
     if ($prerequisite) { throw "CCP installation failed: $prerequisite" }
     throw 'CCP installation failed. Required tools, verified release assets, and writable user directories are needed. No unverified software was installed.'
 }
