@@ -674,6 +674,35 @@ function Test-CcpUninstall {
             Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
         }
 
+        # A relative data location means PowerShell's location for the client, which can differ from
+        # the process directory .NET uses; either reading that reaches a generation keeps it.
+        $f = Initialize-TestUninstall $Root 'uninstall-relative'
+        $state = Join-Path $f.generation 'venv\Lib\enrollments'
+        New-Item -ItemType Directory -Force -Path $state | Out-Null
+        [IO.File]::WriteAllText((Join-Path $state 'client.key'), 'private key')
+        $relative = Join-Path '.ccp-mcp\generations' ((Split-Path -Leaf $f.generation) + '\venv\Lib\enrollments')
+        $savedLocation = (Get-Location).Path
+        $savedDirectory = [Environment]::CurrentDirectory
+        $savedValue = [Environment]::GetEnvironmentVariable('CCP_CLIENT_HOME', 'Process')
+        try {
+            [Environment]::CurrentDirectory = $Root
+            Set-Location -LiteralPath $f.profile
+            [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $relative, 'Process')
+            $text = Invoke-TestUninstall $f.bin
+            Confirm-TestCondition (([IO.File]::ReadAllText((Join-Path $state 'client.key'))) -eq 'private key') 'A relative data location from the PowerShell location was deleted.'
+            Confirm-TestCondition ((Test-Path -LiteralPath $f.command) -and (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json'))) 'A relative data location did not keep the generation and record.'
+            Confirm-TestCondition ($text.Contains('which is CCP data')) 'A relative data location was not reported.'
+            # With the PowerShell location unknown, every generation is kept.
+            Set-Item Function:Get-Location { throw 'Fixture location unavailable.' }
+            try { $text = Invoke-TestUninstall $f.bin } finally { Remove-Item Function:Get-Location }
+            Confirm-TestCondition ((Test-Path -LiteralPath $f.command) -and $text.Contains('PowerShell location could not be determined')) 'An unknown PowerShell location did not keep the generation.'
+        } finally {
+            Set-Location -LiteralPath $savedLocation
+            [Environment]::CurrentDirectory = $savedDirectory
+            [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $savedValue, 'Process')
+        }
+        Confirm-TestCondition (([IO.File]::ReadAllText((Join-Path $state 'client.key'))) -eq 'private key') 'Restoring locations lost the enrollment.'
+
         # Names are not enough: an entry of the wrong type is kept for review too.
         $oddities = [ordered]@{
             'directory named like the venv marker' = { param($Generation) Join-Path $Generation 'venv\.gitignore' }

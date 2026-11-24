@@ -148,7 +148,7 @@ the installer creates: at the top level only `venv`, `ccp-client.exe` and
 `Scripts`, `share`, `pyvenv.cfg` and `.gitignore`. Each must also be the right type: those names must be real directories
 or regular files, not junctions, symlinks or other reparse points. Any other entry,
 such as an enrollment directory, keeps the whole generation and the record, and the warning
-names the entry for manual review. Every generation is also kept while any of those locations
+names the entry for manual review. A relative data location is checked against both PowerShell's current location and the process directory, because they can differ; if the PowerShell location cannot be determined, every generation is kept. Every generation is also kept while any of those locations
 passes through a junction or symlink, because that cannot be ruled out as inside. Before it deletes a generation it saves the installer's
 `deleting` status, so a re-run finishes an interrupted deletion. When all of that succeeds it removes the installer's
 metadata files. If anything was kept, the record stays so a re-run repeats the

@@ -1097,24 +1097,56 @@ function Write-CcpCodexNotice {
     }
 }
 
-# CCP user data: client state and any server data locations from the environment.
-function Get-CcpProtectedState {
-    $paths = @(Get-CcpClientHome)
-    foreach ($name in @('CCP_SERVER_DATA_DIR', 'CCP_SERVER_HOME')) {
-        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($value) { $paths += $value }
+# Full paths a configured data location may mean. The client resolves a relative
+# path against PowerShell's filesystem location, while .NET resolves it against
+# the process directory, and the two can differ, so both are returned. Returns
+# $null when the PowerShell location cannot be determined.
+function Get-CcpStateCandidate {
+    param([string]$Path)
+    $separators = [char[]]@('\', '/')
+    if ($Path -match '^[A-Za-z]:[\\/]' -or $Path -match '^[\\/]{2}' -or
+        ([IO.Path]::DirectorySeparatorChar -eq '/' -and $Path.StartsWith('/'))) {
+        return @([IO.Path]::GetFullPath($Path))
     }
-    return $paths
+    $location = $null
+    try { $location = (Get-Location -PSProvider FileSystem -ErrorAction Stop).ProviderPath }
+    catch { $location = $null }
+    if (-not $location) { return $null }
+    $candidates = @()
+    foreach ($base in @($location, [Environment]::CurrentDirectory)) {
+        if ($Path -match '^[\\/]') { $joined = [IO.Path]::Combine([IO.Path]::GetPathRoot($base), $Path.TrimStart($separators)) }
+        else { $joined = [IO.Path]::Combine($base, $Path) }
+        $candidates += [IO.Path]::GetFullPath($joined)
+    }
+    return @($candidates | Select-Object -Unique)
 }
 
-# Returns the first protected location that equals or lies inside the directory.
+# CCP user data: client state and any server data locations from the environment,
+# as every full path each might mean. Unknown is set when one cannot be resolved.
+function Get-CcpProtectedState {
+    $configured = @(Get-CcpClientHome)
+    foreach ($name in @('CCP_SERVER_DATA_DIR', 'CCP_SERVER_HOME')) {
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($value) { $configured += $value }
+    }
+    $paths = @()
+    $unknown = $false
+    foreach ($path in $configured) {
+        $candidates = Get-CcpStateCandidate $path
+        if ($null -eq $candidates) { $unknown = $true } else { $paths += $candidates }
+    }
+    return @{ Paths = $paths; Unknown = $unknown }
+}
+
+# Returns the first protected location that equals, lies inside, or contains the directory.
 function Find-CcpStateInside {
-    param([string]$Directory)
+    param([string]$Directory, [string[]]$Protected)
     $separators = [char[]]@('\', '/')
     $base = [IO.Path]::GetFullPath($Directory).TrimEnd($separators) + [IO.Path]::DirectorySeparatorChar
-    foreach ($path in Get-CcpProtectedState) {
-        $full = [IO.Path]::GetFullPath($path).TrimEnd($separators) + [IO.Path]::DirectorySeparatorChar
-        if ($full.StartsWith($base, [StringComparison]::OrdinalIgnoreCase)) { return $path }
+    foreach ($path in $Protected) {
+        $full = $path.TrimEnd($separators) + [IO.Path]::DirectorySeparatorChar
+        if ($full.StartsWith($base, [StringComparison]::OrdinalIgnoreCase) -or
+            $base.StartsWith($full, [StringComparison]::OrdinalIgnoreCase)) { return $path }
     }
 }
 
@@ -1139,40 +1171,12 @@ function Test-CcpLinkedPath {
     return $false
 }
 
-# Returns the first protected location that reaches the directory through a link.
+# Returns the first protected location that passes through a link.
 function Find-CcpLinkedState {
-    foreach ($path in Get-CcpProtectedState) {
+    param([string[]]$Protected)
+    foreach ($path in $Protected) {
         if (Test-CcpLinkedPath $path) { return $path }
     }
-}
-
-# True when an entry has an expected name and the expected type: a real directory
-# or a regular file, never a junction, symlink or other reparse point.
-function Test-CcpExpectedEntry {
-    param($Entry, [string[]]$Directories, [string[]]$Files)
-    if ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
-    $isDirectory = [bool]($Entry.Attributes -band [IO.FileAttributes]::Directory)
-    if ($Directories -contains $Entry.Name) { return $isDirectory }
-    if ($Files -contains $Entry.Name) { return -not $isDirectory }
-    return $false
-}
-
-# The first entry of a generation that the installer does not create, or ''
-# when it holds only what Install-CcpMcp stages, with the expected types: the
-# venv directory, the client copy and the marker file, and inside the venv only
-# the standard Windows entries.
-function Find-CcpUnexpectedEntry {
-    param([string]$Generation)
-    foreach ($entry in @(Get-ChildItem -LiteralPath $Generation -Force)) {
-        if (-not (Test-CcpExpectedEntry $entry @('venv') @('ccp-client.exe', '.ccp-generation.json'))) { return $entry.FullName }
-    }
-    $venv = Join-Path $Generation 'venv'
-    if (Test-Path -LiteralPath $venv -PathType Container) {
-        foreach ($entry in @(Get-ChildItem -LiteralPath $venv -Force)) {
-            if (-not (Test-CcpExpectedEntry $entry @('Include', 'Lib', 'Scripts', 'share') @('pyvenv.cfg', '.gitignore'))) { return $entry.FullName }
-        }
-    }
-    return ''
 }
 
 # Mirror the installer's own pruning: the directory must be recorded, keep its
@@ -1192,12 +1196,17 @@ function Remove-CcpGenerationDirectory {
     }
     Confirm-CcpPath $full -AllowMissing
     if (-not (Test-Path -LiteralPath $full)) { return }
-    $held = Find-CcpStateInside $full
-    if ($held) {
-        Write-CcpKept "$Directory was kept because it holds $held, which is CCP data. Move that data elsewhere, then re-run."
+    $state = Get-CcpProtectedState
+    if ($state.Unknown) {
+        Write-CcpKept "$Directory was kept because a CCP data location is relative and the PowerShell location could not be determined. Use full paths, then re-run."
         return
     }
-    $linked = Find-CcpLinkedState
+    $held = Find-CcpStateInside $full $state.Paths
+    if ($held) {
+        Write-CcpKept "$Directory was kept because it holds, or sits inside, $held, which is CCP data. Move that data elsewhere, then re-run."
+        return
+    }
+    $linked = Find-CcpLinkedState $state.Paths
     if ($linked) {
         Write-CcpKept "$Directory was kept because the CCP data location $linked passes through a junction or symlink, so it may be inside. Use a plain path, then re-run."
         return
