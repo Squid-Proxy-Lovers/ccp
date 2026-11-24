@@ -126,6 +126,9 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          # This is an old maintenance line: a v0.1.x patch must never take
+          # the GitHub "Latest" badge from the newest stable release.
+          make_latest: false
 
   docker:
     needs: [test]
@@ -145,11 +148,12 @@ jobs:
 
       # Image references must be lower case; github.repository keeps the
       # organisation's capitals, which made every publish fail.
+      # No :latest tag here: it means the newest stable release, and this old
+      # maintenance line must never move it backwards.
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: ${{ github.event_name == 'push' }}
           tags: |
-            ghcr.io/squid-proxy-lovers/ccp:latest
             ghcr.io/squid-proxy-lovers/ccp:${{ github.sha }}
             ${{ github.ref_type == 'tag' && format('ghcr.io/squid-proxy-lovers/ccp:{0}', github.ref_name) || '' }}
