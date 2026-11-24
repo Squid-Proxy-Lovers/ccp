@@ -488,11 +488,14 @@ mcp_config_warning() {
 # Mode "append CONFIG COMMAND CLIENT SERVER" builds the entry with escaped TOML
 # strings, takes an flock on the sidecar file CONFIG.ccp-lock, retrying for
 # about two seconds (CCP_CODEX_LOCK_RETRIES tenths of a second, for tests),
-# then re-checks and appends the entry to the config in place, all in that one
-# process, so the kernel drops the lock however the process ends. A failed or
-# interrupted write is truncated back to the original size, so the config is
-# never left half written; a read-only config is never replaced. It prints
-# added, locked (contention), failed (lock or write error), badentry (the
+# then reads, validates and appends the entry through one descriptor on the
+# config, in place, all in that one process, so the kernel drops the lock
+# however the process ends. If the write fails, or the path stops naming the
+# file that was written, or the process gets HUP, INT or TERM, the config is
+# truncated back to its original size. SIGKILL or power loss mid-write can
+# still leave a partial append, as the old "cat >>" could; nothing rolls that
+# back. A read-only config is never replaced. It prints added, locked
+# (contention), failed (lock or write error), badentry (the
 # entry itself is not valid TOML) or a check state. The lock file itself is
 # left in place; only the lock on it matters.
 codex_config_tool() {
@@ -515,11 +518,18 @@ def classify(config):
     return "present" if isinstance(servers["ccp"], dict) else "unsafe"
 
 
+def inspect(raw):
+    try:
+        return classify(tomllib.loads(raw.decode("utf-8")))
+    except (ValueError, RecursionError, MemoryError):
+        return "invalid"
+
+
 def check(path):
     try:
         with open(path, "rb") as stream:
-            return classify(tomllib.load(stream))
-    except (OSError, ValueError, RecursionError, MemoryError):
+            return inspect(stream.read())
+    except OSError:
         return "invalid"
 
 
@@ -569,43 +579,58 @@ def acquire(path):
     return False
 
 
-def publish(path, size, tail):
-    # Append in place, so the inode, mode, ACLs, xattrs and owner all stay.
-    # Opening the path follows a symlink and fails on a read-only file.
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND)
-    try:
-        if os.fstat(fd).st_size != size:
-            raise OSError("config changed while it was being checked")
-        try:
-            view = memoryview(tail)
-            while view:
-                view = view[os.write(fd, view):]
-            os.fsync(fd)
-        except BaseException:
-            os.ftruncate(fd, size)
-            os.fsync(fd)
-            raise
-    finally:
-        os.close(fd)
+def read_all(fd, size):
+    chunks = []
+    offset = 0
+    while offset < size:
+        chunk = os.pread(fd, size - offset, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    return b"".join(chunks)
+
+
+def write_tail(fd, before, path, tail):
+    view = memoryview(tail)
+    while view:
+        view = view[os.write(fd, view):]
+    os.fsync(fd)
+    current = os.stat(path)
+    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+        raise OSError("config was replaced during the update")
 
 
 def append(path, block):
-    state = check(path)
-    if state != "absent":
-        return state
+    # One descriptor does the read, the validation and the write, so the bytes
+    # that were validated are the bytes that get appended to. Appending in
+    # place keeps the inode, mode, ACLs, xattrs and owner; opening the path
+    # follows a symlink and fails on a read-only file.
     tail = (block + "\n").encode("utf-8")
+    fd = os.open(path, os.O_RDWR | os.O_APPEND)
     try:
-        with open(path, "rb") as stream:
-            original = stream.read()
-        candidate = tomllib.loads((original + tail).decode("utf-8"))
-    except (UnicodeDecodeError, RecursionError, MemoryError):
-        return "invalid"
-    except tomllib.TOMLDecodeError:
-        return "unsafe"
-    if classify(candidate) != "present":
-        return "unsafe"
-    publish(path, len(original), tail)
-    return "added"
+        before = os.fstat(fd)
+        original = read_all(fd, before.st_size)
+        state = inspect(original)
+        if state != "absent":
+            return state
+        try:
+            candidate = tomllib.loads((original + tail).decode("utf-8"))
+        except (UnicodeDecodeError, RecursionError, MemoryError):
+            return "invalid"
+        except tomllib.TOMLDecodeError:
+            return "unsafe"
+        if classify(candidate) != "present":
+            return "unsafe"
+        try:
+            write_tail(fd, before, path, tail)
+        except BaseException:
+            os.ftruncate(fd, before.st_size)
+            os.fsync(fd)
+            raise
+        return "added"
+    finally:
+        os.close(fd)
 
 
 mode, path = sys.argv[1], sys.argv[2]

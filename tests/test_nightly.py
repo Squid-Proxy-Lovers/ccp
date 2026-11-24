@@ -1696,6 +1696,23 @@ if sys.argv[1:3] == ['-I', '-']:
             open(short_write, 'w').close()
             raise OSError(28, 'injected short write')
         os.write = failing_write
+    real_os_open = os.open
+    def hooked_open(path, flags, *args, **kwargs):
+        writable = flags & (os.O_WRONLY | os.O_RDWR)
+        if not writable or str(path).endswith('.ccp-lock'):
+            return real_os_open(path, flags, *args, **kwargs)
+        if os.environ.get('CODEX_TEST_DENY_WRITE'):
+            raise PermissionError(13, 'injected denial', path)
+        fd = real_os_open(path, flags, *args, **kwargs)
+        opened = os.environ.get('CODEX_TEST_OPENED')
+        if opened:
+            open(opened, 'w').close()
+            for _ in range(1500):
+                if os.path.exists(opened + '.go'):
+                    break
+                time.sleep(0.02)
+        return fd
+    os.open = hooked_open
     sys.argv = sys.argv[2:]
     exec(compile(source, '<installer>', 'exec'))
 else:
@@ -1704,11 +1721,8 @@ else:
         )
         python.chmod(0o755)
 
-    def start_blocked_installer(self, config):
-        """Hold the Codex lock, start an installer, and return once it is waiting on it."""
+    def spawn_installer(self, **extra_env):
         self.codex_python_hooks()
-        marker = self.root / "codex-lock-contended"
-        holder = self.codex_lock_holder(Path(f"{config}.ccp-lock"))
         env = dict(
             os.environ,
             HOME=str(self.home_dir),
@@ -1717,8 +1731,8 @@ else:
             NIGHTLY_TEST_LOG=str(self.log),
             NIGHTLY_TEST_FIXTURES=str(self.fixtures),
             NIGHTLY_TEST_FAILURE="",
-            CODEX_TEST_CONTENDED=str(marker),
             CCP_CODEX_LOCK_RETRIES="900",
+            **extra_env,
         )
         argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), "--client"]
         waiter = subprocess.Popen(  # noqa: S603 -- the real installer against isolated stubs.
@@ -1733,12 +1747,48 @@ else:
         self.addCleanup(waiter.kill)
         self.addCleanup(waiter.stderr.close)
         self.addCleanup(waiter.stdout.close)
+        return waiter
+
+    def wait_for_marker(self, waiter, marker, what):
         deadline = time.monotonic() + 30
         while not marker.exists():
-            self.assertLess(time.monotonic(), deadline, "installer never reached the lock")
-            self.assertIsNone(waiter.poll(), "installer exited before it contended")
+            self.assertLess(time.monotonic(), deadline, f"installer never {what}")
+            self.assertIsNone(waiter.poll(), f"installer exited before it {what}")
             time.sleep(0.02)
+
+    def start_blocked_installer(self, config):
+        """Hold the Codex lock, start an installer, and return once it is waiting on it."""
+        marker = self.root / "codex-lock-contended"
+        holder = self.codex_lock_holder(Path(f"{config}.ccp-lock"))
+        waiter = self.spawn_installer(CODEX_TEST_CONTENDED=str(marker))
+        self.wait_for_marker(waiter, marker, "reached the lock")
         return waiter, holder
+
+    def test_config_swapped_after_the_installer_opened_it_is_not_reported_as_added(self):
+        config, original = self.codex_config_without_ccp()
+        opened = self.root / "codex-config-opened"
+        waiter = self.spawn_installer(CODEX_TEST_OPENED=str(opened))
+        self.wait_for_marker(waiter, opened, "opened the config")
+        # An editor saves a same-length file that already holds the entry.
+        entry = '[mcp_servers.ccp]\ncommand = "o"\n'
+        replacement = entry + "#" * (len(original) - len(entry) - 1) + "\n"
+        self.assertEqual(len(replacement), len(original))
+        swapped = self.root / "editor-save.toml"
+        swapped.write_bytes(replacement.encode())
+        swapped.replace(config)
+        Path(f"{opened}.go").touch()
+        output, errors = waiter.communicate(timeout=60)
+        self.assertEqual(waiter.returncode, 0, output + errors)
+        self.assertEqual(config.read_bytes(), replacement.encode())
+        self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+        self.assertIn(f"Could not update {config}", output)
+        self.assertIn("the Codex MCP config was not written", output)
+        self.assertNotIn(f"Added to {config}", output)
+        self.assertNotIn("Traceback", errors)
+        self.assertEqual(
+            sorted(path.name for path in config.parent.iterdir()),
+            ["config.toml", "config.toml.ccp-lock"],
+        )
 
     def test_waiting_installer_proceeds_when_lock_holder_is_killed(self):
         config, original = self.codex_config_without_ccp()
@@ -1958,22 +2008,27 @@ else:
             self.assertEqual(acl_entries(), before_acl)
 
     def test_read_only_codex_config_is_left_alone_with_a_warning(self):
-        if os.geteuid() == 0:
-            self.skipTest("root bypasses file mode bits, so a 0444 file stays writable")
         config, original = self.codex_config_without_ccp()
-        config.chmod(0o444)
-        result, _ = self.install("--client")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(config.read_bytes(), original.encode())
-        self.assertEqual(config.stat().st_mode & 0o777, 0o444)
-        self.assertIn(f"Could not update {config}", result.stdout)
-        self.assertIn("the Codex MCP config was not written", result.stdout)
-        self.assertNotIn(f"Added to {config}", result.stdout)
-        self.assertNotIn("Traceback", result.stderr)
-        self.assertEqual(
-            sorted(path.name for path in config.parent.iterdir()),
-            ["config.toml", "config.toml.ccp-lock"],
-        )
+        self.codex_python_hooks()
+        # Root bypasses mode bits, so the denial is also injected where the
+        # installer opens the config for writing; this runs on every host.
+        variants = [("injected denial", {"CODEX_TEST_DENY_WRITE": "1"})]
+        if os.geteuid() != 0:
+            variants.append(("mode 0444", {}))
+        for label, env in variants:
+            with self.subTest(label), patch.dict(os.environ, env):
+                config.chmod(0o444 if label == "mode 0444" else 0o644)
+                result, _ = self.install("--client")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(config.read_bytes(), original.encode())
+                self.assertIn(f"Could not update {config}", result.stdout)
+                self.assertIn("the Codex MCP config was not written", result.stdout)
+                self.assertNotIn(f"Added to {config}", result.stdout)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(
+                    sorted(path.name for path in config.parent.iterdir()),
+                    ["config.toml", "config.toml.ccp-lock"],
+                )
 
     def test_deeply_nested_codex_config_asks_for_repair_without_a_traceback(self):
         self.mcp_bridge_fixture()
