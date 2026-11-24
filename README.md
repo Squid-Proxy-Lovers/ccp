@@ -107,8 +107,11 @@ accepts no other option. This removes `ccp-client`, `ccp-server` and
 `~/.ccp-mcp` (and `~/.ccp-mcp` itself if that leaves it empty), and the `ccp` entry
 in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs the bridge.
 Other settings and servers in those files stay. Close Claude Code and Cursor
-first so they do not rewrite the file. A config that is a symlink, or sits in a
-symlinked directory, is not edited; remove its `ccp` entry by hand. For Codex,
+first so they do not rewrite the file. A config is not edited if `$HOME` or any
+component down to the file is a symlink, or if it is not a regular file; remove its
+`ccp` entry by hand. Uninstall keeps `venv` or `src` if your client state or server
+data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or their
+defaults) lives inside it, and it rejects an `--install-dir` that resolves to `/`. For Codex,
 remove the `[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall
 never edits TOML.
 

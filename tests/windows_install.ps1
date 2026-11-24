@@ -551,7 +551,7 @@ function Test-CcpUninstall {
         $userPathBefore = if ($savedEnvironment['OS'] -eq 'Windows_NT') { [Environment]::GetEnvironmentVariable('Path', 'User') }
         $text = Invoke-TestUninstall $f.bin -ViaDispatch
         Confirm-TestCondition (Test-Path -LiteralPath $f.bin -PathType Container) 'A pre-existing install directory was deleted.'
-        Confirm-TestCondition (@(Get-ChildItem -LiteralPath $f.bin -Force).Count -eq 0) 'Uninstall left installer files behind.'
+        Confirm-TestCondition ((@(Get-ChildItem -LiteralPath $f.bin -Force | ForEach-Object Name) -join ',') -eq '.ccp-upgrade.lock') 'Uninstall left installer files behind or deleted the lock.'
         Confirm-TestCondition ($text.Contains('were kept')) 'The kept install directory was not reported.'
         Confirm-TestCondition ($env:Path -eq $pathBefore) 'Uninstall changed the process PATH.'
         if ($savedEnvironment['OS'] -eq 'Windows_NT') {
@@ -639,11 +639,86 @@ function Test-CcpUninstall {
             Confirm-TestCondition ($before -eq $after) "Uninstall changed files despite a $case record."
         }
 
+        # User data inside a directory that would be removed is never deleted with it.
+        foreach ($variable in @('CCP_CLIENT_HOME', 'CCP_SERVER_DATA_DIR', 'CCP_SERVER_HOME')) {
+            $f = Initialize-TestUninstall $Root ('uninstall-nested-' + $variable.ToLowerInvariant().Replace('_', '-'))
+            $savedValue = [Environment]::GetEnvironmentVariable($variable, 'Process')
+            $state = Join-Path $f.generation 'user-state'
+            try {
+                [Environment]::SetEnvironmentVariable($variable, $state, 'Process')
+                New-Item -ItemType Directory -Force -Path $state | Out-Null
+                [IO.File]::WriteAllText((Join-Path $state 'client.key'), 'private key')
+                $text = Invoke-TestUninstall $f.bin
+            } finally { [Environment]::SetEnvironmentVariable($variable, $savedValue, 'Process') }
+            Confirm-TestCondition (([IO.File]::ReadAllText((Join-Path $state 'client.key'))) -eq 'private key') "State from $variable was deleted."
+            Confirm-TestCondition ($text.Contains('which is CCP data')) "State from $variable was not reported."
+            Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
+        }
+
+        # A hash-valid record with unusable MCP fields is rejected before any change.
+        $mutations = [ordered]@{
+            'missing client' = { param($Record, $Fixture) [void]$Record.PSObject.Properties.Remove('mcp_client') }
+            'empty client' = { param($Record, $Fixture) $Record.mcp_client = '' }
+            'numeric client' = { param($Record, $Fixture) $Record.mcp_client = 5 }
+            'array command' = { param($Record, $Fixture) $Record.mcp_command = @($Record.mcp_command) }
+            'foreign command' = { param($Record, $Fixture) $Record.mcp_command = Join-Path $Fixture.profile 'elsewhere\ccp-mcp-server.exe' }
+            'foreign client' = { param($Record, $Fixture) $Record.mcp_client = Join-Path $Fixture.profile 'ccp-client.exe' }
+        }
+        foreach ($name in $mutations.Keys) {
+            $f = Initialize-TestUninstall $Root ('uninstall-mcp-fields-' + $name.Replace(' ', '-'))
+            $recordPath = Join-Path $f.bin '.ccp-install.json'
+            $record = Get-Content -Encoding UTF8 -LiteralPath $recordPath -Raw | ConvertFrom-Json
+            & $mutations[$name] $record $f
+            [IO.File]::WriteAllText($recordPath, ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+            Write-TestMcpHost (Join-Path $f.profile '.claude.json') $f.command $f.client
+            $before = @(Get-ChildItem -LiteralPath $f.profile -Recurse -Force | ForEach-Object { $_.FullName + '|' + $(if ($_ -is [IO.FileInfo]) { $_.Length } else { 'dir' }) }) -join "`n"
+            Confirm-TestFailure { Uninstall-CcpWindows $f.bin } "Uninstall accepted a record with a $name."
+            Confirm-TestCondition ($script:LastFailureMessage.Contains('Nothing was removed')) "A record with a $name did not explain the refusal."
+            $after = @(Get-ChildItem -LiteralPath $f.profile -Recurse -Force | ForEach-Object { $_.FullName + '|' + $(if ($_ -is [IO.FileInfo]) { $_.Length } else { 'dir' }) }) -join "`n"
+            Confirm-TestCondition ($before -eq $after) "Uninstall changed files for a record with a $name."
+        }
+
+        # The record is read again under the lock; one that disappears first removes nothing.
+        $f = Initialize-TestUninstall $Root 'uninstall-reread'
+        $script:RereadFixture = $f
+        $script:RereadCalls = 0
+        $script:RealRecordReader = ${function:Read-CcpInstallRecord}
+        Set-Item Function:Read-CcpInstallRecord {
+            param([string]$BinDirectory)
+            $script:RereadCalls++
+            if ($script:RereadCalls -eq 2) { Remove-Item -LiteralPath (Join-Path $script:RereadFixture.bin '.ccp-install.json') }
+            & $script:RealRecordReader $BinDirectory
+        }
+        try {
+            Confirm-TestFailure { Uninstall-CcpWindows $f.bin } 'Uninstall used a record that vanished under the lock.'
+        } finally { Set-Item Function:Read-CcpInstallRecord $script:RealRecordReader }
+        Confirm-TestCondition ($script:RereadCalls -eq 2) 'The record was not read again under the lock.'
+        Confirm-TestCondition ((Test-Path -LiteralPath (Join-Path $f.bin 'ccp-client.exe')) -and (Test-Path -LiteralPath $f.generation)) 'A vanished record still removed files.'
+        Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-upgrade.lock')) 'The lock file was deleted.'
+
+        # An interrupted deletion is recorded as such, and a retry finishes it.
+        $f = Initialize-TestUninstall $Root 'uninstall-partial'
+        $script:RealStageRemover = ${function:Remove-CcpPrivateStage}
+        Set-Item Function:Remove-CcpPrivateStage {
+            param([string]$Path)
+            Remove-Item -LiteralPath (Join-Path $Path '.ccp-generation.json')
+            throw 'Fixture interrupted deletion.'
+        }
+        try {
+            Confirm-TestFailure { Uninstall-CcpWindows $f.bin } 'An interrupted deletion was reported as success.'
+        } finally { Set-Item Function:Remove-CcpPrivateStage $script:RealStageRemover }
+        Confirm-TestCondition ((Test-Path -LiteralPath $f.generation) -and -not (Test-Path -LiteralPath (Join-Path $f.generation '.ccp-generation.json'))) 'The interruption fixture did not leave a partial generation.'
+        Confirm-TestCondition ((Get-CcpRetention $f.bin).generations[0].status -eq 'deleting') 'The deleting status was not saved before removal.'
+        Invoke-TestUninstall $f.bin | Out-Null
+        Confirm-TestCondition (-not (Test-Path -LiteralPath $f.generation)) 'A retry did not finish the interrupted deletion.'
+        Confirm-TestCondition (-not (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json'))) 'A finished retry left the record.'
+
         # An interrupted upgrade must be recovered by the installer first.
         $f = Initialize-TestUninstall $Root 'uninstall-pending'
         [IO.File]::WriteAllText((Join-Path $f.bin '.ccp-upgrade.json'), '{}')
         Confirm-TestFailure { Uninstall-CcpWindows $f.bin } 'Uninstall ran during a pending upgrade.'
         Confirm-TestCondition ((Test-Path -LiteralPath (Join-Path $f.bin 'ccp-client.exe')) -and (Test-Path -LiteralPath $f.generation)) 'A pending upgrade lost files.'
+        Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-upgrade.lock')) 'A pending upgrade removed the lock.'
 
         # The lock is never taken from another holder, and it is not left behind.
         $f = Initialize-TestUninstall $Root 'uninstall-locked'
@@ -654,7 +729,7 @@ function Test-CcpUninstall {
         } finally { $other.Dispose() }
         Confirm-TestCondition ((Test-Path -LiteralPath (Join-Path $f.bin 'ccp-client.exe')) -and (Test-Path -LiteralPath $f.generation)) 'A held lock did not stop removal.'
         Invoke-TestUninstall $f.bin | Out-Null
-        Confirm-TestCondition (-not (Test-Path -LiteralPath $lockPath)) 'The lock file was left behind.'
+        Confirm-TestCondition (Test-Path -LiteralPath $lockPath) 'The lock file was deleted.'
 
         # Invalid arguments are rejected before anything changes.
         $f = Initialize-TestUninstall $Root 'uninstall-arguments'

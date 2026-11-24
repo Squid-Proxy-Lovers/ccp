@@ -127,6 +127,20 @@ EOF
     esac
 done
 
+# Print the physical (symlink-free) absolute path of an existing path.
+physical_path() {
+    local path="$1" out dir
+    if [ -d "$path" ]; then
+        out="$(CDPATH='' cd -P -- "$path" && pwd -P)" || return 1
+    else
+        dir="$(CDPATH='' cd -P -- "$(dirname -- "$path")" && pwd -P)" || return 1
+        out="${dir%/}/$(basename -- "$path")"
+    fi
+    # Some shells print // for the root; collapse any leading run of slashes.
+    while [ "${out#//}" != "$out" ]; do out="${out#/}"; done
+    printf '%s\n' "$out"
+}
+
 # Validate the environment and paths before anything is touched.
 if [ -z "${HOME:-}" ]; then
     err "HOME is not set; it locates the install directory, MCP bridge and host configs."
@@ -134,6 +148,10 @@ if [ -z "${HOME:-}" ]; then
 fi
 if [ -z "${INSTALL_DIR//\//}" ]; then
     err "--install-dir must be a directory path other than empty or /."
+    exit 1
+fi
+if [ -d "$INSTALL_DIR" ] && [ "$(physical_path "$INSTALL_DIR")" = "/" ]; then
+    err "--install-dir resolves to /; choose a specific directory."
     exit 1
 fi
 if [ "$UNINSTALL" = true ] && [ -n "$INSTALL_ONLY_OPTIONS" ]; then
@@ -677,6 +695,43 @@ uninstall_alias() {
     fi
 }
 
+# Directories that hold user data and must survive uninstall: the client state
+# (CCP_CLIENT_HOME or ~/.ccp-client) and the server data locations. Only existing
+# ones matter, because a missing directory cannot lose anything.
+UNINSTALL_STATE_DIRS=()
+UNINSTALL_STATE_UNKNOWN=false
+
+uninstall_collect_state() {
+    local candidate resolved
+    for candidate in "${CCP_CLIENT_HOME:-$HOME/.ccp-client}" "${CCP_SERVER_DATA_DIR:-}" \
+        "${CCP_SERVER_HOME:-sessions}" "data"; do
+        if [ -z "$candidate" ] || { [ ! -e "$candidate" ] && [ ! -L "$candidate" ]; }; then continue; fi
+        if resolved="$(physical_path "$candidate")" && [ -n "$resolved" ]; then
+            UNINSTALL_STATE_DIRS+=("$resolved")
+        else
+            UNINSTALL_STATE_UNKNOWN=true
+        fi
+    done
+}
+
+# Succeeds, after warning, when removing $1 could delete user data.
+uninstall_holds_state() {
+    local path="$1" resolved state
+    if ! resolved="$(physical_path "$path")" || [ -z "$resolved" ] || [ "$UNINSTALL_STATE_UNKNOWN" = true ]; then
+        warn "$path was kept because CCP data locations could not be resolved."
+        return 0
+    fi
+    for state in ${UNINSTALL_STATE_DIRS[@]+"${UNINSTALL_STATE_DIRS[@]}"}; do
+        case "$state/" in
+            "$resolved/"*)
+                warn "$path was kept because it holds $state, which is CCP data. Move that data elsewhere, then re-run."
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 # Remove only what install_mcp_bridge creates under ~/.ccp-mcp: venv and src.
 # The directory itself goes only if that leaves it empty.
 uninstall_mcp_bridge() {
@@ -695,6 +750,7 @@ uninstall_mcp_bridge() {
         if [ -L "$path" ]; then
             warn "$path is a symlink and was kept."
         elif [ -d "$path" ]; then
+            if uninstall_holds_state "$path"; then continue; fi
             if rm -rf -- "$path"; then uninstall_removed "$path"; else uninstall_failed "Could not remove $path"; fi
         elif [ -e "$path" ]; then
             warn "$path is not a directory and was kept."
@@ -711,11 +767,30 @@ uninstall_mcp_bridge() {
 # Drop mcpServers.ccp from a Claude or Cursor JSON config, but only when its
 # command is this installer's bridge. The file is rewritten through a temporary
 # file in the same directory and an atomic rename.
+# Succeeds when HOME, or any component from HOME down to $1, is a symlink.
+uninstall_path_has_symlink() {
+    local path="$HOME" part
+    local -a parts
+    if [ -L "$path" ]; then return 0; fi
+    case "$1" in "$HOME"/*) ;; *) return 0 ;; esac
+    IFS=/ read -r -a parts <<< "${1#"$HOME"/}"
+    for part in "${parts[@]}"; do
+        path="$path/$part"
+        if [ -L "$path" ]; then return 0; fi
+    done
+    return 1
+}
+
 uninstall_json_host() {
     local label="$1" config="$2" bridge="$HOME/.ccp-mcp/venv/bin/ccp-mcp-server" status mode=edit
     if [ ! -e "$config" ] && [ ! -L "$config" ]; then return; fi
-    # A symlinked file or directory is managed elsewhere; never rewrite through it.
-    if [ -L "$config" ] || [ -L "${config%/*}" ]; then mode=check; fi
+    # A symlink anywhere on the path is managed elsewhere; never rewrite through it.
+    if uninstall_path_has_symlink "$config"; then
+        mode=check
+    elif [ ! -f "$config" ]; then
+        uninstall_failed "$config is not a regular file and was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present."
+        return
+    fi
     if ! command -v python3 &>/dev/null; then
         if grep -q '"ccp"' "$config" 2>/dev/null; then
             warn "python3 was not found, so $config was not edited. Remove the \"ccp\" entry under mcpServers by hand."
@@ -775,8 +850,13 @@ PY
         removed) uninstall_removed "the ccp entry from $label config $config" ;;
         absent) ;;
         foreign) warn "The ccp entry in $config does not point at $bridge and was kept." ;;
-        manual) warn "$config is a symlink or sits in a symlinked directory, so it was not edited. Remove the \"ccp\" entry under mcpServers by hand." ;;
+        manual) warn "$config is, or sits under, a symlink, so it was not edited. Remove the \"ccp\" entry under mcpServers by hand." ;;
         invalid) warn "$config is not valid JSON and was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present." ;;
+        ioerror) if [ "$mode" = check ]; then
+                warn "$config could not be read, and it is, or sits under, a symlink, so it was not edited. Remove the \"ccp\" entry under mcpServers by hand if present."
+            else
+                uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"ccp\" entry under mcpServers by hand."
+            fi ;;
         *) uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"ccp\" entry under mcpServers by hand." ;;
     esac
 }
@@ -810,6 +890,7 @@ uninstall_data_notice() {
 
 uninstall_ccp() {
     step "Uninstalling CCP from ${BOLD}$INSTALL_DIR${RESET}"
+    uninstall_collect_state
     uninstall_file "$INSTALL_DIR/ccp-client"
     uninstall_file "$INSTALL_DIR/ccp-server"
     uninstall_file "$INSTALL_DIR/ccp-nightly.json"

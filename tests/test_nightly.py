@@ -1711,8 +1711,8 @@ elif name == 'cat':
         self.assertEqual(real_claude.read_bytes(), before[0])
         self.assertEqual((real_cursor / "mcp.json").read_bytes(), before[1])
         self.assertEqual(list(dotfiles.rglob("*.ccp-*")), [])
-        self.assertIn(f"{hosts['claude']} is a symlink", result.stdout)
-        self.assertIn(f"{hosts['cursor']} is a symlink", result.stdout)
+        self.assertIn(f"{hosts['claude']} is, or sits under, a symlink", result.stdout)
+        self.assertIn(f"{hosts['cursor']} is, or sits under, a symlink", result.stdout)
         self.assertIn("Remove the", result.stdout)
 
     def test_uninstall_fails_when_a_config_cannot_be_read(self):
@@ -1721,8 +1721,79 @@ elif name == 'cat':
         hosts["claude"].mkdir()
         result, _ = self.install("--uninstall")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("Could not read or update", result.stdout)
+        self.assertIn("is not a regular file", result.stdout)
+        self.assertTrue(hosts["claude"].is_dir())
         self.assertNotIn("ccp", json.loads(hosts["cursor"].read_text())["mcpServers"])
+
+    def test_uninstall_fails_when_a_config_is_unreadable(self):
+        hosts, _, _ = self.uninstall_fixture()
+        hosts["claude"].chmod(0)
+        self.addCleanup(hosts["claude"].chmod, 0o600)
+        before = hosts["claude"].stat().st_mode
+        result, _ = self.install("--uninstall")
+        hosts["claude"].chmod(0o600)
+        if os.geteuid() == 0:
+            # Permissions do not stop root, so the entry is simply removed.
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        else:
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("Could not read or update", result.stdout)
+            self.assertIn("ccp", json.loads(hosts["claude"].read_text())["mcpServers"])
+        self.assertEqual(before & 0o777, 0)
+
+    def test_uninstall_does_not_edit_configs_under_a_symlinked_home(self):
+        hosts, _, _ = self.uninstall_fixture()
+        link = self.root / "home-link"
+        link.symlink_to(self.home_dir)
+        bridge = str(link / ".ccp-mcp/venv/bin/ccp-mcp-server")
+        for path in hosts.values():
+            path.write_text(path.read_text().replace(self.bridge, bridge))
+        before = {name: path.read_bytes() for name, path in hosts.items()}
+        result, _ = self.install("--uninstall", env_changes={"HOME": str(link)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name, path in hosts.items():
+            self.assertEqual(path.read_bytes(), before[name])
+        self.assertEqual(list(self.home_dir.rglob("*.json.ccp-*")), [])
+        self.assertIn("is, or sits under, a symlink", result.stdout)
+
+    def test_uninstall_keeps_directories_that_hold_client_or_server_data(self):
+        cases = {
+            "client home in src": ("src", "CCP_CLIENT_HOME", "src/state"),
+            "client home in venv": ("venv", "CCP_CLIENT_HOME", "venv/profiles"),
+            "server data in venv": ("venv", "CCP_SERVER_DATA_DIR", "venv/data"),
+            "server home in src": ("src", "CCP_SERVER_HOME", "src/sessions"),
+        }
+        for label, (child, variable, relative) in cases.items():
+            with self.subTest(case=label):
+                self.uninstall_fixture()
+                mcp_home = self.home_dir / ".ccp-mcp"
+                (mcp_home / "src").mkdir(exist_ok=True)
+                state = mcp_home / relative
+                state.mkdir(parents=True)
+                (state / "client.key").write_text("private key")
+                result, _ = self.install("--uninstall", env_changes={variable: str(state)})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((state / "client.key").read_text(), "private key")
+                self.assertTrue((mcp_home / child).is_dir())
+                self.assertIn("holds", result.stdout)
+                self.assertIn("which is CCP data", result.stdout)
+                shutil.rmtree(mcp_home)
+                for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
+                    path.unlink(missing_ok=True)
+
+    def test_uninstall_keeps_directories_holding_a_default_state_location(self):
+        self.uninstall_fixture()
+        mcp_home = self.home_dir / ".ccp-mcp"
+        # A relative server data directory in the working directory, resolved through a symlink.
+        state = mcp_home / "src/data"
+        state.mkdir(parents=True)
+        (state / "ccp.sqlite3").write_text("database")
+        (self.root / "data").symlink_to(state)
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((state / "ccp.sqlite3").read_text(), "database")
+        self.assertFalse((mcp_home / "venv").exists())
+        self.assertTrue((mcp_home / "src").is_dir())
 
     def test_uninstall_keeps_unknown_files_in_the_mcp_directory(self):
         self.uninstall_fixture()
@@ -1835,6 +1906,16 @@ elif name == 'cat':
                 result, _ = self.install("--uninstall", env_changes={"HOME": value})
                 self.assert_uninstall_untouched(result)
                 self.assertIn("HOME is not set", result.stdout)
+
+    def test_uninstall_rejects_an_install_dir_that_resolves_to_root(self):
+        self.uninstall_fixture()
+        alias = self.root / "root-alias"
+        alias.symlink_to("/")
+        for value in ("/usr/..", "/usr/../.", str(alias), f"{alias}/."):
+            with self.subTest(install_dir=value):
+                result, _ = self.install("--uninstall", "--install-dir", value)
+                self.assert_uninstall_untouched(result)
+                self.assertIn("resolves to /", result.stdout)
 
     def test_uninstall_rejects_an_empty_or_root_install_dir(self):
         self.uninstall_fixture()

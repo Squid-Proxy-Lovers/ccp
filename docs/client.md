@@ -130,13 +130,18 @@ is an empty install directory, a drive root, or your profile folder itself.
 
 Uninstall relies on the ownership record, `.ccp-install.json`. If it is missing or
 invalid, uninstall removes nothing, prints what to delete by hand, and exits with an
-error. It removes `ccp-client.exe` and `ccp.exe` only when each file still matches the
+error. The record's MCP fields must also be present and match the installer's
+generation layout; otherwise it is treated as invalid. The record is read again after
+the lock is taken. It removes `ccp-client.exe` and `ccp.exe` only when each file still matches the
 hash the installer recorded; a changed file, or an unrelated `ccp.exe`, is kept with a
 warning. It removes an MCP generation under `%USERPROFILE%\.ccp-mcp\generations` only
 when it is recorded and still has its recorded creation time and marker hash.
-Anything else there is kept. When all of that succeeds it removes the installer's
+Anything else there is kept. A generation that contains your client state or server
+data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or the default
+client home) is kept too. Before it deletes a generation it saves the installer's
+`deleting` status, so a re-run finishes an interrupted deletion. When all of that succeeds it removes the installer's
 metadata files. If anything was kept, the record stays so a re-run repeats the
-warning. It holds the installer's lock while it works.
+warning. It holds the installer's lock while it works and never deletes the lock file.
 
 It removes the `ccp` entry from `.claude.json` and `.cursor\mcp.json` only when its
 command and `CCP_CLIENT_BIN` match the record, saves a `.backup.*` copy of each
