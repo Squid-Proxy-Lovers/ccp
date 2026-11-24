@@ -116,30 +116,42 @@ Windows console through `rpassword`.
 
 ### Uninstall on Windows
 
-Run the same bootstrap with `-Uninstall`, and with `-InstallDir` if you chose one:
+`-Uninstall` needs an installer from a release that includes it, which is the
+release after 0.2.0; the v0.2.0 bootstrap does not have it. Fetch `install.ps1` from
+that release's tag as in the steps above, then run it with `-Uninstall`, and with
+`-InstallDir` if you chose one:
 
 ```powershell
-$installer = irm https://raw.githubusercontent.com/squid-proxy-lovers/ccp/v0.2.0/install.ps1
 & ([scriptblock]::Create($installer)) -Uninstall
 ```
 
-Uninstall uses the ownership record, `.ccp-install.json`. It removes `ccp-client.exe`
-and `ccp.exe` only when each file still matches the hash the installer recorded; a
-changed file, or an unrelated `ccp.exe`, is kept with a warning. It removes the
-recorded MCP generations under `%USERPROFILE%\.ccp-mcp` and the installer's metadata.
-Directories it does not recognize are kept. It removes the `ccp` entry from
-`.claude.json` and `.cursor\mcp.json` only when its command and `CCP_CLIENT_BIN`
-match the record, saves a `.backup.*` copy of each file it changes, and leaves those
-backups for you to delete. For Codex it prints a reminder to remove the
-`[mcp_servers.ccp]` table by hand and does not edit `config.toml`. When the install
-directory is empty afterwards it is deleted and removed from the user PATH.
+`-Uninstall` accepts only `-InstallDir`. `-Channel` and `-Version` are rejected, and so
+is an empty install directory, a drive root, or your profile folder itself.
 
-Without a record, or while an interrupted upgrade is pending, nothing is removed.
-Re-run the install command first to finish recovery. Close CCP and MCP processes if
-Windows reports a file in use, then re-run uninstall; it can be repeated safely.
-Enrollments, certificates, keys and workspaces in `%USERPROFILE%\.ccp-client` (or
-`CCP_CLIENT_HOME`) are never deleted. Uninstall prints that path and the
-`Remove-Item` command to delete it yourself.
+Uninstall relies on the ownership record, `.ccp-install.json`. If it is missing or
+invalid, uninstall removes nothing, prints what to delete by hand, and exits with an
+error. It removes `ccp-client.exe` and `ccp.exe` only when each file still matches the
+hash the installer recorded; a changed file, or an unrelated `ccp.exe`, is kept with a
+warning. It removes an MCP generation under `%USERPROFILE%\.ccp-mcp\generations` only
+when it is recorded and still has its recorded creation time and marker hash.
+Anything else there is kept. When all of that succeeds it removes the installer's
+metadata files. If anything was kept, the record stays so a re-run repeats the
+warning. It holds the installer's lock while it works.
+
+It removes the `ccp` entry from `.claude.json` and `.cursor\mcp.json` only when its
+command and `CCP_CLIENT_BIN` match the record, saves a `.backup.*` copy of each
+file it changes, and leaves those backups for you to delete. For Codex it prints a
+reminder to remove the `[mcp_servers.ccp]` table by hand and does not edit
+`config.toml`. The record cannot show whether the installer created the install
+directory or its user PATH entry, so both are kept; delete the directory if it is
+empty and unused, and remove it from your user PATH yourself.
+
+Close CCP and MCP processes if Windows reports a file in use, or an interrupted upgrade
+is pending (re-run the install command first), then re-run uninstall; it can be
+repeated safely. Enrollments, certificates, keys and workspaces are never deleted.
+They live in `%USERPROFILE%\.ccp-client`, or in `HOME\.ccp-client` when `HOME` is set,
+or in `CCP_CLIENT_HOME` when that is set. Uninstall prints the path and a quoted
+`Remove-Item` command to delete them yourself.
 
 ## Enroll and select a session
 

@@ -11,7 +11,7 @@ set -uo pipefail
 REPO="squid-proxy-lovers/ccp"
 REPO_RAW="https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main"
 REPO_ROOT="$(CDPATH='' cd -P -- "$(dirname "${BASH_SOURCE[0]:-$0}" 2>/dev/null)" 2>/dev/null && pwd || echo "")"
-INSTALL_DIR="${HOME}/.local/bin"
+INSTALL_DIR="${HOME:-}/.local/bin"
 SESSION_NAME="my-session"
 MODE="both"
 FROM_SOURCE=false
@@ -21,6 +21,7 @@ RELEASE_STAGE=""
 PUBLISH_STAGE=""
 MCP_CONFIG_WARNINGS=""
 UNINSTALL=false
+INSTALL_ONLY_OPTIONS=""
 UNINSTALL_REMOVED=0
 UNINSTALL_FAILED=0
 
@@ -75,17 +76,24 @@ SQUID
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --client)      MODE="client"; shift ;;
-        --docker)      MODE="docker"; shift ;;
-        --install-dir) INSTALL_DIR="$2"; shift 2 ;;
-        --session)     SESSION_NAME="$2"; shift 2 ;;
-        --from-source) FROM_SOURCE=true; shift ;;
+        --client)      MODE="client"; INSTALL_ONLY_OPTIONS+=" --client"; shift ;;
+        --docker)      MODE="docker"; INSTALL_ONLY_OPTIONS+=" --docker"; shift ;;
+        --install-dir)
+            if [ $# -lt 2 ]; then err "--install-dir requires a value."; exit 1; fi
+            INSTALL_DIR="$2"; shift 2
+            ;;
+        --session)
+            if [ $# -lt 2 ]; then err "--session requires a value."; exit 1; fi
+            SESSION_NAME="$2"; INSTALL_ONLY_OPTIONS+=" --session"; shift 2
+            ;;
+        --from-source) FROM_SOURCE=true; INSTALL_ONLY_OPTIONS+=" --from-source"; shift ;;
         --uninstall)   UNINSTALL=true; shift ;;
         --channel|--version)
             if [ $# -lt 2 ] || [[ "$2" == --* ]] || [ -z "$2" ]; then
                 err "$1 requires a value."; exit 1
             fi
             if [ "$1" = "--channel" ]; then CHANNEL="$2"; else RELEASE_VERSION="$2"; fi
+            INSTALL_ONLY_OPTIONS+=" $1"
             shift 2
             ;;
         -h|--help)
@@ -119,6 +127,20 @@ EOF
     esac
 done
 
+# Validate the environment and paths before anything is touched.
+if [ -z "${HOME:-}" ]; then
+    err "HOME is not set; it locates the install directory, MCP bridge and host configs."
+    exit 1
+fi
+if [ -z "${INSTALL_DIR//\//}" ]; then
+    err "--install-dir must be a directory path other than empty or /."
+    exit 1
+fi
+if [ "$UNINSTALL" = true ] && [ -n "$INSTALL_ONLY_OPTIONS" ]; then
+    err "--uninstall only accepts --install-dir; it cannot be combined with:$INSTALL_ONLY_OPTIONS"
+    exit 1
+fi
+
 case "$CHANNEL" in
     stable|nightly) ;;
     *) err "Unknown channel: $CHANNEL (choose stable or nightly)."; exit 1 ;;
@@ -128,11 +150,6 @@ if [ -n "$RELEASE_VERSION" ]; then
         err "--version requires --channel nightly and a nightly-YYYY-MM-DD-<12-character SHA> tag."
         exit 1
     fi
-fi
-if [ "$UNINSTALL" = true ] && { [ "$MODE" != "both" ] || [ "$FROM_SOURCE" = true ] \
-    || [ "$CHANNEL" != "stable" ] || [ -n "$RELEASE_VERSION" ]; }; then
-    err "--uninstall only accepts --install-dir; it cannot be combined with install options."
-    exit 1
 fi
 if [ "$CHANNEL" = "nightly" ] && [ "$FROM_SOURCE" = true ]; then
     err "Choose --channel nightly for published builds or --from-source for your checkout."
@@ -660,14 +677,34 @@ uninstall_alias() {
     fi
 }
 
+# Remove only what install_mcp_bridge creates under ~/.ccp-mcp: venv and src.
+# The directory itself goes only if that leaves it empty.
 uninstall_mcp_bridge() {
-    local mcp_home="$HOME/.ccp-mcp"
+    local mcp_home="$HOME/.ccp-mcp" name path remaining
     if [ -L "$mcp_home" ]; then
         warn "$mcp_home is a symlink and was kept."
-    elif [ -d "$mcp_home" ]; then
-        if rm -rf -- "$mcp_home"; then uninstall_removed "$mcp_home"; else uninstall_failed "Could not remove $mcp_home"; fi
-    elif [ -e "$mcp_home" ]; then
+        return
+    fi
+    if [ ! -e "$mcp_home" ]; then return; fi
+    if [ ! -d "$mcp_home" ]; then
         warn "$mcp_home is not a directory and was kept."
+        return
+    fi
+    for name in venv src; do
+        path="$mcp_home/$name"
+        if [ -L "$path" ]; then
+            warn "$path is a symlink and was kept."
+        elif [ -d "$path" ]; then
+            if rm -rf -- "$path"; then uninstall_removed "$path"; else uninstall_failed "Could not remove $path"; fi
+        elif [ -e "$path" ]; then
+            warn "$path is not a directory and was kept."
+        fi
+    done
+    remaining="$(find "$mcp_home" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | tr '\n' ' ')"
+    if [ -z "$remaining" ]; then
+        if rmdir -- "$mcp_home"; then uninstall_removed "$mcp_home"; else uninstall_failed "Could not remove $mcp_home"; fi
+    else
+        warn "$mcp_home was kept because it holds files CCP did not create: $remaining"
     fi
 }
 
@@ -675,24 +712,29 @@ uninstall_mcp_bridge() {
 # command is this installer's bridge. The file is rewritten through a temporary
 # file in the same directory and an atomic rename.
 uninstall_json_host() {
-    local label="$1" config="$2" bridge="$HOME/.ccp-mcp/venv/bin/ccp-mcp-server" status
-    if [ ! -e "$config" ]; then return; fi
+    local label="$1" config="$2" bridge="$HOME/.ccp-mcp/venv/bin/ccp-mcp-server" status mode=edit
+    if [ ! -e "$config" ] && [ ! -L "$config" ]; then return; fi
+    # A symlinked file or directory is managed elsewhere; never rewrite through it.
+    if [ -L "$config" ] || [ -L "${config%/*}" ]; then mode=check; fi
     if ! command -v python3 &>/dev/null; then
         if grep -q '"ccp"' "$config" 2>/dev/null; then
             warn "python3 was not found, so $config was not edited. Remove the \"ccp\" entry under mcpServers by hand."
         fi
         return
     fi
-    status="$(python3 - "$config" "$bridge" <<'PY'
+    status="$(python3 - "$config" "$bridge" "$mode" <<'PY'
 import json, os, sys, tempfile
-path, bridge = sys.argv[1], sys.argv[2]
-real = os.path.realpath(path)
+path, bridge, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
-    with open(real, encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         raw = handle.read()
+except OSError:
+    print("ioerror")
+    sys.exit(0)
+try:
     cfg = json.loads(raw)
-except (OSError, ValueError):
-    print("error")
+except ValueError:
+    print("invalid")
     sys.exit(0)
 servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
 if not isinstance(servers, dict) or "ccp" not in servers:
@@ -702,35 +744,40 @@ entry = servers["ccp"]
 if not isinstance(entry, dict) or entry.get("command") != bridge:
     print("foreign")
     sys.exit(0)
+if mode != "edit":
+    print("manual")
+    sys.exit(0)
 del servers["ccp"]
 text = json.dumps(cfg, indent=2, ensure_ascii=False)
 if raw.endswith("\n"):
     text += "\n"
 temp = ""
 try:
-    fd, temp = tempfile.mkstemp(dir=os.path.dirname(real), prefix=os.path.basename(real) + ".ccp-")
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + ".ccp-")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
-    os.chmod(temp, os.stat(real).st_mode & 0o7777)
-    os.replace(temp, real)
+    os.chmod(temp, os.stat(path).st_mode & 0o7777)
+    os.replace(temp, path)
 except OSError:
     if temp:
         try:
             os.unlink(temp)
         except OSError:
             pass
-    print("error")
+    print("ioerror")
     sys.exit(0)
 print("removed")
 PY
-    )" || status="error"
+    )" || status="ioerror"
     case "$status" in
         removed) uninstall_removed "the ccp entry from $label config $config" ;;
         absent) ;;
         foreign) warn "The ccp entry in $config does not point at $bridge and was kept." ;;
-        *) warn "Could not read or update $config; it was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present." ;;
+        manual) warn "$config is a symlink or sits in a symlinked directory, so it was not edited. Remove the \"ccp\" entry under mcpServers by hand." ;;
+        invalid) warn "$config is not valid JSON and was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present." ;;
+        *) uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"ccp\" entry under mcpServers by hand." ;;
     esac
 }
 
@@ -743,27 +790,25 @@ uninstall_codex_notice() {
 }
 
 uninstall_data_notice() {
-    local client_home="${CCP_CLIENT_HOME:-$HOME/.ccp-client}"
+    local client_home="${CCP_CLIENT_HOME:-$HOME/.ccp-client}" quoted
+    printf -v quoted '%q' "$client_home"
     echo ""
     info "Not removed. These hold your enrollments, keys and server data:"
-    echo -e "  Client state (enrollment profiles, certificates, keys, workspaces):"
-    echo -e "    $client_home"
-    echo -e "    ${DIM}rm -rf \"$client_home\"${RESET}"
-    echo -e "  Server data (database, CA and server certificates). ccp-server writes it"
-    echo -e "  under the directory it was started from, at ./sessions/<session-name>"
-    echo -e "  (older versions: ./data), unless CCP_SERVER_HOME or CCP_SERVER_DATA_DIR is set:"
-    if [ -n "${CCP_SERVER_DATA_DIR:-}" ]; then echo -e "    CCP_SERVER_DATA_DIR=$CCP_SERVER_DATA_DIR"; fi
-    if [ -n "${CCP_SERVER_HOME:-}" ]; then echo -e "    CCP_SERVER_HOME=$CCP_SERVER_HOME"; fi
-    echo -e "  Docker server (started by --docker): container ccp-server, volume ccp-server-data."
+    echo "  Client state (enrollment profiles, certificates, keys, workspaces):"
+    printf '    %s\n' "$client_home"
+    printf '    %brm -rf %s%b\n' "$DIM" "$quoted" "$RESET"
+    echo "  Server data (database, CA and server keys): ccp-server uses"
+    echo "  sessions/<session-slug> under the directory it was started from."
+    echo "  CCP_SERVER_HOME replaces sessions, and CCP_SERVER_DATA_DIR overrides both."
+    echo "  An existing ./data (older versions) or matching session directory is reused."
+    if [ -n "${CCP_SERVER_DATA_DIR:-}" ]; then printf '    CCP_SERVER_DATA_DIR=%s\n' "$CCP_SERVER_DATA_DIR"; fi
+    if [ -n "${CCP_SERVER_HOME:-}" ]; then printf '    CCP_SERVER_HOME=%s\n' "$CCP_SERVER_HOME"; fi
+    echo "  Docker server (started by --docker): container ccp-server, volume ccp-server-data."
     echo -e "    ${DIM}docker stop ccp-server && docker rm ccp-server${RESET}"
     echo -e "    ${DIM}docker volume rm ccp-server-data${RESET}  (deletes the server database and keys)"
 }
 
 uninstall_ccp() {
-    if [ -z "${HOME:-}" ]; then
-        err "HOME is not set; cannot find the MCP bridge or host configs."
-        return 1
-    fi
     step "Uninstalling CCP from ${BOLD}$INSTALL_DIR${RESET}"
     uninstall_file "$INSTALL_DIR/ccp-client"
     uninstall_file "$INSTALL_DIR/ccp-server"

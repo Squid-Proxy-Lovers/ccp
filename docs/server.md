@@ -72,10 +72,16 @@ docker stop ccp-server && docker rm ccp-server
 docker volume rm ccp-server-data   # deletes the database, CA and server keys
 ```
 
-Run the second command only when you no longer need the server's data. A native
-`ccp-server` keeps its data under the directory it was started from, in
-`./sessions/<session-name>` (`./data` for older versions), or where
-`CCP_SERVER_HOME` or `CCP_SERVER_DATA_DIR` point. Uninstall never deletes it.
+Run the second command only when you no longer need the server's data.
+
+A native `ccp-server` keeps its data in `sessions/<session-slug>/`, relative to the
+directory it was started from. The slug is the lower-cased session name with runs of
+other characters turned into `-`, followed by `-` and eight hex characters of its
+SHA-256. `CCP_SERVER_HOME` replaces `sessions` as the parent directory, and
+`CCP_SERVER_DATA_DIR` overrides both and is used as given. The server first reuses an
+existing directory: `./data` from older versions, or a directory under the server
+home (or its `data` subdirectory) that already belongs to the session. Uninstall
+never deletes any of this.
 
 ### Remote enrollment
 

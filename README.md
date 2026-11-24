@@ -92,22 +92,31 @@ require Python 3 and verify download checksums. The
 
 ### Uninstall
 
+Uninstall needs an installer from a release that includes it, which is the
+release after 0.2.0. Until then, run `install.sh` from a checkout of `main`.
+Once released:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --uninstall
 ```
 
-Add `--install-dir` if you installed somewhere other than `~/.local/bin`. This
-removes `ccp-client`, `ccp-server` and `ccp-nightly.json` from that directory,
-the `ccp` link if it points at `ccp-client`, the MCP bridge in `~/.ccp-mcp`, and
-the `ccp` entry in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs
-the bridge. Other settings and servers in those files stay. Close Claude Code and
-Cursor first so they do not rewrite the file. For Codex, remove the
-`[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall never
-edits TOML.
+Add `--install-dir` if you installed somewhere other than `~/.local/bin`. It
+accepts no other option. This removes `ccp-client`, `ccp-server` and
+`ccp-nightly.json` from that directory, the `ccp` link if it points at
+`ccp-client`, the `venv` and `src` directories the installer made in
+`~/.ccp-mcp` (and `~/.ccp-mcp` itself if that leaves it empty), and the `ccp` entry
+in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs the bridge.
+Other settings and servers in those files stay. Close Claude Code and Cursor
+first so they do not rewrite the file. A config that is a symlink, or sits in a
+symlinked directory, is not edited; remove its `ccp` entry by hand. For Codex,
+remove the `[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall
+never edits TOML.
 
 Uninstall never deletes enrollment profiles, certificates, keys, server data or
 Docker volumes, and it never asks a question. It prints where they are and the
-commands to delete them yourself. Running it again is safe. On Windows, run the
+commands to delete them yourself. Client state is in `~/.ccp-client`
+(`%USERPROFILE%\.ccp-client` on Windows when `HOME` is not set), or in
+`CCP_CLIENT_HOME`. Running uninstall again is safe. On Windows, run the
 bootstrap with `-Uninstall`; see the [Windows guide](docs/client.md#uninstall-on-windows).
 To stop a `--docker` server, see [Docker](docs/server.md#remove-a-docker-server).
 
