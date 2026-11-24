@@ -1146,6 +1146,25 @@ function Find-CcpLinkedState {
     }
 }
 
+# The first entry of a generation that the installer does not create, or ''
+# when it holds only what Install-CcpMcp stages: the venv, the client copy and
+# the marker, with only standard Windows venv entries inside the venv.
+function Find-CcpUnexpectedEntry {
+    param([string]$Generation)
+    $allowed = @('venv', 'ccp-client.exe', '.ccp-generation.json')
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Generation -Force)) {
+        if ($allowed -notcontains $entry.Name) { return $entry.FullName }
+    }
+    $venv = Join-Path $Generation 'venv'
+    $standard = @('Include', 'Lib', 'Scripts', 'share', 'pyvenv.cfg', '.gitignore')
+    if (Test-Path -LiteralPath $venv -PathType Container) {
+        foreach ($entry in @(Get-ChildItem -LiteralPath $venv -Force)) {
+            if ($standard -notcontains $entry.Name) { return $entry.FullName }
+        }
+    }
+    return ''
+}
+
 # Mirror the installer's own pruning: the directory must be recorded, keep its
 # recorded creation time and marker hash, and be a private stage. A missing
 # marker is accepted only for a deletion the installer itself had started, and
@@ -1179,6 +1198,13 @@ function Remove-CcpGenerationDirectory {
     if ((Get-Item -LiteralPath $full -Force).CreationTimeUtc.Ticks -ne [long]$Entry.creation_ticks -or
         ($hash -and $hash -ne $Entry.marker_hash) -or (-not $hash -and -not $deleting)) {
         Write-CcpKept "$Directory does not match the installer's record and was kept."
+        return
+    }
+    # Remove an environment only when its contents are what the installer creates;
+    # anything else is kept for manual review.
+    $unexpected = Find-CcpUnexpectedEntry $full
+    if ($unexpected) {
+        Write-CcpKept "$Directory was kept because it holds $unexpected, which the installer does not create. Review it, and delete the generation yourself if it is only CCP's."
         return
     }
     if (-not $deleting) {

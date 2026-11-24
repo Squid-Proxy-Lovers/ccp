@@ -110,10 +110,14 @@ Other settings and servers in those files stay. Close Claude Code and Cursor
 first so they do not rewrite the file. A config is not edited if `$HOME` or any
 component down to the file is a symlink, or if it is not a regular file; remove its
 `ccp` entry by hand. Uninstall never removes `~/.ccp-mcp/src`: a release install does
-not create it, and it may be your own checkout or hold server data. It keeps `venv`
-unless it has a `pyvenv.cfg`, is not a symlink, has no top-level `sessions` or `data`
-directory, and holds none of your client state or server data (`CCP_CLIENT_HOME`,
-`CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or their defaults). It rejects an
+not create it, and it may be your own checkout or hold server data. Uninstall removes
+the CCP environment only when its contents match what the installer creates. It
+removes `venv` only if it is not a symlink, has a `pyvenv.cfg` and the
+`.ccp-installer` marker (written only when the installer itself creates the
+environment, never added to one it reused), holds only standard virtual
+environment entries, and holds none of your client state or server data
+(`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or their defaults).
+Anything else is kept for manual review, with the command to remove it yourself. It rejects an
 `--install-dir` that resolves to `/`, and `--session` or `--install-dir` without a
 value. For Codex,
 remove the `[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall

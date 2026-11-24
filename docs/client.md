@@ -142,7 +142,12 @@ warning. It removes an MCP generation under `%USERPROFILE%\.ccp-mcp\generations`
 when it is recorded and still has its recorded creation time and marker hash.
 Anything else there is kept. A generation that contains your client state or server
 data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or the default
-client home) is kept too, and so is every generation while any of those locations
+client home) is kept too. A generation is removed only when its contents match what
+the installer creates: at the top level only `venv`, `ccp-client.exe` and
+`.ccp-generation.json`, and inside `venv` only the standard `Include`, `Lib`,
+`Scripts`, `share`, `pyvenv.cfg` and `.gitignore`. Any other entry, such as an
+enrollment directory, keeps the whole generation and the record, and the warning
+names the entry for manual review. Every generation is also kept while any of those locations
 passes through a junction or symlink, because that cannot be ruled out as inside. Before it deletes a generation it saves the installer's
 `deleting` status, so a re-run finishes an interrupted deletion. When all of that succeeds it removes the installer's
 metadata files. If anything was kept, the record stays so a re-run repeats the

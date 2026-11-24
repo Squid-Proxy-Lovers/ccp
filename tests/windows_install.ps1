@@ -657,6 +657,23 @@ function Test-CcpUninstall {
             Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
         }
 
+        # User data inside a generation is kept even when no environment variable points at it.
+        foreach ($place in @('top level', 'inside the venv')) {
+            $f = Initialize-TestUninstall $Root ('uninstall-unexpected-' + $place.Replace(' ', '-'))
+            $enrollments = if ($place -eq 'top level') { Join-Path $f.generation 'enrollments\one' } else { Join-Path $f.generation 'venv\enrollments\one' }
+            New-Item -ItemType Directory -Force -Path $enrollments | Out-Null
+            [IO.File]::WriteAllText((Join-Path $enrollments 'client.key'), 'private key')
+            $savedValue = [Environment]::GetEnvironmentVariable('CCP_CLIENT_HOME', 'Process')
+            try {
+                [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $null, 'Process')
+                $text = Invoke-TestUninstall $f.bin
+            } finally { [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $savedValue, 'Process') }
+            Confirm-TestCondition (([IO.File]::ReadAllText((Join-Path $enrollments 'client.key'))) -eq 'private key') "An enrollment $place in a generation was deleted."
+            Confirm-TestCondition (Test-Path -LiteralPath $f.command) "A generation holding an enrollment $place was removed."
+            Confirm-TestCondition ($text.Contains('which the installer does not create')) "An unexpected entry $place was not reported."
+            Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
+        }
+
         # State reached through a junction or symlink is treated as possibly inside a generation.
         $f = Initialize-TestUninstall $Root 'uninstall-linked'
         $state = Join-Path $f.generation 'user-state'

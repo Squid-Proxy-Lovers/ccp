@@ -2213,6 +2213,7 @@ else:
         bridge.parent.mkdir(parents=True, exist_ok=True)
         bridge.write_text("bridge")
         (bridge.parent.parent / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (bridge.parent.parent / ".ccp-installer").write_text("Created by the CCP installer.\n")
         self.bridge = str(bridge)
         hosts = {
             "claude": self.home_dir / ".claude.json",
@@ -2387,9 +2388,9 @@ else:
     def test_uninstall_keeps_directories_that_hold_client_or_server_data(self):
         cases = {
             "client home in src": ("src", "CCP_CLIENT_HOME", "src/state"),
-            "client home in venv": ("venv", "CCP_CLIENT_HOME", "venv/profiles"),
-            "server data in venv": ("venv", "CCP_SERVER_DATA_DIR", "venv/state"),
-            "server home in venv": ("venv", "CCP_SERVER_HOME", "venv/nested/sessions"),
+            "client home in venv": ("venv", "CCP_CLIENT_HOME", "venv/lib/profiles"),
+            "server data in venv": ("venv", "CCP_SERVER_DATA_DIR", "venv/lib/state"),
+            "server home in venv": ("venv", "CCP_SERVER_HOME", "venv/lib/nested/sessions"),
             "server home in src": ("src", "CCP_SERVER_HOME", "src/sessions"),
         }
         for label, (child, variable, relative) in cases.items():
@@ -2413,6 +2414,8 @@ else:
     def test_uninstall_keeps_a_venv_it_cannot_prove_is_its_own(self):
         cases = {
             "no pyvenv.cfg": lambda venv: (venv / "pyvenv.cfg").unlink(),
+            "no installer marker": lambda venv: (venv / ".ccp-installer").unlink(),
+            "extra top-level user file": lambda venv: (venv / "notes.txt").write_text("mine"),
             "top-level sessions": lambda venv: (venv / "sessions/slug").mkdir(parents=True),
             "top-level data": lambda venv: (venv / "data").mkdir(),
         }
@@ -2426,15 +2429,54 @@ else:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual((venv / "marker").read_text(), "keep me")
                 self.assertIn(f"{venv} was kept because", result.stdout)
+                self.assertIn(f"rm -rf {venv}", result.stdout)
                 shutil.rmtree(self.home_dir / ".ccp-mcp")
                 for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
                     path.unlink(missing_ok=True)
+
+    def test_uninstall_keeps_a_reused_venv_with_user_files(self):
+        # A venv that existed before the installer ran is never marked, so it is kept.
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        (venv / ".ccp-installer").unlink()
+        (venv / "my-notes.txt").write_text("keep me")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((venv / "my-notes.txt").read_text(), "keep me")
+        self.assertTrue((venv / "pyvenv.cfg").exists())
+        self.assertIn("could not prove it created it", result.stdout)
+
+    def test_uninstall_removes_a_marked_venv_with_only_standard_entries(self):
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        for name in ("lib", "include", "share"):
+            (venv / name).mkdir()
+        (venv / ".gitignore").write_text("*\n")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(venv.exists())
+        self.assertFalse((self.home_dir / ".ccp-mcp").exists())
+
+    def test_install_marks_a_venv_it_creates_and_never_a_reused_one(self):
+        marker = self.home_dir / ".ccp-mcp/venv/.ccp-installer"
+        # The harness pre-creates a venv, so a normal install reuses it unmarked.
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+        # Without one, the installer creates the venv and marks it, even if pip then fails.
+        shutil.rmtree(self.home_dir / ".ccp-mcp")
+        self.install("--client")
+        self.assertTrue((self.home_dir / ".ccp-mcp/venv/pyvenv.cfg").exists())
+        self.assertIn("CCP installer", marker.read_text())
+        # Re-running keeps the marker and does not touch a marked venv's other files.
+        result, _ = self.install("--client")
+        self.assertTrue(marker.exists())
 
     def test_uninstall_keeps_directories_holding_a_default_state_location(self):
         self.uninstall_fixture()
         mcp_home = self.home_dir / ".ccp-mcp"
         # A relative server data directory in the working directory, resolved through a symlink.
-        state = mcp_home / "venv/extra/data"
+        state = mcp_home / "venv/lib/extra/data"
         state.mkdir(parents=True)
         (state / "ccp.sqlite3").write_text("database")
         (self.root / "data").symlink_to(state)

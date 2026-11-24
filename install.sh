@@ -22,6 +22,7 @@ PUBLISH_STAGE=""
 MCP_CONFIG_WARNINGS=""
 UNINSTALL=false
 INSTALL_ONLY_OPTIONS=""
+MCP_VENV_MARKER=".ccp-installer"
 UNINSTALL_REMOVED=0
 UNINSTALL_FAILED=0
 
@@ -116,7 +117,8 @@ Options:
 Uninstall (bash install.sh --uninstall [--install-dir <path>]) removes
 ccp-client, ccp-server and ccp-nightly.json from the install directory, the
 ccp alias if it links to ccp-client, the MCP bridge environment in
-~/.ccp-mcp/venv (never ~/.ccp-mcp/src), and the
+~/.ccp-mcp/venv when it has the installer marker and only standard files
+(never ~/.ccp-mcp/src), and the
 "ccp" entry in the Claude and Cursor MCP configs when it points at that
 bridge. It never deletes enrollment profiles, client state, server data or
 Docker volumes. It prints where they are and how to remove them. It does not
@@ -488,6 +490,15 @@ ensure_path() {
     fi
 }
 
+# Create the MCP virtual environment and mark it as ours. The marker is written
+# only for an environment this installer creates; an existing one is reused as
+# is and never marked, so uninstall can tell the two apart.
+create_mcp_venv() {
+    local venv_dir="$1"
+    python3 -m venv "$venv_dir" || return 1
+    printf '%s\n' "Created by the CCP installer. Uninstall removes this environment only while it holds just standard virtual environment files." > "$venv_dir/$MCP_VENV_MARKER" || return 1
+}
+
 install_mcp_bridge() {
     if ! command -v python3 &>/dev/null; then
         err "Python 3 is required for the MCP bridge."
@@ -500,7 +511,7 @@ install_mcp_bridge() {
 
     if [ "$FROM_SOURCE" = false ]; then
         step "Installing MCP bridge from $RELEASE_VERSION"
-        if [ ! -d "$venv_dir" ] && ! python3 -m venv "$venv_dir"; then
+        if [ ! -d "$venv_dir" ] && ! create_mcp_venv "$venv_dir"; then
             err "Could not create the MCP environment."; exit 1
         fi
         if ! "$venv_dir/bin/pip" install --quiet --upgrade --force-reinstall "$RELEASE_STAGE/ccp-mcp.tar.gz"; then
@@ -524,7 +535,7 @@ install_mcp_bridge() {
 
     step "Installing MCP bridge..."
     if [ ! -d "$venv_dir" ]; then
-        python3 -m venv "$venv_dir" || return 1
+        create_mcp_venv "$venv_dir" || return 1
     fi
     "$venv_dir/bin/pip" install --quiet --upgrade pip || return 1
     "$venv_dir/bin/pip" install --quiet -e "$mcp_src" || return 1
@@ -941,12 +952,29 @@ uninstall_holds_state() {
     return 1
 }
 
+# Print the top-level entries of $1 that a CCP-made virtual environment does not
+# hold. A venv built by this installer contains only the standard layout, the
+# marker, and the .gitignore that newer Pythons add; anything else is a user's.
+uninstall_unexpected_venv_entries() {
+    local entry name
+    while IFS= read -r entry; do
+        name="${entry##*/}"
+        case "$name" in
+            bin|lib|lib64|include|share|pyvenv.cfg|.gitignore|"$MCP_VENV_MARKER") ;;
+            *) printf '%s ' "$name" ;;
+        esac
+    done < <(find "$1" -mindepth 1 -maxdepth 1 2>/dev/null)
+}
+
 # Remove only the virtual environment install_mcp_bridge creates in ~/.ccp-mcp.
-# ~/.ccp-mcp/src is never removed: a release install does not create it, and it
-# may be your own checkout or hold server data. The directory itself goes only
-# if nothing else is left in it.
+# It must carry the installer's marker (an existing venv the installer merely
+# reused never gets one), have a pyvenv.cfg, hold only standard venv entries,
+# and contain none of your client or server data. Anything else is kept for
+# manual review. ~/.ccp-mcp/src is never removed: a release install does not
+# create it, and it may be your own checkout or hold server data. The directory
+# itself goes only if nothing else is left in it.
 uninstall_mcp_bridge() {
-    local mcp_home="$HOME/.ccp-mcp" venv src remaining
+    local mcp_home="$HOME/.ccp-mcp" venv src remaining reason quoted
     venv="$mcp_home/venv"
     src="$mcp_home/src"
     if [ -L "$mcp_home" ]; then
@@ -961,10 +989,19 @@ uninstall_mcp_bridge() {
     if [ -L "$venv" ]; then
         warn "$venv is a symlink and was kept."
     elif [ -d "$venv" ]; then
+        reason=""
         if [ ! -f "$venv/pyvenv.cfg" ]; then
-            warn "$venv was kept because it has no pyvenv.cfg, so it is not a Python virtual environment CCP can prove it made."
-        elif [ -d "$venv/sessions" ] || [ -d "$venv/data" ]; then
-            warn "$venv was kept because it holds a sessions or data directory, which may be server data. Move it elsewhere, then re-run."
+            reason="it has no pyvenv.cfg"
+        elif [ ! -f "$venv/$MCP_VENV_MARKER" ] || [ -L "$venv/$MCP_VENV_MARKER" ]; then
+            reason="it has no $MCP_VENV_MARKER marker, so it was not created by this installer (or it was reused from before)"
+        else
+            remaining="$(uninstall_unexpected_venv_entries "$venv")"
+            if [ -n "$remaining" ]; then reason="it holds files a CCP environment does not: $remaining"; fi
+        fi
+        if [ -n "$reason" ]; then
+            printf -v quoted '%q' "$venv"
+            warn "$venv was kept because CCP could not prove it created it: $reason. Review it, and if it is only a CCP environment, remove it yourself:"
+            printf '    %brm -rf %s%b\n' "$DIM" "$quoted" "$RESET"
         elif ! uninstall_holds_state "$venv"; then
             if rm -rf -- "$venv"; then uninstall_removed "$venv"; else uninstall_failed "Could not remove $venv"; fi
         fi
