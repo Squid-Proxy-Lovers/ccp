@@ -657,18 +657,18 @@ function Test-CcpUninstall {
 
         # A hash-valid record with unusable MCP fields is rejected before any change.
         $mutations = [ordered]@{
-            'missing client' = { param($Record, $Fixture) [void]$Record.PSObject.Properties.Remove('mcp_client') }
-            'empty client' = { param($Record, $Fixture) $Record.mcp_client = '' }
-            'numeric client' = { param($Record, $Fixture) $Record.mcp_client = 5 }
-            'array command' = { param($Record, $Fixture) $Record.mcp_command = @($Record.mcp_command) }
-            'foreign command' = { param($Record, $Fixture) $Record.mcp_command = Join-Path $Fixture.profile 'elsewhere\ccp-mcp-server.exe' }
-            'foreign client' = { param($Record, $Fixture) $Record.mcp_client = Join-Path $Fixture.profile 'ccp-client.exe' }
+            'missing client' = { param($Record) [void]$Record.PSObject.Properties.Remove('mcp_client') }
+            'empty client' = { param($Record) $Record.mcp_client = '' }
+            'numeric client' = { param($Record) $Record.mcp_client = 5 }
+            'array command' = { param($Record) $Record.mcp_command = @($Record.mcp_command) }
+            'foreign command' = { param($Record) $Record.mcp_command = Join-Path $env:USERPROFILE 'elsewhere\ccp-mcp-server.exe' }
+            'foreign client' = { param($Record) $Record.mcp_client = Join-Path $env:USERPROFILE 'ccp-client.exe' }
         }
         foreach ($name in $mutations.Keys) {
             $f = Initialize-TestUninstall $Root ('uninstall-mcp-fields-' + $name.Replace(' ', '-'))
             $recordPath = Join-Path $f.bin '.ccp-install.json'
             $record = Get-Content -Encoding UTF8 -LiteralPath $recordPath -Raw | ConvertFrom-Json
-            & $mutations[$name] $record $f
+            & $mutations[$name] $record
             [IO.File]::WriteAllText($recordPath, ($record | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
             Write-TestMcpHost (Join-Path $f.profile '.claude.json') $f.command $f.client
             $before = @(Get-ChildItem -LiteralPath $f.profile -Recurse -Force | ForEach-Object { $_.FullName + '|' + $(if ($_ -is [IO.FileInfo]) { $_.Length } else { 'dir' }) }) -join "`n"

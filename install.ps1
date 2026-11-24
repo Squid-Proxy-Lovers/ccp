@@ -1243,7 +1243,6 @@ function Uninstall-CcpWindows {
     $script:CcpUninstallKept = $false
     $bin = [IO.Path]::GetFullPath($BinDirectory)
     Confirm-CcpPath $bin -AllowMissing
-    $profileDirectory = $env:USERPROFILE
     $record = $null
     $invalid = $false
     try { $record = Read-CcpInstallRecord $bin }
@@ -1272,9 +1271,9 @@ function Uninstall-CcpWindows {
         }
         $mcpCommand = [string]$record.mcp_command
         $mcpClient = [string]$record.mcp_client
-        Invoke-CcpUninstallStep 'The Claude MCP entry' { Remove-CcpJsonHost (Join-Path $profileDirectory '.claude.json') $mcpCommand $mcpClient }
-        Invoke-CcpUninstallStep 'The Cursor MCP entry' { Remove-CcpJsonHost (Join-Path $profileDirectory '.cursor\mcp.json') $mcpCommand $mcpClient }
-        Invoke-CcpUninstallStep 'The Codex notice' { Write-CcpCodexNotice (Join-Path $profileDirectory '.codex\config.toml') }
+        Invoke-CcpUninstallStep 'The Claude MCP entry' { Remove-CcpJsonHost (Join-Path $env:USERPROFILE '.claude.json') $mcpCommand $mcpClient }
+        Invoke-CcpUninstallStep 'The Cursor MCP entry' { Remove-CcpJsonHost (Join-Path $env:USERPROFILE '.cursor\mcp.json') $mcpCommand $mcpClient }
+        Invoke-CcpUninstallStep 'The Codex notice' { Write-CcpCodexNotice (Join-Path $env:USERPROFILE '.codex\config.toml') }
         $clientHash = $record.client_sha256
         $aliasHash = if ($record.alias_sha256) { $record.alias_sha256 } else { '' }
         Invoke-CcpUninstallStep 'ccp.exe' { Remove-CcpOwnedExecutable (Join-Path $bin 'ccp.exe') $aliasHash }
