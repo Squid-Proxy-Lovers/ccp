@@ -145,8 +145,9 @@ data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or the defaul
 client home) is kept too. A generation is removed only when its contents match what
 the installer creates: at the top level only `venv`, `ccp-client.exe` and
 `.ccp-generation.json`, and inside `venv` only the standard `Include`, `Lib`,
-`Scripts`, `share`, `pyvenv.cfg` and `.gitignore`. Any other entry, such as an
-enrollment directory, keeps the whole generation and the record, and the warning
+`Scripts`, `share`, `pyvenv.cfg` and `.gitignore`. Each must also be the right type: those names must be real directories
+or regular files, not junctions, symlinks or other reparse points. Any other entry,
+such as an enrollment directory, keeps the whole generation and the record, and the warning
 names the entry for manual review. Every generation is also kept while any of those locations
 passes through a junction or symlink, because that cannot be ruled out as inside. Before it deletes a generation it saves the installer's
 `deleting` status, so a re-run finishes an interrupted deletion. When all of that succeeds it removes the installer's

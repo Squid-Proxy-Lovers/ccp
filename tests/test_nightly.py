@@ -2434,6 +2434,93 @@ else:
                 for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
                     path.unlink(missing_ok=True)
 
+    def test_uninstall_matches_state_by_identity_not_spelling(self):
+        # A symlinked ancestor spells the same directory differently; a case-insensitive
+        # filesystem does too. Both must be recognised as the same place.
+        probe = self.root / "CaseProbe"
+        probe.write_text("probe")
+        case_insensitive = (self.root / "caseprobe").exists()
+        self.uninstall_fixture()
+        mcp_home = self.home_dir / ".ccp-mcp"
+        state = mcp_home / "venv/lib/State"
+        state.mkdir(parents=True)
+        (state / "client.key").write_text("private key")
+        alias = self.root / "venv-alias"
+        alias.symlink_to(mcp_home / "venv")
+        spellings = {"symlinked ancestor": str(alias / "lib/State")}
+        if case_insensitive:
+            spellings["different case"] = str(state).replace(
+                ".ccp-mcp/venv/lib/State", ".CCP-MCP/VENV/LIB/STATE"
+            )
+        for label, spelling in spellings.items():
+            with self.subTest(spelling=label):
+                result, _ = self.install("--uninstall", env_changes={"CCP_CLIENT_HOME": spelling})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((state / "client.key").read_text(), "private key")
+                self.assertTrue((mcp_home / "venv").is_dir())
+                self.assertIn("which is CCP data", result.stdout)
+
+    def test_uninstall_keeps_a_venv_it_cannot_list(self):
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        # A find that fails must read as "cannot inspect", never as an empty listing.
+        shadow = self.bin_dir / "find"
+        shadow.write_text("#!/bin/sh\nexit 1\n")
+        shadow.chmod(0o755)
+        self.addCleanup(lambda: shadow.unlink(missing_ok=True))
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((venv / "pyvenv.cfg").exists())
+        self.assertIn("its contents could not be listed", result.stdout)
+        self.assertIn(".ccp-mcp could not be listed and was kept", result.stdout)
+        shadow.unlink()
+        if os.geteuid() != 0:
+            venv.chmod(0o300)
+            self.addCleanup(venv.chmod, 0o700)
+            result, _ = self.install("--uninstall")
+            venv.chmod(0o700)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((venv / "pyvenv.cfg").exists())
+            self.assertIn("its contents could not be listed", result.stdout)
+
+    def test_uninstall_checks_the_type_of_venv_entries(self):
+        cases = {
+            "directory named like a marker file": lambda venv: (
+                (venv / ".gitignore").mkdir(),
+                (venv / ".gitignore/user.txt").write_text("keep me"),
+            ),
+            "directory named like the config": lambda venv: (
+                (venv / "pyvenv.cfg").unlink(),
+                (venv / "pyvenv.cfg").mkdir(),
+            ),
+            "symlinked bin": lambda venv: (
+                shutil.move(str(venv / "bin"), str(venv.parent / "real-bin")),
+                (venv / "bin").symlink_to(venv.parent / "real-bin"),
+            ),
+            "file named like a directory": lambda venv: (venv / "share").write_text("x"),
+            "lib64 link elsewhere": lambda venv: (venv / "lib64").symlink_to("/usr/lib"),
+        }
+        for label, prepare in cases.items():
+            with self.subTest(case=label):
+                self.uninstall_fixture()
+                venv = self.home_dir / ".ccp-mcp/venv"
+                prepare(venv)
+                result, _ = self.install("--uninstall")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(venv.is_dir())
+                self.assertIn(f"{venv} was kept because", result.stdout)
+                shutil.rmtree(self.home_dir / ".ccp-mcp")
+                for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
+                    path.unlink(missing_ok=True)
+        # The standard lib64 -> lib link of a Linux venv is still removable.
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        (venv / "lib").mkdir()
+        (venv / "lib64").symlink_to("lib")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(venv.exists())
+
     def test_uninstall_keeps_a_reused_venv_with_user_files(self):
         # A venv that existed before the installer ran is never marked, so it is kept.
         self.uninstall_fixture()

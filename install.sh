@@ -934,7 +934,21 @@ uninstall_collect_state() {
     done
 }
 
-# Succeeds, after warning, when removing $1 could delete user data.
+# Succeeds when $1 is, or lies inside, the directory $2. Identity is by device and
+# inode (-ef) while walking up from $1, so the spelling of either path does not
+# matter: letter case on a case-insensitive filesystem, symlinks, or ../.
+uninstall_inside_or_equal() {
+    local current="$1" parent
+    while :; do
+        if [ "$current" -ef "$2" ]; then return 0; fi
+        parent="$(dirname -- "$current")"
+        if [ "$parent" = "$current" ]; then return 1; fi
+        current="$parent"
+    done
+}
+
+# Succeeds, after warning, when removing $1 could delete user data: a CCP data
+# location is inside it, or it is inside one.
 uninstall_holds_state() {
     local path="$1" resolved state
     if ! resolved="$(physical_path "$path")" || [ -z "$resolved" ] || [ "$UNINSTALL_STATE_UNKNOWN" = true ]; then
@@ -942,28 +956,31 @@ uninstall_holds_state() {
         return 0
     fi
     for state in ${UNINSTALL_STATE_DIRS[@]+"${UNINSTALL_STATE_DIRS[@]}"}; do
-        case "$state/" in
-            "$resolved/"*)
-                warn "$path was kept because it holds $state, which is CCP data. Move that data elsewhere, then re-run."
-                return 0
-                ;;
-        esac
+        if uninstall_inside_or_equal "$state" "$resolved" || uninstall_inside_or_equal "$resolved" "$state"; then
+            warn "$path was kept because it holds, or sits inside, $state, which is CCP data. Move that data elsewhere, then re-run."
+            return 0
+        fi
     done
     return 1
 }
 
 # Print the top-level entries of $1 that a CCP-made virtual environment does not
-# hold. A venv built by this installer contains only the standard layout, the
-# marker, and the .gitignore that newer Pythons add; anything else is a user's.
+# hold, and fail if the directory cannot be listed. Names and types both count:
+# bin, lib, include and share must be real directories, lib64 a directory or the
+# standard link to lib, and pyvenv.cfg, .gitignore (added by newer Pythons) and
+# the installer marker regular files. A symlink or an entry of the wrong type is
+# unexpected.
 uninstall_unexpected_venv_entries() {
-    local entry name
-    while IFS= read -r entry; do
-        name="${entry##*/}"
-        case "$name" in
-            bin|lib|lib64|include|share|pyvenv.cfg|.gitignore|"$MCP_VENV_MARKER") ;;
-            *) printf '%s ' "$name" ;;
-        esac
-    done < <(find "$1" -mindepth 1 -maxdepth 1 2>/dev/null)
+    local venv="$1" found target
+    found="$(find "$venv" -mindepth 1 -maxdepth 1 \
+        ! \( -type d \( -name bin -o -name lib -o -name lib64 -o -name include -o -name share \) \) \
+        ! \( -type f \( -name pyvenv.cfg -o -name .gitignore -o -name "$MCP_VENV_MARKER" \) \) \
+        ! \( -type l -name lib64 \) -print 2>/dev/null)" || return 1
+    if [ -L "$venv/lib64" ]; then
+        target="$(readlink "$venv/lib64")" || return 1
+        if [ "$target" != "lib" ]; then found="${found:+$found$'\n'}$venv/lib64"; fi
+    fi
+    printf '%s' "$found" | tr '\n' ' '
 }
 
 # Remove only the virtual environment install_mcp_bridge creates in ~/.ccp-mcp.
@@ -995,8 +1012,11 @@ uninstall_mcp_bridge() {
         elif [ ! -f "$venv/$MCP_VENV_MARKER" ] || [ -L "$venv/$MCP_VENV_MARKER" ]; then
             reason="it has no $MCP_VENV_MARKER marker, so it was not created by this installer (or it was reused from before)"
         else
-            remaining="$(uninstall_unexpected_venv_entries "$venv")"
-            if [ -n "$remaining" ]; then reason="it holds files a CCP environment does not: $remaining"; fi
+            if ! remaining="$(uninstall_unexpected_venv_entries "$venv")"; then
+                reason="its contents could not be listed"
+            elif [ -n "$remaining" ]; then
+                reason="it holds entries a CCP environment does not: $remaining"
+            fi
         fi
         if [ -n "$reason" ]; then
             printf -v quoted '%q' "$venv"
@@ -1011,8 +1031,9 @@ uninstall_mcp_bridge() {
     if [ -L "$src" ] || [ -e "$src" ]; then
         warn "$src was kept. A release install does not create it, and it may be your own checkout or hold server data. Delete it yourself if CCP made it and you no longer need it."
     fi
-    remaining="$(find "$mcp_home" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | tr '\n' ' ')"
-    if [ -z "$remaining" ]; then
+    if ! remaining="$(find "$mcp_home" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | tr '\n' ' ')"; then
+        warn "$mcp_home could not be listed and was kept."
+    elif [ -z "$remaining" ]; then
         if rmdir -- "$mcp_home"; then uninstall_removed "$mcp_home"; else uninstall_failed "Could not remove $mcp_home"; fi
     else
         warn "$mcp_home was kept because it holds files CCP did not create: $remaining"

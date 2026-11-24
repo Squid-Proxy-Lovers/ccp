@@ -115,8 +115,11 @@ the CCP environment only when its contents match what the installer creates. It
 removes `venv` only if it is not a symlink, has a `pyvenv.cfg` and the
 `.ccp-installer` marker (written only when the installer itself creates the
 environment, never added to one it reused), holds only standard virtual
-environment entries, and holds none of your client state or server data
-(`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or their defaults).
+environment entries of the right type (real directories and regular files, with
+only the usual `lib64` link to `lib` allowed), can be listed, and holds none of
+your client state or server data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`,
+`CCP_SERVER_HOME`, or their defaults). Data locations are compared by file
+identity, not spelling, so a symlink or different letter case does not hide them.
 Anything else is kept for manual review, with the command to remove it yourself. It rejects an
 `--install-dir` that resolves to `/`, and `--session` or `--install-dir` without a
 value. For Codex,

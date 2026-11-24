@@ -674,6 +674,30 @@ function Test-CcpUninstall {
             Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
         }
 
+        # Names are not enough: an entry of the wrong type is kept for review too.
+        $oddities = [ordered]@{
+            'directory named like the venv marker' = { param($Generation) Join-Path $Generation 'venv\.gitignore' }
+            'directory named like the client' = { param($Generation) Remove-Item -LiteralPath (Join-Path $Generation 'ccp-client.exe'); Join-Path $Generation 'ccp-client.exe' }
+            'directory named like the venv config' = { param($Generation) Join-Path $Generation 'venv\pyvenv.cfg' }
+        }
+        foreach ($name in $oddities.Keys) {
+            $f = Initialize-TestUninstall $Root ('uninstall-type-' + $name.Replace(' ', '-'))
+            $odd = & $oddities[$name] $f.generation
+            New-Item -ItemType Directory -Path $odd | Out-Null
+            $kept = Join-Path $odd 'user.txt'
+            [IO.File]::WriteAllText($kept, 'keep me')
+            $text = Invoke-TestUninstall $f.bin
+            Confirm-TestCondition (([IO.File]::ReadAllText($kept)) -eq 'keep me') "An entry of the wrong type was deleted: $name."
+            Confirm-TestCondition ($text.Contains('which the installer does not create')) "A wrong-type entry was not reported: $name."
+            Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
+        }
+        $f = Initialize-TestUninstall $Root 'uninstall-type-file-named-like-a-directory'
+        $odd = Join-Path $f.generation 'venv\Lib'
+        [IO.File]::WriteAllText($odd, 'not a directory')
+        $text = Invoke-TestUninstall $f.bin
+        Confirm-TestCondition ((Test-Path -LiteralPath $odd -PathType Leaf) -and (Test-Path -LiteralPath $f.command)) 'A file named like a directory was removed with its generation.'
+        Confirm-TestCondition ($text.Contains('which the installer does not create')) 'A file named like a directory was not reported.'
+
         # State reached through a junction or symlink is treated as possibly inside a generation.
         $f = Initialize-TestUninstall $Root 'uninstall-linked'
         $state = Join-Path $f.generation 'user-state'
