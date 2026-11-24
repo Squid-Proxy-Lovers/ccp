@@ -1078,7 +1078,7 @@ class ReleaseTagTests(unittest.TestCase):
         )
         self.assertIn("startsWith(github.ref, 'refs/tags/v')", self.jobs["docker-publish"])
 
-    def test_actual_docker_step_pushes_only_sha_and_channel_tag(self):
+    def test_actual_docker_step_pushes_sha_and_release_tags(self):
         body = self.jobs["docker-publish"]
         script = body.split("        run: |\n", 1)[1]
         script = "\n".join(line.removeprefix("          ") for line in script.splitlines())
@@ -1091,8 +1091,10 @@ class ReleaseTagTests(unittest.TestCase):
         docker.chmod(0o700)
         log = self.root / "docker-log"
         for channel, tag, expected in [
-            ("stable", "v0.2.0", "latest"),
-            ("rc", "v0.2.0-rc.1", "v0.2.0-rc.1"),
+            ("stable", "v0.2.0", ["v0.2.0", "latest"]),
+            ("rc", "v0.2.0-rc.1", ["v0.2.0-rc.1"]),
+            ("nightly", "nightly-2026-01-01-abcdef123456", None),
+            ("", "v0.2.0", None),
         ]:
             log.write_text("")
             environment = {
@@ -1110,6 +1112,10 @@ class ReleaseTagTests(unittest.TestCase):
                 capture_output=True,
                 check=False,
             )
+            if expected is None:
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(log.read_text(), "")
+                continue
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             pushes = [call[1] for call in calls if call[0] == "push"]
@@ -1117,7 +1123,7 @@ class ReleaseTagTests(unittest.TestCase):
                 pushes,
                 [
                     f"ghcr.io/squid-proxy-lovers/ccp:{SHA}",
-                    f"ghcr.io/squid-proxy-lovers/ccp:{expected}",
+                    *(f"ghcr.io/squid-proxy-lovers/ccp:{tag}" for tag in expected),
                 ],
             )
 
@@ -1149,6 +1155,8 @@ class InstallerTests(unittest.TestCase):
         )
         # A stable release and a draft are deliberately ahead of the valid nightly.
         stable = dict(release(), tag_name="v0.2.0", prerelease=False)
+        stable["assets"] = [{"name": "ccp-mcp.tar.gz"}]
+        (self.fixtures / "latest").write_text(json.dumps(stable))
         (self.fixtures / "releases-1.json").write_text(json.dumps([stable, release(draft=True)]))
         (self.fixtures / "releases-2.json").write_text(json.dumps([release()]))
         stub = (
@@ -1694,9 +1702,66 @@ else:
         result, calls = self.install("--client")
         self.assertEqual(result.returncode, 0, result.stderr)
         downloads = [call[2] for call in calls if call[0] == "curl"]
-        self.assertEqual(len(downloads), 1)
-        self.assertIn("/releases/latest/download/ccp-client-linux-x86_64", downloads[0])
+        base = "https://github.com/squid-proxy-lovers/ccp/releases/download/v0.2.0"
+        self.assertEqual(
+            downloads,
+            [
+                "https://api.github.com/repos/squid-proxy-lovers/ccp/releases/latest",
+                f"{base}/SHA256SUMS",
+                f"{base}/ccp-client-linux-x86_64",
+                f"{base}/ccp-mcp.tar.gz",
+            ],
+        )
+        pip = next(call for call in calls if call[0] == "pip")
+        self.assertTrue(pip[-1].endswith("/ccp-mcp.tar.gz"))
+        self.assertFalse(any(call[0] == "git" for call in calls))
         self.assertFalse((self.install_dir / "ccp-nightly.json").exists())
+
+    def test_server_install_without_mcp_skips_the_mcp_archive(self):
+        # The test run has no terminal, so the MCP prompt reads as "no".
+        for channel in ((), ("--channel", "nightly", "--version", TAG)):
+            with self.subTest(channel=channel or "stable"):
+                self.log.unlink(missing_ok=True)
+                result, calls = self.install(*channel, failure="ccp-mcp.tar.gz")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((self.install_dir / "ccp-server").exists())
+                self.assertTrue((self.install_dir / "ccp-client").exists())
+                downloads = [call[2] for call in calls if call[0] == "curl"]
+                self.assertFalse(any(url.endswith("/ccp-mcp.tar.gz") for url in downloads))
+                self.assertFalse(any(call[0] in ("pip", "git") for call in calls))
+                self.assertIn("MCP bridge skipped", result.stdout)
+
+    def test_stable_release_without_mcp_asset_fails_closed(self):
+        for assets in ([], None, "invalid", [{}]):
+            with self.subTest(assets=assets):
+                metadata = json.loads((self.fixtures / "latest").read_text())
+                metadata["assets"] = assets
+                (self.fixtures / "latest").write_text(json.dumps(metadata))
+                (self.fixtures / "ccp-mcp.tar.gz").unlink(missing_ok=True)
+                target = self.install_dir / "ccp-client"
+                target.write_bytes(b"working client")
+                result, calls = self.install("--client", failure="ccp-mcp.tar.gz")
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(target.read_bytes(), b"working client")
+                self.assertFalse(any(call[0] in ("git", "pip") for call in calls))
+                self.assertIn("Stable download failed: ccp-mcp.tar.gz", result.stdout)
+                self.assertIn("--from-source", result.stdout)
+
+    def test_stable_mcp_checksum_failure_preserves_client(self):
+        target = self.install_dir / "ccp-client"
+        target.write_bytes(b"working client")
+        (self.fixtures / "ccp-mcp.tar.gz").write_bytes(b"wrong release")
+        result, calls = self.install("--client")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(target.read_bytes(), b"working client")
+        self.assertFalse(any(call[0] in ("pip", "git") for call in calls))
+        self.assertIn("Stable verification failed. No binaries installed.", result.stdout)
+        self.assertIn("--from-source", result.stdout)
+
+    def test_stable_mcp_download_failure_does_not_fall_back(self):
+        result, calls = self.install("--client", failure="ccp-mcp.tar.gz")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any(call[0] in ("pip", "git") for call in calls))
 
     def test_no_nightly_fails_without_installing(self):
         (self.fixtures / "releases-2.json").write_text("[]")

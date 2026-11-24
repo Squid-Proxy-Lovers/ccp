@@ -172,7 +172,8 @@ contracts require a manual decision.
 Before attestation or publication, version tags must be exactly `vX.Y.Z` or
 `vX.Y.Z-rc.N` and match all source package versions. Docker version-tag
 publication also waits for identity validation and provenance; only validated
-stable tags move `:latest`. Main pushes run checks without moving that alias.
+stable releases publish their exact version tag, commit-SHA tag, and `:latest`.
+Main pushes run checks without moving that alias.
 
 Packaging produces the manifest beside the existing binaries, matching MCP
 archive, build metadata and checksums. A separate provenance job runs only for
