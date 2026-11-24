@@ -1924,9 +1924,7 @@ else:
         self.assertTrue(target.read_text().startswith(original))
         self.assertEqual(target.read_text().count("[mcp_servers.ccp]"), 1)
         self.assertEqual(target.stat().st_mode & 0o777, 0o640)
-        self.assertEqual(
-            sorted(path.name for path in target.parent.iterdir()), ["codex.toml"]
-        )
+        self.assertEqual(sorted(path.name for path in target.parent.iterdir()), ["codex.toml"])
 
     def test_deeply_nested_codex_config_asks_for_repair_without_a_traceback(self):
         self.mcp_bridge_fixture()
