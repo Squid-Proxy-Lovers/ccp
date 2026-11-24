@@ -1179,6 +1179,35 @@ function Find-CcpLinkedState {
     }
 }
 
+# True when an entry has an expected name and the expected type: a real directory
+# or a regular file, never a junction, symlink or other reparse point.
+function Test-CcpExpectedEntry {
+    param($Entry, [string[]]$Directories, [string[]]$Files)
+    if ($Entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+    $isDirectory = [bool]($Entry.Attributes -band [IO.FileAttributes]::Directory)
+    if ($Directories -contains $Entry.Name) { return $isDirectory }
+    if ($Files -contains $Entry.Name) { return -not $isDirectory }
+    return $false
+}
+
+# The first entry of a generation that the installer does not create, or ''
+# when it holds only what Install-CcpMcp stages, with the expected types: the
+# venv directory, the client copy and the marker file, and inside the venv only
+# the standard Windows entries.
+function Find-CcpUnexpectedEntry {
+    param([string]$Generation)
+    foreach ($entry in @(Get-ChildItem -LiteralPath $Generation -Force)) {
+        if (-not (Test-CcpExpectedEntry $entry @('venv') @('ccp-client.exe', '.ccp-generation.json'))) { return $entry.FullName }
+    }
+    $venv = Join-Path $Generation 'venv'
+    if (Test-Path -LiteralPath $venv -PathType Container) {
+        foreach ($entry in @(Get-ChildItem -LiteralPath $venv -Force)) {
+            if (-not (Test-CcpExpectedEntry $entry @('Include', 'Lib', 'Scripts', 'share') @('pyvenv.cfg', '.gitignore'))) { return $entry.FullName }
+        }
+    }
+    return ''
+}
+
 # Mirror the installer's own pruning: the directory must be recorded, keep its
 # recorded creation time and marker hash, and be a private stage. A missing
 # marker is accepted only for a deletion the installer itself had started, and
