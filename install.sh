@@ -482,6 +482,235 @@ mcp_config_warning() {
     MCP_CONFIG_WARNINGS+="the $1 MCP config was not written"
 }
 
+# Inspect or update the Codex config with one python3 process. Mode "check"
+# prints the state of [mcp_servers.ccp]: present, absent, unsafe (a value we
+# must not touch or extend), unsupported (no tomllib) or invalid (unparseable).
+# Mode "append CONFIG COMMAND CLIENT SERVER" builds the entry with escaped TOML
+# strings, takes an flock on the sidecar file CONFIG.ccp-lock, retrying for
+# about two seconds (CCP_CODEX_LOCK_RETRIES tenths of a second, for tests),
+# then reads, validates and appends the entry through one descriptor on the
+# config, in place, all in that one process, so the kernel drops the lock
+# however the process ends. If the write fails, or the path stops naming the
+# file that was written, or the process gets HUP, INT or TERM, the config is
+# truncated back to its original size, but only when the file is exactly the
+# validated bytes plus the bytes this process wrote; another process's
+# in-place edits are never cut off, and nothing is cut when nothing was
+# written. SIGKILL or power loss mid-write can still leave a partial append,
+# as the old "cat >>" could; nothing rolls that back. A read-only config is never replaced. It prints added, locked
+# (contention), failed (lock or write error), changed (the file differed
+# from what was validated, nothing written), damaged (a write failed and
+# someone else's bytes made a rollback unsafe), badentry (the
+# entry itself is not valid TOML) or a check state. The lock file itself is
+# left in place; only the lock on it matters.
+codex_config_tool() {
+    local out
+    out="$(python3 -I - "$@" <<'PY'
+import os, signal, sys, time
+try:
+    import tomllib
+except ModuleNotFoundError:
+    print("unsupported")
+    sys.exit(0)
+
+
+def classify(config):
+    servers = config.get("mcp_servers", {})
+    if not isinstance(servers, dict):
+        return "unsafe"
+    if "ccp" not in servers:
+        return "absent"
+    return "present" if isinstance(servers["ccp"], dict) else "unsafe"
+
+
+def inspect(raw):
+    try:
+        return classify(tomllib.loads(raw.decode("utf-8")))
+    except (ValueError, RecursionError, MemoryError):
+        return "invalid"
+
+
+def check(path):
+    try:
+        with open(path, "rb") as stream:
+            return inspect(stream.read())
+    except OSError:
+        return "invalid"
+
+
+def quote(value):
+    named = {
+        "\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t",
+        "\n": "\\n", "\f": "\\f", "\r": "\\r",
+    }
+    chars = []
+    for char in value:
+        if char in named:
+            chars.append(named[char])
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            chars.append("\\u%04x" % ord(char))
+        else:
+            chars.append(char)
+    return '"' + "".join(chars) + '"'
+
+
+def build_block(command, client, server):
+    lines = ["", "[mcp_servers.ccp]", "command = " + quote(command), ""]
+    lines += ["[mcp_servers.ccp.env]", "CCP_CLIENT_BIN = " + quote(client)]
+    if server:
+        lines.append("CCP_SERVER_BIN = " + quote(server))
+    block = "\n".join(lines)
+    block.encode("utf-8")
+    tomllib.loads(block)
+    return block
+
+
+def retries():
+    try:
+        return max(1, int(os.environ.get("CCP_CODEX_LOCK_RETRIES", "20")))
+    except ValueError:
+        return 20
+
+
+def acquire(path):
+    import fcntl
+    fd = os.open(path + ".ccp-lock", os.O_RDWR | os.O_CREAT, 0o600)
+    for _ in range(retries()):
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            time.sleep(0.1)
+    return False
+
+
+def read_all(fd, size):
+    chunks = []
+    offset = 0
+    while offset < size:
+        chunk = os.pread(fd, size - offset, offset)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        offset += len(chunk)
+    return b"".join(chunks)
+
+
+class Damaged(Exception):
+    """The config changed under a failed write, so it was not rolled back."""
+
+
+def write_tail(fd, before, path, tail, written):
+    view = memoryview(tail)
+    while view:
+        count = os.write(fd, view)
+        written[0] += count
+        view = view[count:]
+    os.fsync(fd)
+    current = os.stat(path)
+    if (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino):
+        raise OSError("config was replaced during the update")
+
+
+def roll_back(fd, original, tail, written):
+    # Undo only what this process appended. With nothing written there is
+    # nothing of ours to remove. Otherwise the file must be exactly the
+    # validated bytes plus the bytes os.write reported; anything else includes
+    # edits by another writer, and cutting it off would destroy that work.
+    if written == 0:
+        return
+    if read_all(fd, os.fstat(fd).st_size) != original + tail[:written]:
+        raise Damaged
+    os.ftruncate(fd, len(original))
+    os.fsync(fd)
+
+
+def append(path, block):
+    # One descriptor does the read, the validation and the write. Right before
+    # writing, the file is read again and must still equal the validated bytes.
+    # Appending in place keeps the inode, mode, ACLs, xattrs and owner; opening
+    # the path follows a symlink and fails on a read-only file. An editor that
+    # writes without taking our lock can still race in the tiny window between
+    # that last comparison and the write; that is accepted.
+    tail = (block + "\n").encode("utf-8")
+    fd = os.open(path, os.O_RDWR | os.O_APPEND)
+    try:
+        before = os.fstat(fd)
+        original = read_all(fd, before.st_size)
+        state = inspect(original)
+        if state != "absent":
+            return state
+        try:
+            candidate = tomllib.loads((original + tail).decode("utf-8"))
+        except (UnicodeDecodeError, RecursionError, MemoryError):
+            return "invalid"
+        except tomllib.TOMLDecodeError:
+            return "unsafe"
+        if classify(candidate) != "present":
+            return "unsafe"
+        if read_all(fd, os.fstat(fd).st_size) != original:
+            return "changed"
+        written = [0]
+        try:
+            write_tail(fd, before, path, tail, written)
+        except BaseException:
+            roll_back(fd, original, tail, written[0])
+            raise
+        return "added"
+    finally:
+        os.close(fd)
+
+
+mode, path = sys.argv[1], sys.argv[2]
+if mode == "check":
+    print(check(path))
+    sys.exit(0)
+try:
+    block = build_block(*sys.argv[3:6])
+except ValueError:
+    print("badentry")
+    sys.exit(0)
+for name in ("SIGHUP", "SIGINT", "SIGTERM"):
+    signal.signal(getattr(signal, name), lambda *_: sys.exit(1))
+try:
+    print(append(path, block) if acquire(path) else "locked")
+except Damaged:
+    print("damaged")
+except (ImportError, OSError):
+    print("failed")
+PY
+    )" || out=""
+    case "$out" in
+        present|absent|unsafe|unsupported|invalid|added|locked|failed|badentry|changed|damaged) echo "$out" ;;
+        *) if [ "$1" = append ]; then echo failed; else echo invalid; fi ;;
+    esac
+}
+
+configure_codex_mcp() {
+    local codex_config="$1" mcp_cmd="$2" client_bin="$3" server_bin=""
+    local codex_state
+    codex_state="$(codex_config_tool check "$codex_config")"
+    if [ "$codex_state" = absent ]; then
+        # only include the server binary if it's installed (full install mode)
+        if [ -f "$INSTALL_DIR/ccp-server" ]; then server_bin="$INSTALL_DIR/ccp-server"; fi
+        codex_state="$(codex_config_tool append "$codex_config" "$mcp_cmd" "$client_bin" "$server_bin")"
+        if [ "$codex_state" = added ]; then
+            ok "Added to $codex_config"
+            return
+        fi
+    fi
+    case "$codex_state" in
+        present) ok "$codex_config already configured" ;;
+        unsupported) mcp_config_warning "Codex" "Could not check $codex_config: Python 3.11+ is required; add [mcp_servers.ccp] manually" ;;
+        invalid) mcp_config_warning "Codex" "Could not parse $codex_config; repair the TOML, then add [mcp_servers.ccp]" ;;
+        locked) mcp_config_warning "Codex" "Another installer is updating $codex_config (lock file $codex_config.ccp-lock is held); retry later or add [mcp_servers.ccp] manually" ;;
+        failed) mcp_config_warning "Codex" "Could not update $codex_config" ;;
+        changed) mcp_config_warning "Codex" "Could not update $codex_config: it changed during the update and was left as it is; retry or add [mcp_servers.ccp] manually" ;;
+        damaged) mcp_config_warning "Codex" "Could not update $codex_config cleanly: it changed during the update and may need manual repair; check it, then add [mcp_servers.ccp] if it is missing" ;;
+        badentry) mcp_config_warning "Codex" "Could not build a valid [mcp_servers.ccp] entry for $codex_config; add it manually" ;;
+        *) mcp_config_warning "Codex" "Cannot add [mcp_servers.ccp] to $codex_config safely: mcp_servers or mcp_servers.ccp is not a table that can be extended (a scalar, array or inline table); replace it, then add the entry manually" ;;
+    esac
+}
+
 configure_mcp() {
     local client_bin="$INSTALL_DIR/ccp-client"
     local venv_dir="$HOME/.ccp-mcp/venv"
@@ -516,28 +745,7 @@ MCPEOF
     # Codex: ~/.codex/config.toml
     local codex_config="$HOME/.codex/config.toml"
     if [ -f "$codex_config" ]; then
-        if ! grep -q "mcp_servers.ccp" "$codex_config" 2>/dev/null; then
-            local codex_env="CCP_CLIENT_BIN = \"$client_bin\""
-            if [ -f "$INSTALL_DIR/ccp-server" ]; then
-                codex_env="$codex_env
-CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
-            fi
-            if cat >> "$codex_config" <<TOMLEOF
-
-[mcp_servers.ccp]
-command = "$mcp_cmd"
-
-[mcp_servers.ccp.env]
-$codex_env
-TOMLEOF
-            then
-                ok "Added to $codex_config"
-            else
-                mcp_config_warning "Codex" "Could not update $codex_config"
-            fi
-        else
-            ok "$codex_config already configured"
-        fi
+        configure_codex_mcp "$codex_config" "$mcp_cmd" "$client_bin"
     fi
 
     # Claude: ~/.claude.json
