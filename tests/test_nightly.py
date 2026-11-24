@@ -1569,6 +1569,67 @@ elif name == 'cat':
         self.assertIn("the Codex MCP config was not written", result.stdout)
         self.assertNotIn(f"Added to {config}", result.stdout)
 
+    def assert_codex_config_retained_with_unsafe_warning(self, config, original):
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(
+            f"Cannot add [mcp_servers.ccp] to {config} safely; add it manually", result.stdout
+        )
+        self.assertEqual(
+            re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()[-1],
+            "Done, with warnings: the Codex MCP config was not written; see above.",
+        )
+        self.assertNotIn("already configured", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+        self.assertFalse(Path(f"{config}.ccp-lock").exists())
+
+    def test_non_table_codex_ccp_entry_is_retained_with_warning(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        for original in (
+            'mcp_servers = { ccp = "x" }\n',
+            '[mcp_servers]\nccp = "x"\n',
+            "[mcp_servers]\nccp = 7\n",
+            '[mcp_servers]\nccp = ["x"]\n',
+        ):
+            with self.subTest(original=original):
+                config.write_bytes(original.encode())
+                self.assert_codex_config_retained_with_unsafe_warning(config, original)
+
+    def test_non_table_codex_servers_value_is_retained_with_warning(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        for original in ('mcp_servers = "x"\n', "mcp_servers = 3\n", 'mcp_servers = ["ccp"]\n'):
+            with self.subTest(original=original):
+                config.write_bytes(original.encode())
+                self.assert_codex_config_retained_with_unsafe_warning(config, original)
+
+    def test_held_codex_lock_prevents_write_and_warns(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = '[mcp_servers.other]\ncommand = "o"\n'
+        config.write_bytes(original.encode())
+        lock = Path(f"{config}.ccp-lock")
+        lock.mkdir()
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original.encode())
+        self.assertIn(f"Another installer is updating {config}", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+        self.assertTrue(lock.is_dir(), "a lock held by another installer must be left alone")
+        # With the lock gone the append succeeds and releases its own lock.
+        lock.rmdir()
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+        self.assertIn(f"Added to {config}", result.stdout)
+        self.assertFalse(lock.exists())
+
     def test_codex_config_is_retained_without_tomllib(self):
         self.mcp_bridge_fixture()
         config = self.home_dir / ".codex/config.toml"
