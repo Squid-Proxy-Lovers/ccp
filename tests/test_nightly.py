@@ -2174,7 +2174,7 @@ else:
         self.assertEqual(target.stat().st_mode & 0o777, 0o755)
         self.assertIn("Done.", result.stdout)
 
-    def install(self, *args, failure=""):
+    def install(self, *args, failure="", env_changes=None):
         env = dict(
             os.environ,
             HOME=str(self.home_dir),
@@ -2184,6 +2184,11 @@ else:
             NIGHTLY_TEST_FIXTURES=str(self.fixtures),
             NIGHTLY_TEST_FAILURE=failure,
         )
+        for name, value in (env_changes or {}).items():
+            if value is None:
+                env.pop(name, None)
+            else:
+                env[name] = value
         argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), *args]
         # The real installer runs against isolated download, Docker, Git and pip doubles.
         result = subprocess.run(  # noqa: S603
@@ -2195,6 +2200,531 @@ else:
             else []
         )
         return result, calls
+
+    def uninstall_fixture(self, install_dir=None):
+        """Lay out what the installers create, plus user data they must not touch."""
+        target = install_dir or self.install_dir
+        target.mkdir(parents=True, exist_ok=True)
+        for name in ("ccp-client", "ccp-server"):
+            (target / name).write_bytes(b"binary")
+        (target / "ccp-nightly.json").write_text("{}")
+        (target / "ccp").symlink_to("ccp-client")
+        bridge = self.home_dir / ".ccp-mcp/venv/bin/ccp-mcp-server"
+        bridge.parent.mkdir(parents=True, exist_ok=True)
+        bridge.write_text("bridge")
+        (bridge.parent.parent / "pyvenv.cfg").write_text("home = /usr/bin\n")
+        (bridge.parent.parent / ".ccp-installer").write_text("Created by the CCP installer.\n")
+        self.bridge = str(bridge)
+        hosts = {
+            "claude": self.home_dir / ".claude.json",
+            "cursor": self.home_dir / ".cursor/mcp.json",
+        }
+        ours = {"command": self.bridge, "env": {"CCP_CLIENT_BIN": str(target / "ccp-client")}}
+        for path in hosts.values():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "numStartups": 7,
+                        "note": "café",
+                        "mcpServers": {"other": {"command": "keep-me"}, "ccp": ours},
+                    },
+                    indent=2,
+                )
+                + "\n"
+            )
+        codex = self.home_dir / ".codex/config.toml"
+        codex.parent.mkdir(parents=True, exist_ok=True)
+        codex.write_text('model = "x"\n\n[mcp_servers.ccp]\ncommand = "bridge"\n')
+        key = self.home_dir / ".ccp-client/enrollments/one/client.key"
+        key.parent.mkdir(parents=True, exist_ok=True)
+        key.write_text("private key")
+        return hosts, codex, key
+
+    def test_uninstall_removes_installed_files_and_keeps_user_data(self):
+        hosts, codex, key = self.uninstall_fixture()
+        codex_before = codex.read_text()
+        result, calls = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ("ccp-client", "ccp-server", "ccp-nightly.json", "ccp"):
+            self.assertFalse((self.install_dir / name).is_symlink(), name)
+            self.assertFalse((self.install_dir / name).exists(), name)
+        self.assertTrue(self.install_dir.is_dir())
+        self.assertFalse((self.home_dir / ".ccp-mcp").exists())
+        for path in hosts.values():
+            config = json.loads(path.read_text())
+            self.assertEqual(config["numStartups"], 7)
+            self.assertEqual(config["note"], "café")
+            self.assertEqual(config["mcpServers"], {"other": {"command": "keep-me"}})
+            self.assertTrue(path.read_text().endswith("\n"))
+            self.assertEqual([p.name for p in path.parent.glob(path.name + ".ccp-*")], [])
+        self.assertEqual(codex.read_text(), codex_before)
+        self.assertIn("[mcp_servers.ccp]", result.stdout)
+        self.assertEqual(key.read_text(), "private key")
+        self.assertIn(str(self.home_dir / ".ccp-client"), result.stdout)
+        self.assertIn("docker stop ccp-server && docker rm ccp-server", result.stdout)
+        self.assertIn("docker volume rm ccp-server-data", result.stdout)
+        self.assertFalse(any(call[0] in ("docker", "curl", "pip") for call in calls))
+
+    def test_uninstall_twice_reports_nothing_left(self):
+        _, _, key = self.uninstall_fixture()
+        first, _ = self.install("--uninstall")
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.assertNotIn("Nothing left to remove", first.stdout)
+        second, _ = self.install("--uninstall")
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        self.assertIn("Nothing left to remove", second.stdout)
+        self.assertNotIn("Removed", second.stdout)
+        self.assertEqual(key.read_text(), "private key")
+
+    def test_uninstall_keeps_a_ccp_alias_it_did_not_create(self):
+        for kind in ("file", "other-link", "dangling"):
+            with self.subTest(kind=kind):
+                self.uninstall_fixture()
+                alias = self.install_dir / "ccp"
+                alias.unlink()
+                if kind == "file":
+                    alias.write_text("someone else's ccp")
+                elif kind == "other-link":
+                    (self.root / "elsewhere").write_text("tool")
+                    alias.symlink_to(self.root / "elsewhere")
+                else:
+                    alias.symlink_to("missing-target")
+                target = os.readlink(alias) if alias.is_symlink() else None
+                result, _ = self.install("--uninstall")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(alias.exists() or alias.is_symlink())
+                self.assertEqual(os.readlink(alias) if alias.is_symlink() else None, target)
+                self.assertIn("was not created by this installer", result.stdout)
+                self.assertFalse((self.install_dir / "ccp-client").exists())
+                alias.unlink()
+
+    def test_uninstall_keeps_ccp_entries_that_point_elsewhere(self):
+        hosts, _, _ = self.uninstall_fixture()
+        for path in hosts.values():
+            config = json.loads(path.read_text())
+            config["mcpServers"]["ccp"] = {"command": "/opt/other/ccp-mcp-server"}
+            path.write_text(json.dumps(config))
+        before = {name: path.read_bytes() for name, path in hosts.items()}
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name, path in hosts.items():
+            self.assertEqual(path.read_bytes(), before[name])
+            self.assertIn(f"{path} does not point at {self.bridge} and was kept", result.stdout)
+        self.assertFalse((self.home_dir / ".ccp-mcp").exists())
+
+    def test_uninstall_leaves_unreadable_json_config_unchanged(self):
+        hosts, _, _ = self.uninstall_fixture()
+        hosts["claude"].write_text("{not json")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(hosts["claude"].read_text(), "{not json")
+        self.assertIn("left unchanged", result.stdout)
+        self.assertNotIn("ccp", json.loads(hosts["cursor"].read_text())["mcpServers"])
+
+    def test_uninstall_does_not_edit_symlinked_configs_or_directories(self):
+        hosts, _, _ = self.uninstall_fixture()
+        dotfiles = self.root / "dotfiles"
+        dotfiles.mkdir()
+        real_claude = dotfiles / "claude.json"
+        shutil.move(str(hosts["claude"]), real_claude)
+        hosts["claude"].symlink_to(real_claude)
+        real_cursor = dotfiles / "cursor"
+        shutil.move(str(hosts["cursor"].parent), real_cursor)
+        hosts["cursor"].parent.symlink_to(real_cursor)
+        before = (real_claude.read_bytes(), (real_cursor / "mcp.json").read_bytes())
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(hosts["claude"].is_symlink())
+        self.assertTrue(hosts["cursor"].parent.is_symlink())
+        self.assertEqual(real_claude.read_bytes(), before[0])
+        self.assertEqual((real_cursor / "mcp.json").read_bytes(), before[1])
+        self.assertEqual(list(dotfiles.rglob("*.ccp-*")), [])
+        self.assertIn(f"{hosts['claude']} is, or sits under, a symlink", result.stdout)
+        self.assertIn(f"{hosts['cursor']} is, or sits under, a symlink", result.stdout)
+        self.assertIn("Remove the", result.stdout)
+
+    def test_uninstall_fails_when_a_config_cannot_be_read(self):
+        hosts, _, _ = self.uninstall_fixture()
+        hosts["claude"].unlink()
+        hosts["claude"].mkdir()
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("is not a regular file", result.stdout)
+        self.assertTrue(hosts["claude"].is_dir())
+        self.assertNotIn("ccp", json.loads(hosts["cursor"].read_text())["mcpServers"])
+
+    def test_uninstall_fails_when_a_config_is_unreadable(self):
+        hosts, _, _ = self.uninstall_fixture()
+        hosts["claude"].chmod(0)
+        self.addCleanup(hosts["claude"].chmod, 0o600)
+        before = hosts["claude"].stat().st_mode
+        result, _ = self.install("--uninstall")
+        hosts["claude"].chmod(0o600)
+        if os.geteuid() == 0:
+            # Permissions do not stop root, so the entry is simply removed.
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        else:
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("Could not read or update", result.stdout)
+            self.assertIn("ccp", json.loads(hosts["claude"].read_text())["mcpServers"])
+        self.assertEqual(before & 0o777, 0)
+
+    def test_uninstall_does_not_edit_configs_under_a_symlinked_home(self):
+        hosts, _, _ = self.uninstall_fixture()
+        link = self.root / "home-link"
+        link.symlink_to(self.home_dir)
+        bridge = str(link / ".ccp-mcp/venv/bin/ccp-mcp-server")
+        for path in hosts.values():
+            path.write_text(path.read_text().replace(self.bridge, bridge))
+        before = {name: path.read_bytes() for name, path in hosts.items()}
+        result, _ = self.install("--uninstall", env_changes={"HOME": str(link)})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name, path in hosts.items():
+            self.assertEqual(path.read_bytes(), before[name])
+        self.assertEqual(list(self.home_dir.rglob("*.json.ccp-*")), [])
+        self.assertIn("is, or sits under, a symlink", result.stdout)
+
+    def test_uninstall_keeps_directories_that_hold_client_or_server_data(self):
+        cases = {
+            "client home in src": ("src", "CCP_CLIENT_HOME", "src/state"),
+            "client home in venv": ("venv", "CCP_CLIENT_HOME", "venv/lib/profiles"),
+            "server data in venv": ("venv", "CCP_SERVER_DATA_DIR", "venv/lib/state"),
+            "server home in venv": ("venv", "CCP_SERVER_HOME", "venv/lib/nested/sessions"),
+            "server home in src": ("src", "CCP_SERVER_HOME", "src/sessions"),
+        }
+        for label, (child, variable, relative) in cases.items():
+            with self.subTest(case=label):
+                self.uninstall_fixture()
+                mcp_home = self.home_dir / ".ccp-mcp"
+                (mcp_home / "src").mkdir(exist_ok=True)
+                state = mcp_home / relative
+                state.mkdir(parents=True)
+                (state / "client.key").write_text("private key")
+                result, _ = self.install("--uninstall", env_changes={variable: str(state)})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((state / "client.key").read_text(), "private key")
+                self.assertTrue((mcp_home / child).is_dir())
+                if child == "venv":
+                    self.assertIn("which is CCP data", result.stdout)
+                shutil.rmtree(mcp_home)
+                for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
+                    path.unlink(missing_ok=True)
+
+    def test_uninstall_keeps_a_venv_it_cannot_prove_is_its_own(self):
+        cases = {
+            "no pyvenv.cfg": lambda venv: (venv / "pyvenv.cfg").unlink(),
+            "no installer marker": lambda venv: (venv / ".ccp-installer").unlink(),
+            "extra top-level user file": lambda venv: (venv / "notes.txt").write_text("mine"),
+            "top-level sessions": lambda venv: (venv / "sessions/slug").mkdir(parents=True),
+            "top-level data": lambda venv: (venv / "data").mkdir(),
+        }
+        for label, prepare in cases.items():
+            with self.subTest(case=label):
+                self.uninstall_fixture()
+                venv = self.home_dir / ".ccp-mcp/venv"
+                prepare(venv)
+                (venv / "marker").write_text("keep me")
+                result, _ = self.install("--uninstall")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((venv / "marker").read_text(), "keep me")
+                self.assertIn(f"{venv} was kept because", result.stdout)
+                self.assertIn(f"rm -rf {venv}", result.stdout)
+                shutil.rmtree(self.home_dir / ".ccp-mcp")
+                for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
+                    path.unlink(missing_ok=True)
+
+    def test_uninstall_matches_state_by_identity_not_spelling(self):
+        # A symlinked ancestor spells the same directory differently; a case-insensitive
+        # filesystem does too. Both must be recognised as the same place.
+        probe = self.root / "CaseProbe"
+        probe.write_text("probe")
+        case_insensitive = (self.root / "caseprobe").exists()
+        self.uninstall_fixture()
+        mcp_home = self.home_dir / ".ccp-mcp"
+        state = mcp_home / "venv/lib/State"
+        state.mkdir(parents=True)
+        (state / "client.key").write_text("private key")
+        alias = self.root / "venv-alias"
+        alias.symlink_to(mcp_home / "venv")
+        spellings = {"symlinked ancestor": str(alias / "lib/State")}
+        if case_insensitive:
+            spellings["different case"] = str(state).replace(
+                ".ccp-mcp/venv/lib/State", ".CCP-MCP/VENV/LIB/STATE"
+            )
+        for label, spelling in spellings.items():
+            with self.subTest(spelling=label):
+                result, _ = self.install("--uninstall", env_changes={"CCP_CLIENT_HOME": spelling})
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((state / "client.key").read_text(), "private key")
+                self.assertTrue((mcp_home / "venv").is_dir())
+                self.assertIn("which is CCP data", result.stdout)
+
+    def test_uninstall_keeps_a_venv_it_cannot_list(self):
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        # A find that fails must read as "cannot inspect", never as an empty listing.
+        shadow = self.bin_dir / "find"
+        shadow.write_text("#!/bin/sh\nexit 1\n")
+        shadow.chmod(0o755)
+        self.addCleanup(lambda: shadow.unlink(missing_ok=True))
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((venv / "pyvenv.cfg").exists())
+        self.assertIn("its contents could not be listed", result.stdout)
+        self.assertIn(".ccp-mcp could not be listed and was kept", result.stdout)
+        shadow.unlink()
+        if os.geteuid() != 0:
+            venv.chmod(0o300)
+            self.addCleanup(venv.chmod, 0o700)
+            result, _ = self.install("--uninstall")
+            venv.chmod(0o700)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue((venv / "pyvenv.cfg").exists())
+            self.assertIn("its contents could not be listed", result.stdout)
+
+    def test_uninstall_checks_the_type_of_venv_entries(self):
+        cases = {
+            "directory named like a marker file": lambda venv: (
+                (venv / ".gitignore").mkdir(),
+                (venv / ".gitignore/user.txt").write_text("keep me"),
+            ),
+            "directory named like the config": lambda venv: (
+                (venv / "pyvenv.cfg").unlink(),
+                (venv / "pyvenv.cfg").mkdir(),
+            ),
+            "symlinked bin": lambda venv: (
+                shutil.move(str(venv / "bin"), str(venv.parent / "real-bin")),
+                (venv / "bin").symlink_to(venv.parent / "real-bin"),
+            ),
+            "file named like a directory": lambda venv: (venv / "share").write_text("x"),
+            "lib64 link elsewhere": lambda venv: (venv / "lib64").symlink_to("/usr/lib"),
+        }
+        for label, prepare in cases.items():
+            with self.subTest(case=label):
+                self.uninstall_fixture()
+                venv = self.home_dir / ".ccp-mcp/venv"
+                prepare(venv)
+                result, _ = self.install("--uninstall")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertTrue(venv.is_dir())
+                self.assertIn(f"{venv} was kept because", result.stdout)
+                shutil.rmtree(self.home_dir / ".ccp-mcp")
+                for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
+                    path.unlink(missing_ok=True)
+        # The standard lib64 -> lib link of a Linux venv is still removable.
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        (venv / "lib").mkdir()
+        (venv / "lib64").symlink_to("lib")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(venv.exists())
+
+    def test_uninstall_keeps_a_reused_venv_with_user_files(self):
+        # A venv that existed before the installer ran is never marked, so it is kept.
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        (venv / ".ccp-installer").unlink()
+        (venv / "my-notes.txt").write_text("keep me")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((venv / "my-notes.txt").read_text(), "keep me")
+        self.assertTrue((venv / "pyvenv.cfg").exists())
+        self.assertIn("could not prove it created it", result.stdout)
+
+    def test_uninstall_removes_a_marked_venv_with_only_standard_entries(self):
+        self.uninstall_fixture()
+        venv = self.home_dir / ".ccp-mcp/venv"
+        for name in ("lib", "include", "share"):
+            (venv / name).mkdir()
+        (venv / ".gitignore").write_text("*\n")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(venv.exists())
+        self.assertFalse((self.home_dir / ".ccp-mcp").exists())
+
+    def test_install_marks_a_venv_it_creates_and_never_a_reused_one(self):
+        marker = self.home_dir / ".ccp-mcp/venv/.ccp-installer"
+        # The harness pre-creates a venv, so a normal install reuses it unmarked.
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(marker.exists())
+        # Without one, the installer creates the venv and marks it, even if pip then fails.
+        shutil.rmtree(self.home_dir / ".ccp-mcp")
+        self.install("--client")
+        self.assertTrue((self.home_dir / ".ccp-mcp/venv/pyvenv.cfg").exists())
+        self.assertIn("CCP installer", marker.read_text())
+        # Re-running keeps the marker and does not touch a marked venv's other files.
+        result, _ = self.install("--client")
+        self.assertTrue(marker.exists())
+
+    def test_uninstall_keeps_directories_holding_a_default_state_location(self):
+        self.uninstall_fixture()
+        mcp_home = self.home_dir / ".ccp-mcp"
+        # A relative server data directory in the working directory, resolved through a symlink.
+        state = mcp_home / "venv/lib/extra/data"
+        state.mkdir(parents=True)
+        (state / "ccp.sqlite3").write_text("database")
+        (self.root / "data").symlink_to(state)
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((state / "ccp.sqlite3").read_text(), "database")
+        self.assertTrue((mcp_home / "venv").is_dir())
+        self.assertIn("which is CCP data", result.stdout)
+
+    def test_uninstall_keeps_unknown_files_in_the_mcp_directory(self):
+        self.uninstall_fixture()
+        mcp_home = self.home_dir / ".ccp-mcp"
+        (mcp_home / "notes.txt").write_text("mine")
+        (mcp_home / "my dir").mkdir()
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse((mcp_home / "venv").exists())
+        self.assertEqual((mcp_home / "notes.txt").read_text(), "mine")
+        self.assertTrue((mcp_home / "my dir").is_dir())
+        self.assertIn("holds files CCP did not create", result.stdout)
+        self.assertIn("notes.txt", result.stdout)
+
+    def test_uninstall_never_removes_src_and_keeps_symlinked_children(self):
+        self.uninstall_fixture()
+        mcp_home = self.home_dir / ".ccp-mcp"
+        # A user's own checkout, with uncommitted work and server data inside.
+        (mcp_home / "src/.git").mkdir(parents=True)
+        (mcp_home / "src/notes.txt").write_text("uncommitted work")
+        (mcp_home / "src/sessions/slug").mkdir(parents=True)
+        (mcp_home / "src/sessions/slug/ccp.sqlite3").write_text("database")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((mcp_home / "src/notes.txt").read_text(), "uncommitted work")
+        self.assertEqual((mcp_home / "src/sessions/slug/ccp.sqlite3").read_text(), "database")
+        self.assertTrue((mcp_home / "src/.git").is_dir())
+        self.assertFalse((mcp_home / "venv").exists())
+        self.assertIn(f"{mcp_home / 'src'} was kept", result.stdout)
+        self.assertIn("may be your own checkout", result.stdout)
+        self.uninstall_fixture()
+        shutil.rmtree(mcp_home / "venv")
+        elsewhere = self.root / "elsewhere-venv"
+        elsewhere.mkdir()
+        (elsewhere / "keep").write_text("keep")
+        (mcp_home / "venv").symlink_to(elsewhere)
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((mcp_home / "venv").is_symlink())
+        self.assertEqual((elsewhere / "keep").read_text(), "keep")
+        self.assertIn("is a symlink and was kept", result.stdout)
+        shutil.rmtree(mcp_home)
+        mcp_home.symlink_to(elsewhere)
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(mcp_home.is_symlink())
+        self.assertEqual((elsewhere / "keep").read_text(), "keep")
+
+    def test_uninstall_prints_codex_instruction_only_when_configured(self):
+        _, codex, _ = self.uninstall_fixture()
+        codex.write_text('model = "x"\n')
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("mcp_servers", result.stdout)
+        self.assertEqual(codex.read_text(), 'model = "x"\n')
+
+    def test_uninstall_respects_install_dir(self):
+        self.uninstall_fixture()
+        other = self.root / "other-bin"
+        self.uninstall_fixture(other)
+        result, _ = self.install("--uninstall", "--install-dir", str(other))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in ("ccp-client", "ccp-server", "ccp-nightly.json"):
+            self.assertFalse((other / name).exists())
+            self.assertTrue((self.install_dir / name).exists())
+        self.assertTrue((self.install_dir / "ccp").is_symlink())
+        self.assertFalse((other / "ccp").is_symlink())
+
+    def test_uninstall_keeps_symlinks_and_directories_it_cannot_prove_are_its_own(self):
+        self.uninstall_fixture()
+        (self.install_dir / "ccp-client").unlink()
+        real = self.root / "managed-client"
+        real.write_bytes(b"binary")
+        (self.install_dir / "ccp-client").symlink_to(real)
+        (self.install_dir / "ccp-server").unlink()
+        (self.install_dir / "ccp-server").mkdir()
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.install_dir / "ccp-client").is_symlink())
+        self.assertEqual(real.read_bytes(), b"binary")
+        self.assertTrue((self.install_dir / "ccp-server").is_dir())
+        self.assertIn("is a symlink and was kept", result.stdout)
+        self.assertIn("is not a regular file and was kept", result.stdout)
+
+    def assert_uninstall_untouched(self, result):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("Removed", result.stdout)
+        self.assertTrue((self.install_dir / "ccp-client").exists())
+        self.assertTrue((self.home_dir / ".ccp-mcp/venv").exists())
+        self.assertIn(self.bridge, (self.home_dir / ".claude.json").read_text())
+
+    def test_uninstall_refuses_every_install_only_option(self):
+        self.uninstall_fixture()
+        combinations = (
+            ["--client"],
+            ["--docker"],
+            ["--from-source"],
+            ["--session", "mine"],
+            ["--channel", "stable"],
+            ["--channel", "nightly"],
+            ["--version", TAG],
+            ["--channel", "nightly", "--version", TAG],
+            ["--client", "--from-source"],
+        )
+        for option in combinations:
+            with self.subTest(option=option):
+                result, _ = self.install("--uninstall", *option)
+                self.assert_uninstall_untouched(result)
+                self.assertIn("--uninstall only accepts --install-dir", result.stdout)
+                # Order must not matter.
+                result, _ = self.install(*option, "--uninstall")
+                self.assert_uninstall_untouched(result)
+
+    def test_flags_that_need_a_value_reject_a_missing_or_option_value(self):
+        self.uninstall_fixture()
+        for flag in ("--session", "--install-dir"):
+            for arguments in ([flag, "--uninstall"], ["--uninstall", flag]):
+                with self.subTest(arguments=arguments):
+                    result, _ = self.install(*arguments)
+                    self.assert_uninstall_untouched(result)
+                    self.assertIn(f"{flag} requires a value", result.stdout)
+
+    def test_uninstall_requires_a_usable_home(self):
+        self.uninstall_fixture()
+        for value in (None, ""):
+            with self.subTest(home=value):
+                result, _ = self.install("--uninstall", env_changes={"HOME": value})
+                self.assert_uninstall_untouched(result)
+                self.assertIn("HOME is not set", result.stdout)
+
+    def test_uninstall_rejects_an_install_dir_that_resolves_to_root(self):
+        self.uninstall_fixture()
+        alias = self.root / "root-alias"
+        alias.symlink_to("/")
+        for value in ("/usr/..", "/usr/../.", str(alias), f"{alias}/."):
+            with self.subTest(install_dir=value):
+                result, _ = self.install("--uninstall", "--install-dir", value)
+                self.assert_uninstall_untouched(result)
+                self.assertIn("resolves to /", result.stdout)
+
+    def test_uninstall_rejects_an_empty_or_root_install_dir(self):
+        self.uninstall_fixture()
+        for value in ("", "/", "//"):
+            with self.subTest(install_dir=value):
+                result, _ = self.install("--uninstall", "--install-dir", value)
+                self.assert_uninstall_untouched(result)
+                self.assertIn("--install-dir must be a directory path", result.stdout)
+
+    def test_uninstall_help_documents_the_option(self):
+        result, _ = self.install("--help")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("--uninstall", result.stdout)
+        self.assertIn("never deletes enrollment profiles", result.stdout)
 
     def test_nightly_discovery_paginates_and_installs_matching_mcp(self):
         result, calls = self.install("--client", "--channel", "nightly")

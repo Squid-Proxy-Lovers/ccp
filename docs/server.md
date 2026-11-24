@@ -62,6 +62,27 @@ hostname or IP clients should reach. Compose publishes ports on loopback by defa
 change the container and published ports. See [docker-compose.yml](../docker-compose.yml)
 and the [container entrypoint](../docker/server-entrypoint.sh) for the full mapping.
 
+### Remove a Docker server
+
+`install.sh --uninstall` does not touch Docker. To remove the container that
+`--docker` started, and then its data:
+
+```bash
+docker stop ccp-server && docker rm ccp-server
+docker volume rm ccp-server-data   # deletes the database, CA and server keys
+```
+
+Run the second command only when you no longer need the server's data.
+
+A native `ccp-server` keeps its data in `sessions/<session-slug>/`, relative to the
+directory it was started from. The slug is the lower-cased session name with runs of
+other characters turned into `-`, followed by `-` and eight hex characters of its
+SHA-256. `CCP_SERVER_HOME` replaces `sessions` as the parent directory, and
+`CCP_SERVER_DATA_DIR` overrides both and is used as given. The server first reuses an
+existing directory: `./data` from older versions, or a directory under the server
+home (or its `data` subdirectory) that already belongs to the session. Uninstall
+never deletes any of this.
+
 ### Remote enrollment
 
 Set the listener addresses and advertised URLs before starting a remote server.

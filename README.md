@@ -90,6 +90,50 @@ require Python 3 and verify download checksums. The
 [nightly guide](docs/nightly-builds.md) covers all modes and version pinning;
 [prereleases](https://github.com/Squid-Proxy-Lovers/ccp/releases) list available builds.
 
+### Uninstall
+
+Uninstall needs an installer from a release that includes it, which is the
+release after 0.2.0. Until then, run `install.sh` from a checkout of `main`.
+Once released:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --uninstall
+```
+
+Add `--install-dir` if you installed somewhere other than `~/.local/bin`. It
+accepts no other option. This removes `ccp-client`, `ccp-server` and
+`ccp-nightly.json` from that directory, the `ccp` link if it points at
+`ccp-client`, the MCP bridge virtual environment `~/.ccp-mcp/venv` (and `~/.ccp-mcp`
+itself if that leaves it empty), and the `ccp` entry
+in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs the bridge.
+Other settings and servers in those files stay. Close Claude Code and Cursor
+first so they do not rewrite the file. A config is not edited if `$HOME` or any
+component down to the file is a symlink, or if it is not a regular file; remove its
+`ccp` entry by hand. Uninstall never removes `~/.ccp-mcp/src`: a release install does
+not create it, and it may be your own checkout or hold server data. Uninstall removes
+the CCP environment only when its contents match what the installer creates. It
+removes `venv` only if it is not a symlink, has a `pyvenv.cfg` and the
+`.ccp-installer` marker (written only when the installer itself creates the
+environment, never added to one it reused), holds only standard virtual
+environment entries of the right type (real directories and regular files, with
+only the usual `lib64` link to `lib` allowed), can be listed, and holds none of
+your client state or server data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`,
+`CCP_SERVER_HOME`, or their defaults). Data locations are compared by file
+identity, not spelling, so a symlink or different letter case does not hide them.
+Anything else is kept for manual review, with the command to remove it yourself. It rejects an
+`--install-dir` that resolves to `/`, and `--session` or `--install-dir` without a
+value. For Codex,
+remove the `[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall
+never edits TOML.
+
+Uninstall never deletes enrollment profiles, certificates, keys, server data or
+Docker volumes, and it never asks a question. It prints where they are and the
+commands to delete them yourself. Client state is in `~/.ccp-client`
+(`%USERPROFILE%\.ccp-client` on Windows when `HOME` is not set), or in
+`CCP_CLIENT_HOME`. Running uninstall again is safe. On Windows, run the
+bootstrap with `-Uninstall`; see the [Windows guide](docs/client.md#uninstall-on-windows).
+To stop a `--docker` server, see [Docker](docs/server.md#remove-a-docker-server).
+
 ## Quick start
 
 Start a local server and save the enrollment tokens printed on its first run:

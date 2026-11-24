@@ -114,6 +114,61 @@ checks remain unchanged. Profile publication uses same-directory hard links and
 requires a filesystem supporting them. Hidden enrollment-link paste uses the
 Windows console through `rpassword`.
 
+### Uninstall on Windows
+
+`-Uninstall` needs an installer from a release that includes it, which is the
+release after 0.2.0; the v0.2.0 bootstrap does not have it. Fetch `install.ps1` from
+that release's tag as in the steps above, then run it with `-Uninstall`, and with
+`-InstallDir` if you chose one:
+
+```powershell
+& ([scriptblock]::Create($installer)) -Uninstall
+```
+
+`-Uninstall` accepts only `-InstallDir`. `-Channel` and `-Version` are rejected, and so
+is an empty install directory, a drive root, or your profile folder itself.
+
+Uninstall relies on the ownership record, `.ccp-install.json`. If there is no record
+and nothing CCP-named is left (no `ccp-client.exe`, `ccp.exe` or `.ccp-mcp`), it
+reports that there is nothing to remove and succeeds. If CCP files remain but the
+record is missing, or a record is present but invalid, it removes nothing, prints
+what to delete by hand (including checking the `.ccp-stage-*` generations under
+`%USERPROFILE%\.ccp-mcp\generations` and deleting only the ones CCP created), and
+exits with an error. The record's MCP fields must also be present and match the installer's
+generation layout; otherwise it is treated as invalid. The record is read again after
+the lock is taken. It removes `ccp-client.exe` and `ccp.exe` only when each file still matches the
+hash the installer recorded; a changed file, or an unrelated `ccp.exe`, is kept with a
+warning. It removes an MCP generation under `%USERPROFILE%\.ccp-mcp\generations` only
+when it is recorded and still has its recorded creation time and marker hash.
+Anything else there is kept. A generation that contains your client state or server
+data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or the default
+client home) is kept too. A generation is removed only when its contents match what
+the installer creates: at the top level only `venv`, `ccp-client.exe` and
+`.ccp-generation.json`, and inside `venv` only the standard `Include`, `Lib`,
+`Scripts`, `share`, `pyvenv.cfg` and `.gitignore`. Each must also be the right type: those names must be real directories
+or regular files, not junctions, symlinks or other reparse points. Any other entry,
+such as an enrollment directory, keeps the whole generation and the record, and the warning
+names the entry for manual review. A relative data location is checked against both PowerShell's current location and the process directory, because they can differ; if the PowerShell location cannot be determined, every generation is kept. Every generation is also kept while any of those locations
+passes through a junction or symlink, because that cannot be ruled out as inside. Before it deletes a generation it saves the installer's
+`deleting` status, so a re-run finishes an interrupted deletion. When all of that succeeds it removes the installer's
+metadata files. If anything was kept, the record stays so a re-run repeats the
+warning. It holds the installer's lock while it works and never deletes the lock file.
+
+It removes the `ccp` entry from `.claude.json` and `.cursor\mcp.json` only when its
+command and `CCP_CLIENT_BIN` match the record, saves a `.backup.*` copy of each
+file it changes, and leaves those backups for you to delete. For Codex it prints a
+reminder to remove the `[mcp_servers.ccp]` table by hand and does not edit
+`config.toml`. The record cannot show whether the installer created the install
+directory or its user PATH entry, so both are kept; delete the directory if it is
+empty and unused, and remove it from your user PATH yourself.
+
+Close CCP and MCP processes if Windows reports a file in use, or an interrupted upgrade
+is pending (re-run the install command first), then re-run uninstall; it can be
+repeated safely. Enrollments, certificates, keys and workspaces are never deleted.
+They live in `%USERPROFILE%\.ccp-client`, or in `HOME\.ccp-client` when `HOME` is set,
+or in `CCP_CLIENT_HOME` when that is set. Uninstall prints the path and a quoted
+`Remove-Item` command to delete them yourself.
+
 ## Enroll and select a session
 
 Install the client using the [README instructions](../README.md#install). The
