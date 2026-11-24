@@ -543,6 +543,7 @@ function Test-CcpUninstall {
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $codexPath) | Out-Null
         $codexText = "# keep`n[mcp_servers.ccp]`ncommand = `"x`"`n"
         [IO.File]::WriteAllText($codexPath, $codexText)
+        try {
         $env:CCP_CLIENT_HOME = Join-Path $f.profile '.ccp-client with space'
         $keyPath = Join-Path $env:CCP_CLIENT_HOME 'enrollments\one\client.key'
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $keyPath) | Out-Null
@@ -571,6 +572,7 @@ function Test-CcpUninstall {
         $text = Invoke-TestUninstall $f.bin
         Confirm-TestCondition ($text.Contains('Nothing left to remove')) 'A second uninstall did not report nothing left.'
         Confirm-TestCondition (([IO.File]::ReadAllText($keyPath)) -eq 'private key') 'Second uninstall touched client state.'
+        } finally { [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $savedClientHome, 'Process') }
 
         # An unowned ccp.exe or unrecorded MCP directory is kept, and so is the record, so a re-run repeats the warning.
         $f = Initialize-TestUninstall $Root 'uninstall-foreign'
@@ -699,8 +701,14 @@ function Test-CcpUninstall {
         # An interrupted deletion is recorded as such, and a retry finishes it.
         $f = Initialize-TestUninstall $Root 'uninstall-partial'
         $script:RealStageRemover = ${function:Remove-CcpPrivateStage}
+        # Interrupt only the removal of the MCP generation, after its marker is gone. The
+        # installer's own staging directories (for example the retention save) use the real remover.
         Set-Item Function:Remove-CcpPrivateStage {
             param([string]$Path)
+            if ((Split-Path -Leaf (Split-Path -Parent $Path)) -ne 'generations') {
+                & $script:RealStageRemover $Path
+                return
+            }
             Remove-Item -LiteralPath (Join-Path $Path '.ccp-generation.json')
             throw 'Fixture interrupted deletion.'
         }
@@ -708,6 +716,7 @@ function Test-CcpUninstall {
             Confirm-TestFailure { Uninstall-CcpWindows $f.bin } 'An interrupted deletion was reported as success.'
         } finally { Set-Item Function:Remove-CcpPrivateStage $script:RealStageRemover }
         Confirm-TestCondition ((Test-Path -LiteralPath $f.generation) -and -not (Test-Path -LiteralPath (Join-Path $f.generation '.ccp-generation.json'))) 'The interruption fixture did not leave a partial generation.'
+        Confirm-TestCondition (@(Get-ChildItem -LiteralPath $f.bin -Force -Filter '.ccp-stage-*').Count -eq 0) 'The interrupted run leaked a staging directory.'
         Confirm-TestCondition ((Get-CcpRetention $f.bin).generations[0].status -eq 'deleting') 'The deleting status was not saved before removal.'
         Invoke-TestUninstall $f.bin | Out-Null
         Confirm-TestCondition (-not (Test-Path -LiteralPath $f.generation)) 'A retry did not finish the interrupted deletion.'
