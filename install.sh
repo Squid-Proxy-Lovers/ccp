@@ -485,11 +485,13 @@ mcp_config_warning() {
 # Inspect or update the Codex config with one python3 process. Mode "check"
 # prints the state of [mcp_servers.ccp]: present, absent, unsafe (a value we
 # must not touch or extend), unsupported (no tomllib) or invalid (unparseable).
-# Mode "append" takes an flock on the sidecar file $config.ccp-lock, retrying
-# for about two seconds, then re-checks and appends the block, all in that one
-# process, so the kernel drops the lock however the process ends. It prints
-# added, locked (contention), failed (lock or write error) or a check state.
-# The lock file itself is left in place; only the lock on it matters.
+# Mode "append CONFIG COMMAND CLIENT SERVER" builds the entry with escaped TOML
+# strings, takes an flock on the sidecar file CONFIG.ccp-lock, retrying for
+# about two seconds, then re-checks and appends it, all in that one process,
+# so the kernel drops the lock however the process ends. It prints added,
+# locked (contention), failed (lock or write error), badentry (the entry
+# itself is not valid TOML) or a check state. The lock file itself is left in
+# place; only the lock on it matters.
 codex_config_tool() {
     local out
     out="$(python3 -I - "$@" <<'PY'
@@ -513,9 +515,36 @@ def classify(config):
 def check(path):
     try:
         with open(path, "rb") as stream:
-            return classify(tomllib.load(stream)), None
-    except (OSError, tomllib.TOMLDecodeError):
-        return "invalid", None
+            return classify(tomllib.load(stream))
+    except (OSError, ValueError):
+        return "invalid"
+
+
+def quote(value):
+    named = {
+        "\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t",
+        "\n": "\\n", "\f": "\\f", "\r": "\\r",
+    }
+    chars = []
+    for char in value:
+        if char in named:
+            chars.append(named[char])
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            chars.append("\\u%04x" % ord(char))
+        else:
+            chars.append(char)
+    return '"' + "".join(chars) + '"'
+
+
+def build_block(command, client, server):
+    lines = ["", "[mcp_servers.ccp]", "command = " + quote(command), ""]
+    lines += ["[mcp_servers.ccp.env]", "CCP_CLIENT_BIN = " + quote(client)]
+    if server:
+        lines.append("CCP_SERVER_BIN = " + quote(server))
+    block = "\n".join(lines)
+    block.encode("utf-8")
+    tomllib.loads(block)
+    return block
 
 
 def acquire(path):
@@ -531,14 +560,15 @@ def acquire(path):
 
 
 def append(path, block):
-    state, _ = check(path)
+    state = check(path)
     if state != "absent":
         return state
     try:
         with open(path, "rb") as stream:
-            text = stream.read().decode("utf-8")
-        candidate = tomllib.loads(text + block)
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+            candidate = tomllib.loads(stream.read().decode("utf-8") + block)
+    except UnicodeDecodeError:
+        return "invalid"
+    except tomllib.TOMLDecodeError:
         return "unsafe"
     if classify(candidate) != "present":
         return "unsafe"
@@ -549,44 +579,33 @@ def append(path, block):
 
 mode, path = sys.argv[1], sys.argv[2]
 if mode == "check":
-    print(check(path)[0])
+    print(check(path))
     sys.exit(0)
 try:
-    print(append(path, sys.argv[3]) if acquire(path) else "locked")
+    block = build_block(*sys.argv[3:6])
+except ValueError:
+    print("badentry")
+    sys.exit(0)
+try:
+    print(append(path, block) if acquire(path) else "locked")
 except (ImportError, OSError):
     print("failed")
 PY
     )" || out=""
     case "$out" in
-        present|absent|unsafe|unsupported|invalid|added|locked|failed) echo "$out" ;;
+        present|absent|unsafe|unsupported|invalid|added|locked|failed|badentry) echo "$out" ;;
         *) if [ "$1" = append ]; then echo failed; else echo invalid; fi ;;
     esac
 }
 
 configure_codex_mcp() {
-    local codex_config="$1" mcp_cmd="$2" client_bin="$3"
+    local codex_config="$1" mcp_cmd="$2" client_bin="$3" server_bin=""
     local codex_state
     codex_state="$(codex_config_tool check "$codex_config")"
     if [ "$codex_state" = absent ]; then
-        local codex_env="CCP_CLIENT_BIN = \"$client_bin\""
-        if [ -f "$INSTALL_DIR/ccp-server" ]; then
-            codex_env="$codex_env
-CCP_SERVER_BIN = \"$INSTALL_DIR/ccp-server\""
-        fi
-        local codex_block
-        if ! codex_block="$(cat <<TOMLEOF
-
-[mcp_servers.ccp]
-command = "$mcp_cmd"
-
-[mcp_servers.ccp.env]
-$codex_env
-TOMLEOF
-        )"; then
-            mcp_config_warning "Codex" "Could not update $codex_config"
-            return
-        fi
-        codex_state="$(codex_config_tool append "$codex_config" "$codex_block")"
+        # only include the server binary if it's installed (full install mode)
+        if [ -f "$INSTALL_DIR/ccp-server" ]; then server_bin="$INSTALL_DIR/ccp-server"; fi
+        codex_state="$(codex_config_tool append "$codex_config" "$mcp_cmd" "$client_bin" "$server_bin")"
         if [ "$codex_state" = added ]; then
             ok "Added to $codex_config"
             return
@@ -598,6 +617,7 @@ TOMLEOF
         invalid) mcp_config_warning "Codex" "Could not parse $codex_config; repair the TOML, then add [mcp_servers.ccp]" ;;
         locked) mcp_config_warning "Codex" "Another installer is updating $codex_config (lock file $codex_config.ccp-lock is held); retry later or add [mcp_servers.ccp] manually" ;;
         failed) mcp_config_warning "Codex" "Could not update $codex_config" ;;
+        badentry) mcp_config_warning "Codex" "Could not build a valid [mcp_servers.ccp] entry for $codex_config; add it manually" ;;
         *) mcp_config_warning "Codex" "Cannot add [mcp_servers.ccp] to $codex_config safely: mcp_servers or mcp_servers.ccp is not a table that can be extended (a scalar, array or inline table); replace it, then add the entry manually" ;;
     esac
 }

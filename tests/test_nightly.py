@@ -1673,8 +1673,40 @@ elif name == 'cat':
         self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
         self.assertTrue(lock.is_file(), "the lock is a file; only the kernel lock matters")
 
-    def test_waiting_installer_proceeds_when_lock_holder_is_killed(self):
-        config, original = self.codex_config_without_ccp()
+    def codex_python_hooks(self):
+        """Wrap python3 so the installer's Codex process reports contention and can fail its append."""
+        python = self.bin_dir / "python3"
+        python.write_text(
+            f"#!{sys.executable}\n"
+            """import builtins, os, sys, time
+if sys.argv[1:3] == ['-I', '-']:
+    source = sys.stdin.read()
+    marker = os.environ.get('CODEX_TEST_CONTENDED')
+    if marker:
+        real_sleep = time.sleep
+        def sleep(seconds):
+            open(marker, 'w').close()
+            real_sleep(seconds)
+        time.sleep = sleep
+    if os.environ.get('CODEX_TEST_FAIL_APPEND'):
+        real_open = builtins.open
+        def failing_open(path, mode='r', *args, **kwargs):
+            if mode == 'ab':
+                raise PermissionError(13, 'injected append failure', path)
+            return real_open(path, mode, *args, **kwargs)
+        builtins.open = failing_open
+    sys.argv = sys.argv[2:]
+    exec(compile(source, '<installer>', 'exec'))
+else:
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+"""
+        )
+        python.chmod(0o755)
+
+    def start_blocked_installer(self, config):
+        """Hold the Codex lock, start an installer, and return once it is waiting on it."""
+        self.codex_python_hooks()
+        marker = self.root / "codex-lock-contended"
         holder = self.codex_lock_holder(Path(f"{config}.ccp-lock"))
         env = dict(
             os.environ,
@@ -1684,22 +1716,67 @@ elif name == 'cat':
             NIGHTLY_TEST_LOG=str(self.log),
             NIGHTLY_TEST_FIXTURES=str(self.fixtures),
             NIGHTLY_TEST_FAILURE="",
+            CODEX_TEST_CONTENDED=str(marker),
         )
         argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), "--client"]
         waiter = subprocess.Popen(  # noqa: S603
-            argv, cwd=self.root, env=env, stdout=subprocess.PIPE, text=True
+            argv,
+            cwd=self.root,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
         )
         self.addCleanup(waiter.wait)
         self.addCleanup(waiter.kill)
+        self.addCleanup(waiter.stderr.close)
         self.addCleanup(waiter.stdout.close)
-        time.sleep(0.8)
+        deadline = time.monotonic() + 30
+        while not marker.exists():
+            self.assertLess(time.monotonic(), deadline, "installer never reached the lock")
+            self.assertIsNone(waiter.poll(), "installer exited before it contended")
+            time.sleep(0.02)
+        return waiter, holder
+
+    def test_waiting_installer_proceeds_when_lock_holder_is_killed(self):
+        config, original = self.codex_config_without_ccp()
+        waiter, holder = self.start_blocked_installer(config)
         self.assertEqual(config.read_bytes(), original.encode())
         holder.kill()
         holder.wait()
-        output, _ = waiter.communicate(timeout=60)
-        self.assertEqual(waiter.returncode, 0, output)
+        output, errors = waiter.communicate(timeout=60)
+        self.assertEqual(waiter.returncode, 0, output + errors)
         self.assertIn(f"Added to {config}", output)
         self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+
+    def test_invalid_utf8_found_under_the_codex_lock_is_reported_as_invalid(self):
+        config, _ = self.codex_config_without_ccp()
+        waiter, holder = self.start_blocked_installer(config)
+        corrupted = b"\xff\xfe not utf-8\n"
+        config.write_bytes(corrupted)
+        holder.kill()
+        holder.wait()
+        output, errors = waiter.communicate(timeout=60)
+        self.assertEqual(waiter.returncode, 0, output + errors)
+        self.assertEqual(config.read_bytes(), corrupted)
+        self.assertIn(f"Could not parse {config}; repair the TOML", output)
+        self.assertNotIn("Traceback", errors)
+        self.assertNotIn(f"Added to {config}", output)
+
+    def test_codex_entry_escapes_special_characters_in_install_paths(self):
+        config, original = self.codex_config_without_ccp()
+        quoted = self.root / 'in"stall\\dir'
+        quoted.mkdir()
+        (quoted / "ccp-server").write_bytes(b"server")
+        with patch.object(self, "install_dir", quoted):
+            result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"Added to {config}", result.stdout)
+        self.assertNotIn("Cannot add", result.stdout)
+        self.assertTrue(config.read_text().startswith(original))
+        env = tomllib.loads(config.read_text())["mcp_servers"]["ccp"]["env"]
+        self.assertTrue(env["CCP_CLIENT_BIN"].endswith('in"stall\\dir/ccp-client'))
+        self.assertTrue(env["CCP_SERVER_BIN"].endswith('in"stall\\dir/ccp-server'))
 
     def test_codex_lock_file_error_is_an_update_failure_not_contention(self):
         config, original = self.codex_config_without_ccp()
@@ -1783,14 +1860,17 @@ else:
 
     def test_codex_config_write_failure_is_reported_honestly(self):
         # A chmod-based permission denial is silently bypassed when the test
-        # runs as root, so this fails the "cat" that appends to the config
-        # instead: a failure no privilege level can route around.
+        # runs as root, so the python3 wrapper makes the append open fail
+        # inside the installer's own Codex process instead.
         self.mcp_bridge_fixture()
         codex_dir = self.home_dir / ".codex"
         codex_dir.mkdir(parents=True)
         codex_config = codex_dir / "config.toml"
-        codex_config.write_text("")
-        result, _ = self.install("--client", failure="cat")
+        original = '[mcp_servers.other]\ncommand = "o"\n'
+        codex_config.write_bytes(original.encode())
+        self.codex_python_hooks()
+        with patch.dict(os.environ, CODEX_TEST_FAIL_APPEND="1"):
+            result, _ = self.install("--client")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()[-1],
@@ -1798,6 +1878,10 @@ else:
         )
         self.assertNotIn(f"Added to {codex_config}", result.stdout)
         self.assertIn(f"Could not update {codex_config}", result.stdout)
+        self.assertEqual(codex_config.read_bytes(), original.encode())
+        self.assertNotIn("Traceback", result.stderr)
+        with open(f"{codex_config}.ccp-lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     def test_cursor_config_create_failure_is_reported_honestly(self):
         # A directory where install.sh expects to create a file fails the
