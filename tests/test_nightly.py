@@ -1612,7 +1612,7 @@ elif name == 'cat':
                 self.assert_codex_config_retained_with_unsafe_warning(config, original)
 
     def codex_lock_holder(self, lock):
-        holder = subprocess.Popen(  # noqa: S603
+        holder = subprocess.Popen(  # noqa: S603 -- fixed interpreter and a test-owned lock path.
             [
                 sys.executable,
                 "-c",
@@ -1678,7 +1678,7 @@ elif name == 'cat':
         python = self.bin_dir / "python3"
         python.write_text(
             f"#!{sys.executable}\n"
-            """import builtins, os, sys, time
+            """import os, sys, time
 if sys.argv[1:3] == ['-I', '-']:
     source = sys.stdin.read()
     marker = os.environ.get('CODEX_TEST_CONTENDED')
@@ -1688,13 +1688,14 @@ if sys.argv[1:3] == ['-I', '-']:
             open(marker, 'w').close()
             real_sleep(seconds)
         time.sleep = sleep
-    if os.environ.get('CODEX_TEST_FAIL_APPEND'):
-        real_open = builtins.open
-        def failing_open(path, mode='r', *args, **kwargs):
-            if mode == 'ab':
-                raise PermissionError(13, 'injected append failure', path)
-            return real_open(path, mode, *args, **kwargs)
-        builtins.open = failing_open
+    short_write = os.environ.get('CODEX_TEST_SHORT_WRITE')
+    if short_write:
+        real_write = os.write
+        def failing_write(fd, data):
+            real_write(fd, bytes(data[:12]))
+            open(short_write, 'w').close()
+            raise OSError(28, 'injected short write')
+        os.write = failing_write
     sys.argv = sys.argv[2:]
     exec(compile(source, '<installer>', 'exec'))
 else:
@@ -1717,9 +1718,10 @@ else:
             NIGHTLY_TEST_FIXTURES=str(self.fixtures),
             NIGHTLY_TEST_FAILURE="",
             CODEX_TEST_CONTENDED=str(marker),
+            CCP_CODEX_LOCK_RETRIES="900",
         )
         argv = ["bash", str(self.installer), "--install-dir", str(self.install_dir), "--client"]
-        waiter = subprocess.Popen(  # noqa: S603
+        waiter = subprocess.Popen(  # noqa: S603 -- the real installer against isolated stubs.
             argv,
             cwd=self.root,
             env=env,
@@ -1762,6 +1764,19 @@ else:
         self.assertIn(f"Could not parse {config}; repair the TOML", output)
         self.assertNotIn("Traceback", errors)
         self.assertNotIn(f"Added to {config}", output)
+
+    def test_deeply_nested_codex_config_found_under_the_lock_is_invalid(self):
+        config, _ = self.codex_config_without_ccp()
+        waiter, holder = self.start_blocked_installer(config)
+        nested = ("a = " + "[" * 100000 + "]" * 100000 + "\n").encode()
+        config.write_bytes(nested)
+        holder.kill()
+        holder.wait()
+        output, errors = waiter.communicate(timeout=60)
+        self.assertEqual(waiter.returncode, 0, output + errors)
+        self.assertEqual(config.read_bytes(), nested)
+        self.assertIn(f"Could not parse {config}; repair the TOML", output)
+        self.assertNotIn("Traceback", errors)
 
     def test_codex_entry_escapes_special_characters_in_install_paths(self):
         config, original = self.codex_config_without_ccp()
@@ -1858,19 +1873,22 @@ else:
         self.assertNotIn(f"Could not parse {config}", result.stdout)
         self.assertNotIn(f"Added to {config}", result.stdout)
 
-    def test_codex_config_write_failure_is_reported_honestly(self):
-        # A chmod-based permission denial is silently bypassed when the test
-        # runs as root, so the python3 wrapper makes the append open fail
-        # inside the installer's own Codex process instead.
+    def test_codex_config_short_write_leaves_the_original_untouched(self):
+        # The python3 wrapper makes the write of the new content stop short
+        # with ENOSPC inside the installer's own Codex process, so no
+        # privilege level or file-size limit is needed to reproduce it.
         self.mcp_bridge_fixture()
         codex_dir = self.home_dir / ".codex"
         codex_dir.mkdir(parents=True)
         codex_config = codex_dir / "config.toml"
         original = '[mcp_servers.other]\ncommand = "o"\n'
         codex_config.write_bytes(original.encode())
+        codex_config.chmod(0o640)
         self.codex_python_hooks()
-        with patch.dict(os.environ, CODEX_TEST_FAIL_APPEND="1"):
+        short = self.root / "short-write-happened"
+        with patch.dict(os.environ, CODEX_TEST_SHORT_WRITE=str(short)):
             result, _ = self.install("--client")
+        self.assertTrue(short.exists(), "the injected short write never ran")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(
             re.sub(r"\x1b\[[0-9;]*m", "", result.stdout).splitlines()[-1],
@@ -1879,9 +1897,49 @@ else:
         self.assertNotIn(f"Added to {codex_config}", result.stdout)
         self.assertIn(f"Could not update {codex_config}", result.stdout)
         self.assertEqual(codex_config.read_bytes(), original.encode())
+        self.assertEqual(codex_config.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(
+            sorted(path.name for path in codex_dir.iterdir()),
+            ["config.toml", "config.toml.ccp-lock"],
+        )
         self.assertNotIn("Traceback", result.stderr)
         with open(f"{codex_config}.ccp-lock", "a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_symlinked_codex_config_keeps_its_link_and_mode(self):
+        self.mcp_bridge_fixture()
+        codex_dir = self.home_dir / ".codex"
+        codex_dir.mkdir(parents=True)
+        target = self.root / "dotfiles/codex.toml"
+        target.parent.mkdir()
+        original = '[mcp_servers.other]\ncommand = "o"\n'
+        target.write_bytes(original.encode())
+        target.chmod(0o640)
+        config = codex_dir / "config.toml"
+        config.symlink_to(target)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(config.is_symlink())
+        self.assertEqual(config.resolve(), target.resolve())
+        self.assertTrue(target.read_text().startswith(original))
+        self.assertEqual(target.read_text().count("[mcp_servers.ccp]"), 1)
+        self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(
+            sorted(path.name for path in target.parent.iterdir()), ["codex.toml"]
+        )
+
+    def test_deeply_nested_codex_config_asks_for_repair_without_a_traceback(self):
+        self.mcp_bridge_fixture()
+        config = self.home_dir / ".codex/config.toml"
+        config.parent.mkdir(parents=True)
+        original = ("a = " + "[" * 100000 + "]" * 100000 + "\n").encode()
+        config.write_bytes(original)
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_bytes(), original)
+        self.assertIn(f"Could not parse {config}; repair the TOML", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("RecursionError", result.stderr)
 
     def test_cursor_config_create_failure_is_reported_honestly(self):
         # A directory where install.sh expects to create a file fails the

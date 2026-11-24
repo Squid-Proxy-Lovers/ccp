@@ -487,15 +487,18 @@ mcp_config_warning() {
 # must not touch or extend), unsupported (no tomllib) or invalid (unparseable).
 # Mode "append CONFIG COMMAND CLIENT SERVER" builds the entry with escaped TOML
 # strings, takes an flock on the sidecar file CONFIG.ccp-lock, retrying for
-# about two seconds, then re-checks and appends it, all in that one process,
-# so the kernel drops the lock however the process ends. It prints added,
+# about two seconds (CCP_CODEX_LOCK_RETRIES tenths of a second, for tests),
+# then re-checks and publishes the config plus the entry through a temporary
+# file and an atomic rename, all in that one process, so the kernel drops the
+# lock however the process ends and the config is never left half written.
+# A symlinked config keeps its link: the target file is replaced. It prints added,
 # locked (contention), failed (lock or write error), badentry (the entry
 # itself is not valid TOML) or a check state. The lock file itself is left in
 # place; only the lock on it matters.
 codex_config_tool() {
     local out
     out="$(python3 -I - "$@" <<'PY'
-import os, sys, time
+import os, signal, stat, sys, tempfile, time
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -516,7 +519,7 @@ def check(path):
     try:
         with open(path, "rb") as stream:
             return classify(tomllib.load(stream))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError, MemoryError):
         return "invalid"
 
 
@@ -547,10 +550,17 @@ def build_block(command, client, server):
     return block
 
 
+def retries():
+    try:
+        return max(1, int(os.environ.get("CCP_CODEX_LOCK_RETRIES", "20")))
+    except ValueError:
+        return 20
+
+
 def acquire(path):
     import fcntl
     fd = os.open(path + ".ccp-lock", os.O_RDWR | os.O_CREAT, 0o600)
-    for _ in range(20):
+    for _ in range(retries()):
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return True
@@ -559,21 +569,43 @@ def acquire(path):
     return False
 
 
+def publish(target, data):
+    mode = stat.S_IMODE(os.stat(target).st_mode)
+    fd, temp = tempfile.mkstemp(prefix=".ccp-config-", dir=os.path.dirname(target))
+    try:
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fchmod(fd, mode)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(temp, target)
+    except BaseException:
+        if os.path.lexists(temp):
+            os.unlink(temp)
+        raise
+
+
 def append(path, block):
-    state = check(path)
+    # A symlinked config is resolved and its target replaced, so the link stays.
+    target = os.path.realpath(path)
+    state = check(target)
     if state != "absent":
         return state
     try:
-        with open(path, "rb") as stream:
-            candidate = tomllib.loads(stream.read().decode("utf-8") + block)
-    except UnicodeDecodeError:
+        with open(target, "rb") as stream:
+            original = stream.read()
+        data = original + (block + "\n").encode("utf-8")
+        candidate = tomllib.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, RecursionError, MemoryError):
         return "invalid"
     except tomllib.TOMLDecodeError:
         return "unsafe"
     if classify(candidate) != "present":
         return "unsafe"
-    with open(path, "ab") as stream:
-        stream.write((block + "\n").encode("utf-8"))
+    publish(target, data)
     return "added"
 
 
@@ -586,6 +618,8 @@ try:
 except ValueError:
     print("badentry")
     sys.exit(0)
+for name in ("SIGHUP", "SIGINT", "SIGTERM"):
+    signal.signal(getattr(signal, name), lambda *_: sys.exit(1))
 try:
     print(append(path, block) if acquire(path) else "locked")
 except (ImportError, OSError):
