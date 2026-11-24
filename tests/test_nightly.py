@@ -1692,6 +1692,11 @@ if sys.argv[1:3] == ['-I', '-']:
     if short_write:
         real_write = os.write
         def failing_write(fd, data):
+            concurrent = os.environ.get('CODEX_TEST_CONCURRENT_APPEND')
+            if concurrent:
+                path, _, text = concurrent.partition('|')
+                with open(path, 'ab') as other:
+                    other.write(text.encode())
             real_write(fd, bytes(data[:12]))
             open(short_write, 'w').close()
             raise OSError(28, 'injected short write')
@@ -1713,6 +1718,21 @@ if sys.argv[1:3] == ['-I', '-']:
                 time.sleep(0.02)
         return fd
     os.open = hooked_open
+    read_marker = os.environ.get('CODEX_TEST_READ')
+    if read_marker:
+        real_pread = os.pread
+        reads = []
+        def hooked_pread(fd, length, offset):
+            data = real_pread(fd, length, offset)
+            if not reads:
+                reads.append(fd)
+                open(read_marker, 'w').close()
+                for _ in range(1500):
+                    if os.path.exists(read_marker + '.go'):
+                        break
+                    time.sleep(0.02)
+            return data
+        os.pread = hooked_pread
     sys.argv = sys.argv[2:]
     exec(compile(source, '<installer>', 'exec'))
 else:
@@ -2006,6 +2026,61 @@ else:
         if acl_applied:
             self.assertTrue(any("everyone allow read" in entry for entry in before_acl))
             self.assertEqual(acl_entries(), before_acl)
+
+    def edit_config_after_the_installer_read_it(self, config, extra, **env):
+        """Append to the config in place while the installer sits between its read and its write."""
+        read = self.root / "codex-config-read"
+        waiter = self.spawn_installer(CODEX_TEST_READ=str(read), **env)
+        self.wait_for_marker(waiter, read, "read the config")
+        with open(config, "ab") as other:
+            other.write(extra.encode())
+        Path(f"{read}.go").touch()
+        output, errors = waiter.communicate(timeout=60)
+        self.assertEqual(waiter.returncode, 0, output + errors)
+        self.assertNotIn(f"Added to {config}", output)
+        self.assertIn(f"Could not update {config}", output)
+        self.assertIn("the Codex MCP config was not written", output)
+        self.assertNotIn("Traceback", errors)
+        return output
+
+    def test_in_place_edit_after_the_read_is_never_overwritten_or_truncated(self):
+        config, original = self.codex_config_without_ccp()
+        extra = "\n# appended by another editor\n"
+        short = self.root / "short-write-happened"
+        self.edit_config_after_the_installer_read_it(
+            config, extra, CODEX_TEST_SHORT_WRITE=str(short)
+        )
+        self.assertFalse(short.exists(), "the installer must not write over a changed config")
+        self.assertEqual(config.read_bytes(), (original + extra).encode())
+
+    def test_in_place_ccp_entry_added_after_the_read_is_not_duplicated(self):
+        config, original = self.codex_config_without_ccp()
+        extra = '\n[mcp_servers.ccp]\ncommand = "theirs"\n'
+        self.edit_config_after_the_installer_read_it(config, extra)
+        self.assertEqual(config.read_bytes(), (original + extra).encode())
+        self.assertEqual(config.read_text().count("[mcp_servers.ccp]"), 1)
+
+    def test_failed_write_does_not_truncate_another_writers_bytes(self):
+        config, original = self.codex_config_without_ccp()
+        extra = "\n# appended during our write\n"
+        short = self.root / "short-write-happened"
+        self.codex_python_hooks()
+        with patch.dict(
+            os.environ,
+            CODEX_TEST_SHORT_WRITE=str(short),
+            CODEX_TEST_CONCURRENT_APPEND=f"{config}|{extra}",
+        ):
+            result, _ = self.install("--client")
+        self.assertTrue(short.exists(), "the injected short write never ran")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        content = config.read_bytes()
+        self.assertTrue(content.startswith((original + extra).encode()))
+        self.assertEqual(len(content), len((original + extra).encode()) + 12)
+        self.assertIn(f"Could not update {config} cleanly", result.stdout)
+        self.assertIn("may need manual repair", result.stdout)
+        self.assertIn("the Codex MCP config was not written", result.stdout)
+        self.assertNotIn(f"Added to {config}", result.stdout)
+        self.assertNotIn("Traceback", result.stderr)
 
     def test_read_only_codex_config_is_left_alone_with_a_warning(self):
         config, original = self.codex_config_without_ccp()

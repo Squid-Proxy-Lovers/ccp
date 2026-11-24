@@ -492,10 +492,13 @@ mcp_config_warning() {
 # config, in place, all in that one process, so the kernel drops the lock
 # however the process ends. If the write fails, or the path stops naming the
 # file that was written, or the process gets HUP, INT or TERM, the config is
-# truncated back to its original size. SIGKILL or power loss mid-write can
+# truncated back to its original size, but only when every byte past it is
+# ours; another process's in-place edits are never cut off. SIGKILL or power loss mid-write can
 # still leave a partial append, as the old "cat >>" could; nothing rolls that
 # back. A read-only config is never replaced. It prints added, locked
-# (contention), failed (lock or write error), badentry (the
+# (contention), failed (lock or write error), changed (the file differed
+# from what was validated, nothing written), damaged (a write failed and
+# someone else's bytes made a rollback unsafe), badentry (the
 # entry itself is not valid TOML) or a check state. The lock file itself is
 # left in place; only the lock on it matters.
 codex_config_tool() {
@@ -591,6 +594,10 @@ def read_all(fd, size):
     return b"".join(chunks)
 
 
+class Damaged(Exception):
+    """The config changed under a failed write, so it was not rolled back."""
+
+
 def write_tail(fd, before, path, tail):
     view = memoryview(tail)
     while view:
@@ -601,11 +608,25 @@ def write_tail(fd, before, path, tail):
         raise OSError("config was replaced during the update")
 
 
+def roll_back(fd, original, tail):
+    # Truncate only what this process appended: the file must still be the
+    # validated bytes followed by a prefix of the tail. Anything else was
+    # written by someone else, and cutting it off would destroy their work.
+    size = len(original)
+    data = read_all(fd, os.fstat(fd).st_size)
+    if data[:size] != original or not tail.startswith(data[size:]):
+        raise Damaged
+    os.ftruncate(fd, size)
+    os.fsync(fd)
+
+
 def append(path, block):
-    # One descriptor does the read, the validation and the write, so the bytes
-    # that were validated are the bytes that get appended to. Appending in
-    # place keeps the inode, mode, ACLs, xattrs and owner; opening the path
-    # follows a symlink and fails on a read-only file.
+    # One descriptor does the read, the validation and the write. Right before
+    # writing, the file is read again and must still equal the validated bytes.
+    # Appending in place keeps the inode, mode, ACLs, xattrs and owner; opening
+    # the path follows a symlink and fails on a read-only file. An editor that
+    # writes without taking our lock can still race in the tiny window between
+    # that last comparison and the write; that is accepted.
     tail = (block + "\n").encode("utf-8")
     fd = os.open(path, os.O_RDWR | os.O_APPEND)
     try:
@@ -622,11 +643,12 @@ def append(path, block):
             return "unsafe"
         if classify(candidate) != "present":
             return "unsafe"
+        if read_all(fd, os.fstat(fd).st_size) != original:
+            return "changed"
         try:
             write_tail(fd, before, path, tail)
         except BaseException:
-            os.ftruncate(fd, before.st_size)
-            os.fsync(fd)
+            roll_back(fd, original, tail)
             raise
         return "added"
     finally:
@@ -646,12 +668,14 @@ for name in ("SIGHUP", "SIGINT", "SIGTERM"):
     signal.signal(getattr(signal, name), lambda *_: sys.exit(1))
 try:
     print(append(path, block) if acquire(path) else "locked")
+except Damaged:
+    print("damaged")
 except (ImportError, OSError):
     print("failed")
 PY
     )" || out=""
     case "$out" in
-        present|absent|unsafe|unsupported|invalid|added|locked|failed|badentry) echo "$out" ;;
+        present|absent|unsafe|unsupported|invalid|added|locked|failed|badentry|changed|damaged) echo "$out" ;;
         *) if [ "$1" = append ]; then echo failed; else echo invalid; fi ;;
     esac
 }
@@ -675,6 +699,8 @@ configure_codex_mcp() {
         invalid) mcp_config_warning "Codex" "Could not parse $codex_config; repair the TOML, then add [mcp_servers.ccp]" ;;
         locked) mcp_config_warning "Codex" "Another installer is updating $codex_config (lock file $codex_config.ccp-lock is held); retry later or add [mcp_servers.ccp] manually" ;;
         failed) mcp_config_warning "Codex" "Could not update $codex_config" ;;
+        changed) mcp_config_warning "Codex" "Could not update $codex_config: it changed during the update and was left as it is; retry or add [mcp_servers.ccp] manually" ;;
+        damaged) mcp_config_warning "Codex" "Could not update $codex_config cleanly: it changed during the update and may need manual repair; check it, then add [mcp_servers.ccp] if it is missing" ;;
         badentry) mcp_config_warning "Codex" "Could not build a valid [mcp_servers.ccp] entry for $codex_config; add it manually" ;;
         *) mcp_config_warning "Codex" "Cannot add [mcp_servers.ccp] to $codex_config safely: mcp_servers or mcp_servers.ccp is not a table that can be extended (a scalar, array or inline table); replace it, then add the entry manually" ;;
     esac
