@@ -657,6 +657,27 @@ function Test-CcpUninstall {
             Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
         }
 
+        # State reached through a junction or symlink is treated as possibly inside a generation.
+        $f = Initialize-TestUninstall $Root 'uninstall-linked'
+        $state = Join-Path $f.generation 'user-state'
+        $link = Join-Path $f.profile 'client-home-link'
+        $linkType = if ($savedEnvironment['OS'] -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }
+        $savedValue = [Environment]::GetEnvironmentVariable('CCP_CLIENT_HOME', 'Process')
+        New-Item -ItemType Directory -Force -Path $state | Out-Null
+        [IO.File]::WriteAllText((Join-Path $state 'client.key'), 'private key')
+        New-Item -ItemType $linkType -Path $link -Target $state | Out-Null
+        try {
+            [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $link, 'Process')
+            $text = Invoke-TestUninstall $f.bin
+        } finally {
+            [Environment]::SetEnvironmentVariable('CCP_CLIENT_HOME', $savedValue, 'Process')
+            (Get-Item -LiteralPath $link -Force).Delete()
+        }
+        Confirm-TestCondition (([IO.File]::ReadAllText((Join-Path $state 'client.key'))) -eq 'private key') 'State reached through a link was deleted.'
+        Confirm-TestCondition ((Test-Path -LiteralPath $f.generation) -and (Test-Path -LiteralPath $f.command)) 'A generation reached through a link was removed.'
+        Confirm-TestCondition ($text.Contains('passes through a junction or symlink')) 'A linked data location was not reported.'
+        Confirm-TestCondition (Test-Path -LiteralPath (Join-Path $f.bin '.ccp-install.json')) 'The record was removed while a generation was kept.'
+
         # A hash-valid record with unusable MCP fields is rejected before any change.
         $mutations = [ordered]@{
             'missing client' = { param($Record) [void]$Record.PSObject.Properties.Remove('mcp_client') }

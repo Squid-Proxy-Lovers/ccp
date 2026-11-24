@@ -128,9 +128,13 @@ that release's tag as in the steps above, then run it with `-Uninstall`, and wit
 `-Uninstall` accepts only `-InstallDir`. `-Channel` and `-Version` are rejected, and so
 is an empty install directory, a drive root, or your profile folder itself.
 
-Uninstall relies on the ownership record, `.ccp-install.json`. If it is missing or
-invalid, uninstall removes nothing, prints what to delete by hand, and exits with an
-error. The record's MCP fields must also be present and match the installer's
+Uninstall relies on the ownership record, `.ccp-install.json`. If there is no record
+and nothing CCP-named is left (no `ccp-client.exe`, `ccp.exe` or `.ccp-mcp`), it
+reports that there is nothing to remove and succeeds. If CCP files remain but the
+record is missing, or a record is present but invalid, it removes nothing, prints
+what to delete by hand (including checking the `.ccp-stage-*` generations under
+`%USERPROFILE%\.ccp-mcp\generations` and deleting only the ones CCP created), and
+exits with an error. The record's MCP fields must also be present and match the installer's
 generation layout; otherwise it is treated as invalid. The record is read again after
 the lock is taken. It removes `ccp-client.exe` and `ccp.exe` only when each file still matches the
 hash the installer recorded; a changed file, or an unrelated `ccp.exe`, is kept with a
@@ -138,7 +142,8 @@ warning. It removes an MCP generation under `%USERPROFILE%\.ccp-mcp\generations`
 when it is recorded and still has its recorded creation time and marker hash.
 Anything else there is kept. A generation that contains your client state or server
 data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or the default
-client home) is kept too. Before it deletes a generation it saves the installer's
+client home) is kept too, and so is every generation while any of those locations
+passes through a junction or symlink, because that cannot be ruled out as inside. Before it deletes a generation it saves the installer's
 `deleting` status, so a re-run finishes an interrupted deletion. When all of that succeeds it removes the installer's
 metadata files. If anything was kept, the record stays so a re-run repeats the
 warning. It holds the installer's lock while it works and never deletes the lock file.

@@ -79,11 +79,11 @@ while [[ $# -gt 0 ]]; do
         --client)      MODE="client"; INSTALL_ONLY_OPTIONS+=" --client"; shift ;;
         --docker)      MODE="docker"; INSTALL_ONLY_OPTIONS+=" --docker"; shift ;;
         --install-dir)
-            if [ $# -lt 2 ]; then err "--install-dir requires a value."; exit 1; fi
+            if [ $# -lt 2 ] || [[ "$2" == --* ]]; then err "--install-dir requires a value."; exit 1; fi
             INSTALL_DIR="$2"; shift 2
             ;;
         --session)
-            if [ $# -lt 2 ]; then err "--session requires a value."; exit 1; fi
+            if [ $# -lt 2 ] || [[ "$2" == --* ]]; then err "--session requires a value."; exit 1; fi
             SESSION_NAME="$2"; INSTALL_ONLY_OPTIONS+=" --session"; shift 2
             ;;
         --from-source) FROM_SOURCE=true; INSTALL_ONLY_OPTIONS+=" --from-source"; shift ;;
@@ -115,7 +115,8 @@ Options:
 
 Uninstall (bash install.sh --uninstall [--install-dir <path>]) removes
 ccp-client, ccp-server and ccp-nightly.json from the install directory, the
-ccp alias if it links to ccp-client, the MCP bridge in ~/.ccp-mcp, and the
+ccp alias if it links to ccp-client, the MCP bridge environment in
+~/.ccp-mcp/venv (never ~/.ccp-mcp/src), and the
 "ccp" entry in the Claude and Cursor MCP configs when it points at that
 bridge. It never deletes enrollment profiles, client state, server data or
 Docker volumes. It prints where they are and how to remove them. It does not
@@ -940,10 +941,14 @@ uninstall_holds_state() {
     return 1
 }
 
-# Remove only what install_mcp_bridge creates under ~/.ccp-mcp: venv and src.
-# The directory itself goes only if that leaves it empty.
+# Remove only the virtual environment install_mcp_bridge creates in ~/.ccp-mcp.
+# ~/.ccp-mcp/src is never removed: a release install does not create it, and it
+# may be your own checkout or hold server data. The directory itself goes only
+# if nothing else is left in it.
 uninstall_mcp_bridge() {
-    local mcp_home="$HOME/.ccp-mcp" name path remaining
+    local mcp_home="$HOME/.ccp-mcp" venv src remaining
+    venv="$mcp_home/venv"
+    src="$mcp_home/src"
     if [ -L "$mcp_home" ]; then
         warn "$mcp_home is a symlink and was kept."
         return
@@ -953,17 +958,22 @@ uninstall_mcp_bridge() {
         warn "$mcp_home is not a directory and was kept."
         return
     fi
-    for name in venv src; do
-        path="$mcp_home/$name"
-        if [ -L "$path" ]; then
-            warn "$path is a symlink and was kept."
-        elif [ -d "$path" ]; then
-            if uninstall_holds_state "$path"; then continue; fi
-            if rm -rf -- "$path"; then uninstall_removed "$path"; else uninstall_failed "Could not remove $path"; fi
-        elif [ -e "$path" ]; then
-            warn "$path is not a directory and was kept."
+    if [ -L "$venv" ]; then
+        warn "$venv is a symlink and was kept."
+    elif [ -d "$venv" ]; then
+        if [ ! -f "$venv/pyvenv.cfg" ]; then
+            warn "$venv was kept because it has no pyvenv.cfg, so it is not a Python virtual environment CCP can prove it made."
+        elif [ -d "$venv/sessions" ] || [ -d "$venv/data" ]; then
+            warn "$venv was kept because it holds a sessions or data directory, which may be server data. Move it elsewhere, then re-run."
+        elif ! uninstall_holds_state "$venv"; then
+            if rm -rf -- "$venv"; then uninstall_removed "$venv"; else uninstall_failed "Could not remove $venv"; fi
         fi
-    done
+    elif [ -e "$venv" ]; then
+        warn "$venv is not a directory and was kept."
+    fi
+    if [ -L "$src" ] || [ -e "$src" ]; then
+        warn "$src was kept. A release install does not create it, and it may be your own checkout or hold server data. Delete it yourself if CCP made it and you no longer need it."
+    fi
     remaining="$(find "$mcp_home" -mindepth 1 -maxdepth 1 -exec basename {} \; 2>/dev/null | tr '\n' ' ')"
     if [ -z "$remaining" ]; then
         if rmdir -- "$mcp_home"; then uninstall_removed "$mcp_home"; else uninstall_failed "Could not remove $mcp_home"; fi

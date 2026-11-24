@@ -2212,6 +2212,7 @@ else:
         bridge = self.home_dir / ".ccp-mcp/venv/bin/ccp-mcp-server"
         bridge.parent.mkdir(parents=True, exist_ok=True)
         bridge.write_text("bridge")
+        (bridge.parent.parent / "pyvenv.cfg").write_text("home = /usr/bin\n")
         self.bridge = str(bridge)
         hosts = {
             "claude": self.home_dir / ".claude.json",
@@ -2387,7 +2388,8 @@ else:
         cases = {
             "client home in src": ("src", "CCP_CLIENT_HOME", "src/state"),
             "client home in venv": ("venv", "CCP_CLIENT_HOME", "venv/profiles"),
-            "server data in venv": ("venv", "CCP_SERVER_DATA_DIR", "venv/data"),
+            "server data in venv": ("venv", "CCP_SERVER_DATA_DIR", "venv/state"),
+            "server home in venv": ("venv", "CCP_SERVER_HOME", "venv/nested/sessions"),
             "server home in src": ("src", "CCP_SERVER_HOME", "src/sessions"),
         }
         for label, (child, variable, relative) in cases.items():
@@ -2402,9 +2404,29 @@ else:
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual((state / "client.key").read_text(), "private key")
                 self.assertTrue((mcp_home / child).is_dir())
-                self.assertIn("holds", result.stdout)
-                self.assertIn("which is CCP data", result.stdout)
+                if child == "venv":
+                    self.assertIn("which is CCP data", result.stdout)
                 shutil.rmtree(mcp_home)
+                for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
+                    path.unlink(missing_ok=True)
+
+    def test_uninstall_keeps_a_venv_it_cannot_prove_is_its_own(self):
+        cases = {
+            "no pyvenv.cfg": lambda venv: (venv / "pyvenv.cfg").unlink(),
+            "top-level sessions": lambda venv: (venv / "sessions/slug").mkdir(parents=True),
+            "top-level data": lambda venv: (venv / "data").mkdir(),
+        }
+        for label, prepare in cases.items():
+            with self.subTest(case=label):
+                self.uninstall_fixture()
+                venv = self.home_dir / ".ccp-mcp/venv"
+                prepare(venv)
+                (venv / "marker").write_text("keep me")
+                result, _ = self.install("--uninstall")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual((venv / "marker").read_text(), "keep me")
+                self.assertIn(f"{venv} was kept because", result.stdout)
+                shutil.rmtree(self.home_dir / ".ccp-mcp")
                 for path in (self.home_dir / ".claude.json", self.home_dir / ".cursor/mcp.json"):
                     path.unlink(missing_ok=True)
 
@@ -2412,15 +2434,15 @@ else:
         self.uninstall_fixture()
         mcp_home = self.home_dir / ".ccp-mcp"
         # A relative server data directory in the working directory, resolved through a symlink.
-        state = mcp_home / "src/data"
+        state = mcp_home / "venv/extra/data"
         state.mkdir(parents=True)
         (state / "ccp.sqlite3").write_text("database")
         (self.root / "data").symlink_to(state)
         result, _ = self.install("--uninstall")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual((state / "ccp.sqlite3").read_text(), "database")
-        self.assertFalse((mcp_home / "venv").exists())
-        self.assertTrue((mcp_home / "src").is_dir())
+        self.assertTrue((mcp_home / "venv").is_dir())
+        self.assertIn("which is CCP data", result.stdout)
 
     def test_uninstall_keeps_unknown_files_in_the_mcp_directory(self):
         self.uninstall_fixture()
@@ -2435,14 +2457,22 @@ else:
         self.assertIn("holds files CCP did not create", result.stdout)
         self.assertIn("notes.txt", result.stdout)
 
-    def test_uninstall_removes_the_source_clone_and_keeps_symlinked_children(self):
+    def test_uninstall_never_removes_src_and_keeps_symlinked_children(self):
         self.uninstall_fixture()
         mcp_home = self.home_dir / ".ccp-mcp"
-        (mcp_home / "src").mkdir()
-        (mcp_home / "src/pyproject.toml").write_text("[project]")
+        # A user's own checkout, with uncommitted work and server data inside.
+        (mcp_home / "src/.git").mkdir(parents=True)
+        (mcp_home / "src/notes.txt").write_text("uncommitted work")
+        (mcp_home / "src/sessions/slug").mkdir(parents=True)
+        (mcp_home / "src/sessions/slug/ccp.sqlite3").write_text("database")
         result, _ = self.install("--uninstall")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertFalse(mcp_home.exists())
+        self.assertEqual((mcp_home / "src/notes.txt").read_text(), "uncommitted work")
+        self.assertEqual((mcp_home / "src/sessions/slug/ccp.sqlite3").read_text(), "database")
+        self.assertTrue((mcp_home / "src/.git").is_dir())
+        self.assertFalse((mcp_home / "venv").exists())
+        self.assertIn(f"{mcp_home / 'src'} was kept", result.stdout)
+        self.assertIn("may be your own checkout", result.stdout)
         self.uninstall_fixture()
         shutil.rmtree(mcp_home / "venv")
         elsewhere = self.root / "elsewhere-venv"
@@ -2525,6 +2555,15 @@ else:
                 # Order must not matter.
                 result, _ = self.install(*option, "--uninstall")
                 self.assert_uninstall_untouched(result)
+
+    def test_flags_that_need_a_value_reject_a_missing_or_option_value(self):
+        self.uninstall_fixture()
+        for flag in ("--session", "--install-dir"):
+            for arguments in ([flag, "--uninstall"], ["--uninstall", flag]):
+                with self.subTest(arguments=arguments):
+                    result, _ = self.install(*arguments)
+                    self.assert_uninstall_untouched(result)
+                    self.assertIn(f"{flag} requires a value", result.stdout)
 
     def test_uninstall_requires_a_usable_home(self):
         self.uninstall_fixture()

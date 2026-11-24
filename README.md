@@ -103,15 +103,19 @@ curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install
 Add `--install-dir` if you installed somewhere other than `~/.local/bin`. It
 accepts no other option. This removes `ccp-client`, `ccp-server` and
 `ccp-nightly.json` from that directory, the `ccp` link if it points at
-`ccp-client`, the `venv` and `src` directories the installer made in
-`~/.ccp-mcp` (and `~/.ccp-mcp` itself if that leaves it empty), and the `ccp` entry
+`ccp-client`, the MCP bridge virtual environment `~/.ccp-mcp/venv` (and `~/.ccp-mcp`
+itself if that leaves it empty), and the `ccp` entry
 in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs the bridge.
 Other settings and servers in those files stay. Close Claude Code and Cursor
 first so they do not rewrite the file. A config is not edited if `$HOME` or any
 component down to the file is a symlink, or if it is not a regular file; remove its
-`ccp` entry by hand. Uninstall keeps `venv` or `src` if your client state or server
-data (`CCP_CLIENT_HOME`, `CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or their
-defaults) lives inside it, and it rejects an `--install-dir` that resolves to `/`. For Codex,
+`ccp` entry by hand. Uninstall never removes `~/.ccp-mcp/src`: a release install does
+not create it, and it may be your own checkout or hold server data. It keeps `venv`
+unless it has a `pyvenv.cfg`, is not a symlink, has no top-level `sessions` or `data`
+directory, and holds none of your client state or server data (`CCP_CLIENT_HOME`,
+`CCP_SERVER_DATA_DIR`, `CCP_SERVER_HOME`, or their defaults). It rejects an
+`--install-dir` that resolves to `/`, and `--session` or `--install-dir` without a
+value. For Codex,
 remove the `[mcp_servers.ccp]` table from `~/.codex/config.toml` by hand; uninstall
 never edits TOML.
 

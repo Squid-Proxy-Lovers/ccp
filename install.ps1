@@ -1118,6 +1118,34 @@ function Find-CcpStateInside {
     }
 }
 
+# True when any existing component of the path is a junction or symlink. Paths
+# below the user profile are walked from the profile folder, as the installer
+# does; others from their root. Works on Windows PowerShell 5.1, which cannot
+# resolve link targets, by failing closed instead.
+function Test-CcpLinkedPath {
+    param([string]$Path)
+    $separators = [char[]]@('\', '/')
+    $full = [IO.Path]::GetFullPath($Path)
+    $profileRoot = [IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd($separators)
+    $start = [IO.Path]::GetPathRoot($full)
+    if ($full.StartsWith($profileRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { $start = $profileRoot }
+    $current = $start
+    foreach ($part in $full.Substring($start.Length).Split($separators, [StringSplitOptions]::RemoveEmptyEntries)) {
+        $current = Join-Path $current $part
+        $item = Get-Item -LiteralPath $current -Force -ErrorAction SilentlyContinue
+        if (-not $item) { return $false }
+        if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $true }
+    }
+    return $false
+}
+
+# Returns the first protected location that reaches the directory through a link.
+function Find-CcpLinkedState {
+    foreach ($path in Get-CcpProtectedState) {
+        if (Test-CcpLinkedPath $path) { return $path }
+    }
+}
+
 # Mirror the installer's own pruning: the directory must be recorded, keep its
 # recorded creation time and marker hash, and be a private stage. A missing
 # marker is accepted only for a deletion the installer itself had started, and
@@ -1138,6 +1166,11 @@ function Remove-CcpGenerationDirectory {
     $held = Find-CcpStateInside $full
     if ($held) {
         Write-CcpKept "$Directory was kept because it holds $held, which is CCP data. Move that data elsewhere, then re-run."
+        return
+    }
+    $linked = Find-CcpLinkedState
+    if ($linked) {
+        Write-CcpKept "$Directory was kept because the CCP data location $linked passes through a junction or symlink, so it may be inside. Use a plain path, then re-run."
         return
     }
     Confirm-CcpPrivateStage $full
@@ -1229,7 +1262,7 @@ function Write-CcpUnrecordedNotice {
         Write-CcpDataNotice
         return
     }
-    Write-Warning "No valid installation record was found in $BinDirectory, so nothing was removed. If CCP is installed there, delete ccp-client.exe and ccp.exe from it, remove the directory from your user PATH, delete $mcpHome, and remove the ccp entries from .claude.json, .cursor\mcp.json and .codex\config.toml in your profile by hand."
+    Write-Warning "No valid installation record was found in $BinDirectory, so nothing was removed. If CCP is installed there, delete ccp-client.exe and ccp.exe from it, remove the directory from your user PATH, check the .ccp-stage-* directories under $mcpHome\generations and delete only the ones CCP created, and remove the ccp entries from .claude.json, .cursor\mcp.json and .codex\config.toml in your profile by hand."
     Write-CcpDataNotice
     throw (Get-CcpPrerequisiteFailure 'Nothing was removed because the installation record is missing or invalid.')
 }
