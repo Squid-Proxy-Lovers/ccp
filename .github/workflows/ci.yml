@@ -405,15 +405,21 @@ jobs:
 
   build:
     needs: [test, clippy, fmt, source-lint, coverage, msrv, audit, frontend-audit, compat, mcp, macos-client, windows-client]
+    env:
+      CCP_GLIBC_FLOOR: "2.28"
+      ZIG_VERSION: "0.17.1"
+      CARGO_ZIGBUILD_VERSION: "0.24.1"
     strategy:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             platform: linux-x86_64
+            docker_platform: linux/amd64
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             platform: linux-aarch64
+            docker_platform: linux/arm64
           - target: x86_64-apple-darwin
             os: macos-latest
             platform: darwin-x86_64
@@ -440,18 +446,75 @@ jobs:
           target: ${{ matrix.target }}
           build-warnings: ""
           cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Build
+          cache-key: ${{ runner.os == 'Linux' && format('{0}-glibc-{1}-zig-{2}-zigbuild-{3}', matrix.target, env.CCP_GLIBC_FLOOR, env.ZIG_VERSION, env.CARGO_ZIGBUILD_VERSION) || '' }}
+      - name: Install pinned Linux build tools
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tool_dir="$RUNNER_TEMP/ccp-linux-tools"
+          mkdir -p "$tool_dir"
+          cd "$tool_dir"
+          # Both tool tarballs assume an x86_64 Linux runner.
+          zig_dir="zig-x86_64-linux-$ZIG_VERSION"
+          zigbuild_dir="cargo-zigbuild-x86_64-unknown-linux-musl"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+            --output "$zig_dir.tar.xz" \
+            "https://ziglang.org/download/$ZIG_VERSION/$zig_dir.tar.xz"
+          curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
+            --output "$zigbuild_dir.tar.xz" \
+            "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/$zigbuild_dir.tar.xz"
+          printf '%s  %s\n' \
+            3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a "$zig_dir.tar.xz" \
+            f09b180a517af0e4dd4bffc921bb88e5ab705452a9dd948c61e489b3020c68c2 "$zigbuild_dir.tar.xz" \
+            | sha256sum --check --strict
+          tar -xJf "$zig_dir.tar.xz"
+          tar -xJf "$zigbuild_dir.tar.xz"
+          printf '%s\n' "$tool_dir/$zig_dir" "$tool_dir/$zigbuild_dir" >> "$GITHUB_PATH"
+      - name: Build Linux binaries
+        if: runner.os == 'Linux'
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --workspace --locked --target ${{ matrix.target }}
+          TARGET: ${{ matrix.target }}
+        run: cargo zigbuild --release --workspace --locked --target "$TARGET.$CCP_GLIBC_FLOOR"
+      - name: Build macOS binaries
+        if: runner.os == 'macOS'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: cargo build --release --workspace --locked --target "$TARGET"
       - name: Package binaries
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/server dist/ccp-server-${{ matrix.platform }}
-          cp target/${{ matrix.target }}/release/client dist/ccp-client-${{ matrix.platform }}
+          # cargo-zigbuild forwards the unsuffixed target triple to Cargo.
+          cp "target/$TARGET/release/server" "dist/ccp-server-$PLATFORM"
+          cp "target/$TARGET/release/client" "dist/ccp-client-$PLATFORM"
+      - name: Check packaged Linux binaries for glibc compatibility
+        if: runner.os == 'Linux'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: python3 scripts/check-glibc.py --max-glibc "$CCP_GLIBC_FLOOR" "dist/ccp-server-$PLATFORM" "dist/ccp-client-$PLATFORM"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        with:
+          platforms: arm64
+      - name: Smoke test packaged Linux binaries on the glibc floor
+        if: runner.os == 'Linux'
+        env:
+          DOCKER_PLATFORM: ${{ matrix.docker_platform }}
+          PLATFORM: ${{ matrix.platform }}
+          GLIBC_SMOKE_IMAGE: almalinux:8@sha256:768bedc30fe0a536adb0a65d2eddb7caad364e514fbddd0ae9e026975f590342
+        run: |
+          docker run --rm --platform "$DOCKER_PLATFORM" --network none \
+            --mount "type=bind,source=$PWD/dist,target=/dist,readonly" \
+            --env CCP_GLIBC_FLOOR --env PLATFORM \
+            "$GLIBC_SMOKE_IMAGE" bash -euc '
+              glibc_version=$(getconf GNU_LIBC_VERSION)
+              printf "%s\n" "$glibc_version"
+              test "$glibc_version" = "glibc $CCP_GLIBC_FLOOR"
+              "/dist/ccp-server-$PLATFORM" --help
+              "/dist/ccp-client-$PLATFORM" --help
+            '
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.platform }}

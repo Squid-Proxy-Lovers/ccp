@@ -32,6 +32,8 @@ permissions. SQLite and a journal preserve state across clean restarts.
 Stable native installs require `python3` and access to the GitHub releases API.
 The installer requires the release's checksum-verified MCP archive and fails if
 it is unavailable. Use `--from-source` to install from a source checkout instead.
+Linux binaries from 0.2.1 onward and nightlies with this fix require glibc 2.28
+or newer. The 0.2.0 Linux binaries require glibc 2.38 or newer.
 
 ```bash
 # Server and client

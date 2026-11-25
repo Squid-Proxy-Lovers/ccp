@@ -20,6 +20,7 @@ quality-tests: ## Run quality-tool and CLI-accounting regressions.
 	$(PYTHON) -m unittest discover -s tests -p 'test_quality.py' -v
 	$(PYTHON) -m unittest discover -s tests -p 'test_repo_hygiene.py' -v
 	$(PYTHON) -m unittest discover -s tests -p 'test_attribution.py' -v
+	$(PYTHON) -m unittest discover -s tests -p 'test_glibc.py' -v
 	$(PYTHON) -m unittest discover -s tests -p 'test_workspace_mcp.py' -v
 	node --test tests/workspace_panel.mjs tests/onboarding_panel.mjs tests/enrollment_link.mjs tests/frontend_dependency.mjs
 
