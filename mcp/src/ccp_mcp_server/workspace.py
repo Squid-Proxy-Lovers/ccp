@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from pydantic import Field
 
 from .workspace_config import environment_config
 from .workspace_content import WorkspaceContentTools
@@ -24,6 +25,12 @@ from .workspace_status import WorkspaceStatusTools
 from .workspace_validation import WorkspaceValidationMiddleware
 from .workspace_values import canonical_uuid, object_result
 from .workspace_write import WorkspaceWriteTools
+
+# The server accepts workspace discovery pages of 1 to 500 items (default 100).
+WORKSPACE_PAGE_LIMIT_MAX = 500
+WorkspacePageLimit = Annotated[
+    int, Field(ge=1, le=WORKSPACE_PAGE_LIMIT_MAX, description="Page size, between 1 and 500.")
+]
 
 
 @dataclass(frozen=True)
@@ -65,10 +72,12 @@ class WorkspaceTools:
         return object_result(await self.runtime.run(profile, "info"))
 
     async def workspace_list(
-        self, profile: str, after: str | None = None, limit: int = 100
+        self, profile: str, after: str | None = None, limit: WorkspacePageLimit = 100
     ) -> dict[str, Any]:
         """List currently accessible workspace metadata without selecting it."""
-        if not 1 <= limit <= 500 or (after is not None and (len(after) > 1024 or "\x00" in after)):
+        if type(limit) is not int or not 1 <= limit <= WORKSPACE_PAGE_LIMIT_MAX:
+            raise ToolError(f"limit must be between 1 and {WORKSPACE_PAGE_LIMIT_MAX}")
+        if after is not None and (len(after) > 1024 or "\x00" in after):
             raise ToolError("workspace page bounds are invalid")
         arguments: tuple[str, ...] = ("workspaces", "--limit", str(limit))
         if after is not None:

@@ -91,7 +91,7 @@ enum Command {
         profile: PathBuf,
         #[arg(long)]
         after: Option<String>,
-        #[arg(long, default_value_t = 100)]
+        #[arg(long, default_value_t = 100, value_parser = workspace_page_limit)]
         limit: u32,
     },
 }
@@ -174,6 +174,37 @@ pub(crate) async fn run(args: WorkspaceArgs) -> anyhow::Result<()> {
         ),
     }
 }
+/// Largest page the server accepts for content and status lists.
+///
+/// Mirrors the server's content and status page bounds (1..=32), which keep
+/// worst-case list responses inside their response budget.
+pub(crate) const PAGE_LIMIT_MAX: u16 = 32;
+/// Largest page the server accepts for workspace discovery (1..=500).
+pub(crate) const WORKSPACE_PAGE_LIMIT_MAX: u32 = 500;
+
+/// Parse a content or status `--limit` before any profile or network access.
+pub(crate) fn page_limit(value: &str) -> Result<u16, String> {
+    let limit = bounded_limit(value, u32::from(PAGE_LIMIT_MAX))?;
+    u16::try_from(limit).map_err(|_out_of_range| limit_error(u32::from(PAGE_LIMIT_MAX)))
+}
+
+/// Parse a workspace discovery `--limit` before any profile or network access.
+pub(crate) fn workspace_page_limit(value: &str) -> Result<u32, String> {
+    bounded_limit(value, WORKSPACE_PAGE_LIMIT_MAX)
+}
+
+fn bounded_limit(value: &str, max: u32) -> Result<u32, String> {
+    value
+        .parse::<u32>()
+        .ok()
+        .filter(|limit| (1..=max).contains(limit))
+        .ok_or_else(|| limit_error(max))
+}
+
+fn limit_error(max: u32) -> String {
+    format!("--limit must be between 1 and {max}")
+}
+
 fn output(value: &impl serde::Serialize) -> anyhow::Result<()> {
     println!("{}", serde_json::to_string(value)?);
     Ok(())

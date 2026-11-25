@@ -298,7 +298,8 @@ checks current disable, credential and grant state. A denial never triggers
 implicit registration or a trust downgrade.
 
 Discovery returns `workspaces` and optional `next_cursor`. The default limit is
-100, maximum 500. Pass `--limit` and the returned opaque string as `--after` for
+100, maximum 500; the client rejects a `--limit` outside 1–500 before contacting
+the server. Pass `--limit` and the returned opaque string as `--after` for
 the next page. Listings expose only workspaces authorized to that credential.
 They do not select workspaces for routine context reads. Each page is a current
 snapshot; concurrent changes can change ordering. Response bodies are limited

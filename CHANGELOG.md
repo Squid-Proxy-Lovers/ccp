@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `--limit` on workspace listing commands is now checked when arguments are
+  parsed, with an error such as `--limit must be between 1 and 32`, instead of
+  failing later with `invalid or mismatched workspace content response`. Content
+  lists (`shelves`, `archived-shelves`, `books`, `entries`, `history`,
+  `native-history`) and `workspace status list` accept 1-32;
+  `workspace workspaces` accepts 1-500. The workspace MCP tools advertise the
+  same bounds in their input schemas. (#53)
+
 ## [0.2.0] - 2026-11-12
 
 ### Added

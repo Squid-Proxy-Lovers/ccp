@@ -19,7 +19,7 @@ pub(crate) enum Command {
         workspace_id: String,
         #[arg(long)]
         after: Option<String>,
-        #[arg(long, default_value_t = 32)]
+        #[arg(long, default_value_t = 32, value_parser = crate::workspace::cli::page_limit)]
         limit: u16,
     },
 }
