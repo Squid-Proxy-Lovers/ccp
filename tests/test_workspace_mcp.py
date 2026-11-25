@@ -358,6 +358,44 @@ class WorkspaceContentTests(unittest.IsolatedAsyncioTestCase):
                     self.assertTrue(result.is_error)
             runtime.process.run.assert_not_awaited()
 
+    async def test_page_limits_are_advertised_and_enforced_with_server_bounds(self):
+        target = str(uuid4())
+        scope = {"workspace_id": target}
+        paged = {
+            "workspace_list": (500, {}, None),
+            "workspace_shelves": (32, {"scope": scope}, {}),
+            "workspace_archived_shelves": (32, {"scope": scope}, {}),
+            "workspace_books": (32, {"scope": scope}, {"shelf_id": target}),
+            "workspace_entries": (32, {"scope": scope}, {"book_id": target}),
+            "workspace_history": (32, {"scope": scope}, {"entry_id": target}),
+            "workspace_native_history": (32, {"scope": scope}, {"entry_id": target}),
+            "workspace_status_messages": (32, {"scope": scope}, {}),
+        }
+        with WorkspaceRuntime(self.config()) as runtime:
+            runtime.process.run = AsyncMock()
+            async with Client(build_server(runtime)) as client:
+                schemas = {tool.name: tool.inputSchema for tool in await client.list_tools()}
+                for name, (maximum, arguments, query) in paged.items():
+                    encoded = json.dumps(schemas[name])
+                    self.assertIn('"minimum": 1', encoded, name)
+                    self.assertIn(f'"maximum": {maximum}', encoded, name)
+                    for bad in [0, maximum + 1, -1]:
+                        call = {"profile": "office", **arguments}
+                        if query is None:
+                            call["limit"] = bad
+                        else:
+                            call["query"] = {**query, "limit": bad}
+                        result = await client.call_tool(name, call, raise_on_error=False)
+                        self.assertTrue(result.is_error, (name, bad))
+            runtime.process.run.assert_not_awaited()
+            tools = WorkspaceTools(runtime)
+            with self.assertRaisesRegex(ToolError, "limit must be between 1 and 500"):
+                await tools.workspace_list("office", None, 501)
+            for request in [ContentPage(limit=33), HistoryRead(target, limit=0)]:
+                with self.assertRaisesRegex(ToolError, "limit must be between 1 and 32"):
+                    request.arguments()
+            runtime.process.run.assert_not_awaited()
+
     async def test_all_seven_reads_use_fixed_argv_and_label_the_captured_workspace(self):
         workspace, parent, cursor = str(uuid4()), str(uuid4()), str(uuid4())
         scope = ContentScope(workspace_id=workspace)

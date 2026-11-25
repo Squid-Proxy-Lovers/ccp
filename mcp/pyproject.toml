@@ -9,6 +9,7 @@ description = "FastMCP bridge for the Cephalopod Coordination Protocol"
 requires-python = ">=3.10"
 dependencies = [
     "fastmcp>=2.14.7,<5",
+    "pydantic>=2,<3",
 ]
 
 [project.scripts]

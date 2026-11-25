@@ -99,7 +99,8 @@ They return the underlying typed JSON data without the HTTP envelope.
 | `history` | Workspace, `--entry-id UUID` | `--after REVISION`, `--limit N` |
 | `native-history` | Workspace, `--entry-id UUID` | `--after ORDINAL`, `--limit N` |
 
-Lists default to 32 items and accept 1–32. Use `next_cursor` as `--after` until
+Lists default to 32 items and accept 1–32; the client rejects other `--limit`
+values before contacting the server. Use `next_cursor` as `--after` until
 it is null. History cursors are revision numbers; native source-history cursors are ordinals;
 hierarchy cursors are UUIDs. [Native source history](native-provenance.md#read-original-source-records)
 returns original typed observations separately from workspace revisions.

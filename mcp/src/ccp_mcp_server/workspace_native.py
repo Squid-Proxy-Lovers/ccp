@@ -10,7 +10,7 @@ from typing import Any
 
 from fastmcp.exceptions import ToolError
 
-from .workspace_content import ContentScope, page
+from .workspace_content import ContentScope, PageLimit, page
 from .workspace_payload import StrictRequest, encode_request
 from .workspace_runtime import WorkspaceRuntime
 from .workspace_values import canonical_uuid, object_result
@@ -20,7 +20,7 @@ from .workspace_values import canonical_uuid, object_result
 class NativeHistoryRead(StrictRequest):
     entry_id: str
     after: int | None = None
-    limit: int = 32
+    limit: PageLimit = 32
 
     def arguments(self) -> tuple[str, ...]:
         canonical_uuid(self.entry_id)
