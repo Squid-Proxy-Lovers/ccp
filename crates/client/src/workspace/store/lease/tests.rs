@@ -3,7 +3,10 @@ use super::*;
 use std::{
     cell::Cell,
     fs,
-    sync::{Arc, Barrier},
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 fn valid(db: &Connection) -> anyhow::Result<()> {
@@ -135,7 +138,7 @@ fn opener_retries_through_busy_while_another_connection_holds_the_lease() {
 #[test]
 fn opener_keeps_retrying_a_held_lease_until_its_policy_stops_then_returns_busy() {
     let path = database();
-    let holder = acquire(&path).unwrap();
+    let holder = acquire(&path, Instant::now()).unwrap();
     let mut asked = 0;
     let mut waits = 0;
     let error = acquire_with_retry(
@@ -157,11 +160,89 @@ fn opener_keeps_retrying_a_held_lease_until_its_policy_stops_then_returns_busy()
 #[test]
 fn opener_returns_busy_when_the_lease_stays_held_until_the_deadline() {
     let path = database();
-    let holder = acquire(&path).unwrap();
-    let error = acquire(&path).unwrap_err();
+    let holder = acquire(&path, Instant::now()).unwrap();
+    let error = acquire(&path, Instant::now() + Duration::from_millis(50)).unwrap_err();
     assert_eq!(error.sqlite_error_code(), Some(ErrorCode::DatabaseBusy));
     drop(holder);
     fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn concurrent_same_profile_openers_queue_beyond_the_former_two_second_budget() {
+    // Regression for issue #50: each holder keeps the lease for a simulated
+    // network round trip. Eight queued openers need well over two seconds in
+    // total; every one must eventually get exclusive use instead of failing.
+    let path = database();
+    let callers = 8;
+    let barrier = Arc::new(Barrier::new(callers));
+    let inside = Arc::new(AtomicBool::new(false));
+    let started = Instant::now();
+    let threads: Vec<_> = (0..callers)
+        .map(|_| {
+            let p = path.clone();
+            let gate = barrier.clone();
+            let inside = inside.clone();
+            std::thread::spawn(move || {
+                gate.wait();
+                let db = exclusive_connection(&p, "busy fixture", valid)?;
+                assert!(!inside.swap(true, Ordering::SeqCst), "lease was shared");
+                std::thread::sleep(Duration::from_millis(350));
+                db.execute("UPDATE counter SET value=value+1", [])?;
+                inside.store(false, Ordering::SeqCst);
+                anyhow::Ok(())
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap().unwrap();
+    }
+    assert!(started.elapsed() > Duration::from_secs(2));
+    let db = Connection::open(&path).unwrap();
+    assert_eq!(
+        db.query_row("SELECT value FROM counter", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        8
+    );
+    drop(db);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn a_short_configured_wait_still_refuses_a_held_lease_without_touching_state() {
+    let path = database();
+    let holder = acquire(&path, Instant::now()).unwrap();
+    let started = Instant::now();
+    let refused =
+        exclusive_connection_within(&path, "busy fixture", Duration::from_millis(100), valid);
+    assert!(refused.is_err());
+    assert!(started.elapsed() < Duration::from_secs(2));
+    drop(holder);
+    let db = exclusive_connection_within(&path, "busy fixture", Duration::ZERO, valid).unwrap();
+    assert_eq!(
+        db.query_row("SELECT value FROM counter", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    drop(db);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn lease_wait_defaults_to_thirty_seconds_and_rejects_malformed_overrides() {
+    assert_eq!(lease_wait(None).unwrap(), Duration::from_secs(30));
+    assert_eq!(lease_wait(Some(OsStr::new("0"))).unwrap(), Duration::ZERO);
+    assert_eq!(
+        lease_wait(Some(OsStr::new("1500"))).unwrap(),
+        Duration::from_millis(1500)
+    );
+    assert_eq!(
+        lease_wait(Some(OsStr::new("600000"))).unwrap(),
+        Duration::from_secs(600)
+    );
+    for bad in ["", " 5", "-1", "1.5", "600001", "abc"] {
+        let error = lease_wait(Some(OsStr::new(bad))).unwrap_err();
+        assert!(error.to_string().contains(LEASE_WAIT_ENV), "{bad:?}");
+    }
 }
 
 #[test]
