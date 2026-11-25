@@ -103,7 +103,8 @@ are not counted by this message-level budget. The payload cap and connection
 deadline remain enforced. Data reads continue while outgoing writes are
 backpressured.
 
-Each tunnel retains one of the existing 64 connection slots. A single 120-second
+Each tunnel retains one of the server's connection slots (64 by default; see
+[`CCP_MAX_CONNECTIONS`](workspace-foundation.md#connection-slots)). A single 120-second
 absolute deadline starts at admission and covers outer TLS, upgrade, inner TLS
 and inner HTTP; both TLS handshakes also have five-second limits. The inner HTTP
 parser retains its header/body limits and 100-request cap. Shutdown cancels the

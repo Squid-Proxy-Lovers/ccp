@@ -75,6 +75,25 @@ ccp-server up --data-dir ./ccp-data --name ccp.example.com --name localhost \
   --https-listen 0.0.0.0:8443 --mtls-listen 0.0.0.0:8444
 ```
 
+### Connection slots
+
+The HTTPS and mTLS listeners share a pool of connection slots. A connection holds
+one slot from admission until it closes, and a database job it started keeps the
+slot until the job finishes. The pool has 64 slots by default. Set
+`CCP_MAX_CONNECTIONS` before starting the server to change it. Values are clamped
+to 16 through 4096, and a missing or non-numeric value keeps 64:
+
+```bash
+CCP_MAX_CONNECTIONS=256 ccp-server up --data-dir ./ccp-data
+```
+
+When every slot is busy, a new connection waits up to five seconds for a free
+slot. A waiting connection holds no slot, and its 120-second connection deadline
+starts when it is admitted. If no slot frees in time, or the server shuts down,
+the server closes the connection without a response. Clients with long round
+trips hold slots longer, so a server with many distant clients may need more
+slots. Shutdown waits for every slot, so database jobs still drain first.
+
 ### Docker
 
 The image's default command runs the same setup flow and binds both listeners

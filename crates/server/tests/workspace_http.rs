@@ -823,20 +823,19 @@ mod tests {
             pending.push(TcpStream::connect(f.startup.https_address).await.unwrap());
         }
         tokio::time::sleep(Duration::from_millis(40)).await;
-        let blocked = f.public_client().get(f.url("/api/v1/health")).send().await;
-        assert!(blocked.is_err());
-        drop(pending);
         let client = f.public_client();
-        let mut recovered = false;
-        for _ in 0..20 {
-            if let Ok(response) = client.get(f.url("/api/v1/health")).send().await {
-                assert_eq!(response.status().as_u16(), 200);
-                recovered = true;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(recovered);
+        let queued = tokio::spawn(client.get(f.url("/api/v1/health")).send());
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!queued.is_finished());
+        drop(pending);
+        let response = tokio::time::timeout(Duration::from_secs(4), queued)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let recovered = client.get(f.url("/api/v1/health")).send().await.unwrap();
+        assert_eq!(recovered.status().as_u16(), 200);
         drop(client);
         let report = f.finish().await;
         assert!(report.failed_connections >= 64);

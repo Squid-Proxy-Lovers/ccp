@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The workspace server now queues a new HTTPS or mTLS connection for up to five
+  seconds when every connection slot is busy, instead of closing it at once. The
+  slot count stays 64 by default and can be set with `CCP_MAX_CONNECTIONS`
+  (16 to 4096).
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
