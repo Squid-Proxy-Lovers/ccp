@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Linux client and server release binaries for x86_64 and ARM64 now run on
+  systems with glibc 2.28 or newer.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
