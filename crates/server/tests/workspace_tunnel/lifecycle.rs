@@ -18,37 +18,31 @@ async fn sixty_four_live_tunnels_share_budget_and_a_released_slot_recovers() {
         assert_eq!(send(&mut wire, "/api/v1/health", None, "").await.0, 200);
         connections.push(wire);
     }
+    // With every slot held, a new connection queues instead of being reset.
     let socket = TcpStream::connect(f.startup.https_address).await.unwrap();
-    let refused = TlsConnector::from(Arc::new(tls_config(
-        Some(&f.trust.ca_certificate_pem),
-        None,
-    )))
-    .connect(ServerName::try_from("localhost").unwrap(), socket)
-    .await
-    .unwrap_err();
-    assert!(matches!(
-        refused.kind(),
-        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
-    ));
+    let queued = tokio::spawn(
+        TlsConnector::from(Arc::new(tls_config(
+            Some(&f.trust.ca_certificate_pem),
+            None,
+        )))
+        .connect(ServerName::try_from("localhost").unwrap(), socket),
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!queued.is_finished());
     drop(connections.pop().unwrap());
-    // EOF can precede permit release. Bounded retry waits for that real lifecycle event.
-    let recovered = tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            let socket = TcpStream::connect(f.startup.https_address).await.unwrap();
-            let result = TlsConnector::from(Arc::new(tls_config(
-                Some(&f.trust.ca_certificate_pem),
-                None,
-            )))
-            .connect(ServerName::try_from("localhost").unwrap(), socket)
-            .await;
-            if let Ok(tls) = result {
-                break tls;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
+    // The released slot admits the queued connection well inside the wait.
+    let mut recovered = tokio::time::timeout(Duration::from_secs(4), queued)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    recovered
+        .write_all(b"GET /api/v1/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut reply = Vec::new();
+    recovered.read_to_end(&mut reply).await.unwrap();
+    assert!(reply.starts_with(b"HTTP/1.1 200"));
     drop(recovered);
     tokio::time::timeout(Duration::from_secs(3), f.finish())
         .await
