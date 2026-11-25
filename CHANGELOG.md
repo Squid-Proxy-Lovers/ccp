@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Linux release binaries (`ccp-client-linux-*` and `ccp-server-linux-*`) are
+  now fully static musl builds, so they no longer require GLIBC_2.38 and run on
+  Ubuntu 22.04, default WSL, and other older or non-glibc distributions. Asset
+  names are unchanged. CI rejects a Linux release binary that needs a dynamic
+  loader, shared libraries, or versioned glibc symbols.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added

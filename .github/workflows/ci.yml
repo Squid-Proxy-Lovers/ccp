@@ -408,11 +408,14 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          # Linux release binaries are fully static musl builds so they run on
+          # any glibc (or musl) distribution, independent of the runner image.
+          # Each architecture builds natively so the binaries can be executed.
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             platform: linux-x86_64
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
             platform: linux-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
@@ -440,18 +443,42 @@ jobs:
           target: ${{ matrix.target }}
           build-warnings: ""
           cache: ${{ !startsWith(github.ref, 'refs/tags/') }}
-      - name: Install cross-compilation tools
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Build
+      - name: Install musl C toolchain
+        if: endsWith(matrix.target, '-linux-musl')
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          # Bundled SQLite, ring, and aws-lc compile C for the target libc.
+          printf 'CC_%s=musl-gcc\n' "${TARGET//-/_}" >> "$GITHUB_ENV"
         env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          TARGET: ${{ matrix.target }}
+      - name: Build
         run: cargo build --release --workspace --locked --target ${{ matrix.target }}
       - name: Package binaries
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/server dist/ccp-server-${{ matrix.platform }}
           cp target/${{ matrix.target }}/release/client dist/ccp-client-${{ matrix.platform }}
+      - name: Verify Linux binaries are static and runnable
+        if: startsWith(matrix.platform, 'linux-')
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          status=0
+          for bin in "dist/ccp-server-$PLATFORM" "dist/ccp-client-$PLATFORM"; do
+            # A static binary has no program interpreter, no shared-library
+            # dependencies, and no versioned glibc symbol requirements.
+            if readelf --program-headers --wide "$bin" | grep -q 'INTERP'; then
+              echo "::error::$bin requests a dynamic loader"; status=1
+            fi
+            if readelf --dynamic --wide "$bin" | grep -q '(NEEDED)'; then
+              echo "::error::$bin links shared libraries:"; readelf --dynamic --wide "$bin" | grep '(NEEDED)'; status=1
+            fi
+            if readelf --dyn-syms --version-info --wide "$bin" | grep -q 'GLIBC_'; then
+              echo "::error::$bin requires versioned glibc symbols"; status=1
+            fi
+            "$bin" --help > /dev/null || { echo "::error::$bin failed to run"; status=1; }
+          done
+          exit "$status"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.platform }}
