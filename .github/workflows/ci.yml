@@ -458,11 +458,13 @@ jobs:
           zig_dir="zig-x86_64-linux-$ZIG_VERSION"
           zigbuild_dir="cargo-zigbuild-x86_64-unknown-linux-musl"
           curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
-            --output "$zig_dir.tar.xz" \
+            --connect-timeout 20 --max-time 300 --output "$zig_dir.tar.xz" \
             "https://ziglang.org/download/$ZIG_VERSION/$zig_dir.tar.xz"
           curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
-            --output "$zigbuild_dir.tar.xz" \
+            --connect-timeout 20 --max-time 300 --output "$zigbuild_dir.tar.xz" \
             "https://github.com/rust-cross/cargo-zigbuild/releases/download/v$CARGO_ZIGBUILD_VERSION/$zigbuild_dir.tar.xz"
+          # Dependabot does not track these archives. Update the versions and take
+          # the SHA-256 values from ziglang.org/download/index.json and the GitHub release asset.
           printf '%s  %s\n' \
             3581863e3cbcfd0fce0efc682ce7e9e93da96668a977791d356a26d2a7e9b17a "$zig_dir.tar.xz" \
             f09b180a517af0e4dd4bffc921bb88e5ab705452a9dd948c61e489b3020c68c2 "$zigbuild_dir.tar.xz" \
@@ -498,11 +500,16 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         with:
           platforms: arm64
+          # Dependabot does not track this image input. Update the tag and get
+          # its index digest with docker buildx imagetools inspect.
+          image: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       - name: Smoke test packaged Linux binaries on the glibc floor
         if: runner.os == 'Linux'
         env:
           DOCKER_PLATFORM: ${{ matrix.docker_platform }}
           PLATFORM: ${{ matrix.platform }}
+          # Dependabot does not track this image variable. Get the selected tag's
+          # index digest with docker buildx imagetools inspect.
           GLIBC_SMOKE_IMAGE: almalinux:8@sha256:768bedc30fe0a536adb0a65d2eddb7caad364e514fbddd0ae9e026975f590342
         run: |
           docker run --rm --platform "$DOCKER_PLATFORM" --network none \
@@ -515,6 +522,11 @@ jobs:
               "/dist/ccp-server-$PLATFORM" --help
               "/dist/ccp-client-$PLATFORM" --help
             '
+      - name: Test TLS and persistence with packaged Linux x86_64 binaries
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: python3 tests/dependency_compat.py --server "dist/ccp-server-$PLATFORM" --client "dist/ccp-client-$PLATFORM"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binaries-${{ matrix.platform }}

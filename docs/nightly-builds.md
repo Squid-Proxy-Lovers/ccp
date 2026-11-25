@@ -56,7 +56,8 @@ need Node.js.
 Each `nightly-YYYY-MM-DD-<12-character-SHA>` prerelease contains:
 
 - Client and server binaries for Linux and macOS, x86_64 and ARM64. Linux
-  binaries require glibc 2.28 or newer.
+  binaries built with the glibc compatibility fix require glibc 2.28 or newer.
+  Earlier nightlies can require glibc 2.38.
 - `ccp-mcp.tar.gz`: MCP source from the same commit.
 - `build-info.json`: full source SHA, pinned compiler, and artifact/platform list.
 - `SHA256SUMS`: hashes of the binaries, MCP archive, metadata and release contract.
