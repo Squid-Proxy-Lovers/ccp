@@ -39,6 +39,9 @@ pub(super) struct Endpoint {
     pub surface: Surface,
     pub tunnels: bool,
 }
+/// How long an accepted connection waits for a free slot before it is closed.
+const ADMISSION_WAIT: Duration = Duration::from_secs(5);
+const CONNECTION_DEADLINE: Duration = Duration::from_secs(120);
 pub(super) fn spawn(
     tasks: &mut JoinSet<anyhow::Result<()>>,
     socket: TcpStream,
@@ -47,18 +50,66 @@ pub(super) fn spawn(
     stop: watch::Receiver<bool>,
     budget: Arc<Semaphore>,
 ) {
-    if let Ok(permit) = budget.try_acquire_owned() {
-        let deadline = Instant::now() + Duration::from_secs(120);
-        tasks.spawn(run(
-            socket,
-            endpoint,
-            state,
-            stop,
-            Arc::new(permit),
-            deadline,
-        ));
+    match budget.clone().try_acquire_owned() {
+        Ok(permit) => {
+            let deadline = Instant::now() + CONNECTION_DEADLINE;
+            tasks.spawn(run(
+                socket,
+                endpoint,
+                state,
+                stop,
+                Arc::new(permit),
+                deadline,
+            ));
+        }
+        Err(_busy) => {
+            tasks.spawn(queued(socket, endpoint, state, stop, budget));
+        }
     }
 }
+/// Waits for a slot when every slot is busy, so a burst is delayed rather
+/// than reset. The waiting socket holds no slot. Shutdown or the admission
+/// wait closes it; the connection deadline starts only after admission.
+async fn queued<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    socket: S,
+    endpoint: Endpoint,
+    state: Arc<State>,
+    mut stop: watch::Receiver<bool>,
+    budget: Arc<Semaphore>,
+) -> anyhow::Result<()> {
+    // Dropping an unresolved changed() future does not mark the value seen,
+    // so run() still observes a stop sent while this task waited.
+    let permit = tokio::select! {
+        _ = stop.changed() => return Ok(()),
+        waited = timeout(ADMISSION_WAIT, budget.acquire_owned()) => match waited {
+            Ok(Ok(permit)) => permit,
+            // A closed budget or an elapsed wait closes the socket unserved.
+            Ok(Err(_)) | Err(_) => return Ok(()),
+        },
+    };
+    let deadline = Instant::now() + CONNECTION_DEADLINE;
+    run(socket, endpoint, state, stop, Arc::new(permit), deadline).await
+}
+/// Admission slots used when `CCP_MAX_CONNECTIONS` is unset or invalid.
+const DEFAULT_ADMISSION_SLOTS: u16 = 64;
+const MIN_ADMISSION_SLOTS: u16 = 16;
+const MAX_ADMISSION_SLOTS: u16 = 4096;
+
+/// Parses `CCP_MAX_CONNECTIONS`. Each slot covers one HTTPS or mTLS connection
+/// and any database job it dispatched. Invalid values keep the default; valid
+/// values are clamped to 16..=4096.
+pub(super) fn parse_admission_slots(value: Option<&str>) -> u16 {
+    value
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map_or(DEFAULT_ADMISSION_SLOTS, |slots| {
+            u16::try_from(slots.clamp(
+                u64::from(MIN_ADMISSION_SLOTS),
+                u64::from(MAX_ADMISSION_SLOTS),
+            ))
+            .unwrap_or(MAX_ADMISSION_SLOTS)
+        })
+}
+
 async fn run<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     socket: S,
     endpoint: Endpoint,

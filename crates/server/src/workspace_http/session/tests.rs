@@ -136,3 +136,154 @@ async fn one_deadline_covers_outer_tls_upgrade_and_inner_http_without_renewing()
     drop(released);
     std::fs::remove_dir_all(directory).unwrap();
 }
+#[test]
+fn admission_slots_default_and_clamp() {
+    assert_eq!(parse_admission_slots(None), 64);
+    assert_eq!(parse_admission_slots(Some("")), 64);
+    assert_eq!(parse_admission_slots(Some("many")), 64);
+    assert_eq!(parse_admission_slots(Some("-5")), 64);
+    assert_eq!(parse_admission_slots(Some("0")), 16);
+    assert_eq!(parse_admission_slots(Some("8")), 16);
+    assert_eq!(parse_admission_slots(Some("256")), 256);
+    assert_eq!(parse_admission_slots(Some(" 512 ")), 512);
+    assert_eq!(parse_admission_slots(Some("4096")), 4096);
+    assert_eq!(parse_admission_slots(Some("100000")), 4096);
+    assert_eq!(parse_admission_slots(Some("99999999999999999999999")), 64);
+}
+struct Fixture {
+    directory: std::path::PathBuf,
+    lease: DirectoryLease,
+    ca: String,
+    acceptor: TlsAcceptor,
+    state: Arc<State>,
+}
+fn fixture(name: &str) -> Fixture {
+    let directory = std::env::temp_dir().join(format!("ccp-{name}-{}", Uuid::new_v4()));
+    crate::local_admin::bootstrap(&directory, "owner", "first").unwrap();
+    let trust = crate::instance_tls::initialize(&directory, &["localhost".into()]).unwrap();
+    let lease = DirectoryLease::activate_workspace(&directory).unwrap();
+    let identity = InstanceTls::load(&lease).unwrap();
+    let acceptor = TlsAcceptor::from(identity.https_config().unwrap());
+    let state = Arc::new(State {
+        identity,
+        database: directory.join("ccp.sqlite3"),
+        browser_sessions: browser::Sessions::new().unwrap(),
+        setup: None,
+        mtls_port: 8444,
+    });
+    Fixture {
+        directory,
+        lease,
+        ca: trust.ca_certificate_pem,
+        acceptor,
+        state,
+    }
+}
+fn finish(fixture: Fixture) {
+    let Fixture {
+        directory,
+        lease,
+        acceptor,
+        state,
+        ..
+    } = fixture;
+    drop(acceptor);
+    drop(state);
+    drop(lease);
+    let released = DirectoryLease::maintenance(&directory).unwrap();
+    drop(released);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+fn https(fixture: &Fixture) -> Endpoint {
+    Endpoint {
+        acceptor: fixture.acceptor.clone(),
+        surface: Surface::Https,
+        tunnels: false,
+    }
+}
+#[tokio::test(start_paused = true)]
+async fn busy_slots_queue_a_connection_until_one_frees() {
+    let fixture = fixture("admission-queue");
+    let (a, b) = tokio::io::duplex(65536);
+    let (stop, receiver) = watch::channel(false);
+    let budget = Arc::new(Semaphore::new(1));
+    let held = budget.clone().try_acquire_owned().unwrap();
+    let task = tokio::spawn(queued(
+        a,
+        https(&fixture),
+        fixture.state.clone(),
+        receiver,
+        budget.clone(),
+    ));
+    advance(Duration::from_secs(4)).await;
+    assert!(!task.is_finished());
+    drop(held);
+    let mut roots = RootCertStore::empty();
+    roots
+        .add(CertificateDer::from_pem_slice(fixture.ca.as_bytes()).unwrap())
+        .unwrap();
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+    let mut client = TlsConnector::from(Arc::new(config))
+        .connect(ServerName::try_from("localhost").unwrap(), b)
+        .await
+        .unwrap();
+    health(&mut client).await;
+    assert_eq!(budget.available_permits(), 0);
+    client.shutdown().await.unwrap();
+    let mut rest = Vec::new();
+    client.read_to_end(&mut rest).await.unwrap();
+    task.await.unwrap().unwrap();
+    drop(client);
+    assert_eq!(budget.available_permits(), 1);
+    drop(stop);
+    finish(fixture);
+}
+#[tokio::test(start_paused = true)]
+async fn queued_connection_closes_after_the_admission_wait() {
+    let fixture = fixture("admission-wait");
+    let (a, mut b) = tokio::io::duplex(65536);
+    let (stop, receiver) = watch::channel(false);
+    let budget = Arc::new(Semaphore::new(1));
+    let held = budget.clone().try_acquire_owned().unwrap();
+    let task = tokio::spawn(queued(
+        a,
+        https(&fixture),
+        fixture.state.clone(),
+        receiver,
+        budget.clone(),
+    ));
+    advance(ADMISSION_WAIT + Duration::from_secs(1)).await;
+    task.await.unwrap().unwrap();
+    assert_eq!(b.read(&mut [0; 1]).await.unwrap(), 0);
+    assert_eq!(budget.available_permits(), 0);
+    drop(held);
+    drop(stop);
+    finish(fixture);
+}
+#[tokio::test(start_paused = true)]
+async fn shutdown_releases_a_queued_connection() {
+    let fixture = fixture("admission-stop");
+    let (a, b) = tokio::io::duplex(65536);
+    let (stop, receiver) = watch::channel(false);
+    let budget = Arc::new(Semaphore::new(1));
+    let held = budget.clone().try_acquire_owned().unwrap();
+    let task = tokio::spawn(queued(
+        a,
+        https(&fixture),
+        fixture.state.clone(),
+        receiver,
+        budget.clone(),
+    ));
+    advance(Duration::from_secs(1)).await;
+    stop.send(true).unwrap();
+    task.await.unwrap().unwrap();
+    drop(held);
+    assert_eq!(budget.available_permits(), 1);
+    drop(b);
+    finish(fixture);
+}

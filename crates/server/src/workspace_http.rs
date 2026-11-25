@@ -157,7 +157,9 @@ impl WorkspaceServer {
         shutdown: impl Future<Output = anyhow::Result<()>>,
     ) -> anyhow::Result<Report> {
         tokio::pin!(shutdown);
-        let budget = Arc::new(Semaphore::new(64));
+        let slots =
+            session::parse_admission_slots(std::env::var("CCP_MAX_CONNECTIONS").ok().as_deref());
+        let budget = Arc::new(Semaphore::new(usize::from(slots)));
         let (stop, receiver) = watch::channel(false);
         let mut tasks = JoinSet::new();
         tasks.spawn(retention_worker::run(
@@ -203,10 +205,13 @@ impl WorkspaceServer {
         // A cancelled HTTP future cannot cancel spawn_blocking. Wait for every
         // admission slot, including those retained by detached SQL jobs, before
         // reporting a successful stop or releasing the runtime's lease.
-        let all_slots = timeout(Duration::from_secs(30), budget.acquire_many_owned(64))
-            .await
-            .context("workspace database jobs did not drain")?
-            .context("workspace admission budget closed")?;
+        let all_slots = timeout(
+            Duration::from_secs(30),
+            budget.acquire_many_owned(u32::from(slots)),
+        )
+        .await
+        .context("workspace database jobs did not drain")?
+        .context("workspace admission budget closed")?;
         drop(all_slots);
         let cleanup_slot = timeout(
             Duration::from_secs(30),
