@@ -22,7 +22,9 @@ bash install.sh --client
 ```
 
 The installer adds the client binary, creates a Python environment, and configures
-supported agent hosts. For installation without a checkout or for nightlies, see
+supported agent hosts with the native `ccp` entry. Add `--workspace-mcp` to also
+register `ccp-workspace-mcp` as `ccp-workspace`; see the
+[workspace MCP guide](../docs/workspace-mcp.md#let-the-linux-and-macos-installer-register-it). For installation without a checkout or for nightlies, see
 [the README](../README.md#install) and [nightly guide](../docs/nightly-builds.md).
 Enroll with the server using the [client instructions](../docs/client.md#enroll-and-select-a-session).
 

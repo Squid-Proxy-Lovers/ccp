@@ -21,6 +21,7 @@ RELEASE_STAGE=""
 PUBLISH_STAGE=""
 MCP_CONFIG_WARNINGS=""
 UNINSTALL=false
+WORKSPACE_MCP=false
 INSTALL_ONLY_OPTIONS=""
 MCP_VENV_MARKER=".ccp-installer"
 UNINSTALL_REMOVED=0
@@ -88,6 +89,7 @@ while [[ $# -gt 0 ]]; do
             SESSION_NAME="$2"; INSTALL_ONLY_OPTIONS+=" --session"; shift 2
             ;;
         --from-source) FROM_SOURCE=true; INSTALL_ONLY_OPTIONS+=" --from-source"; shift ;;
+        --workspace-mcp) WORKSPACE_MCP=true; INSTALL_ONLY_OPTIONS+=" --workspace-mcp"; shift ;;
         --uninstall)   UNINSTALL=true; shift ;;
         --channel|--version)
             if [ $# -lt 2 ] || [[ "$2" == --* ]] || [ -z "$2" ]; then
@@ -113,16 +115,22 @@ Options:
   --from-source          Build from repo instead of downloading release binaries
   --channel <channel>    stable (default) or nightly
   --version <tag>        Pin an exact nightly release (requires --channel nightly)
+  --workspace-mcp        Also register the workspace bridge (ccp-workspace-mcp) as
+                         "ccp-workspace", reading the profiles listed in
+                         ~/.ccp-client/workspace-mcp.json (or \$CCP_CLIENT_HOME).
+                         Installs the MCP bridge without asking. The native
+                         "ccp" entry is still configured.
 
 Uninstall (bash install.sh --uninstall [--install-dir <path>]) removes
 ccp-client, ccp-server and ccp-nightly.json from the install directory, the
 ccp alias if it links to ccp-client, the MCP bridge environment in
 ~/.ccp-mcp/venv when it has the installer marker and only standard files
 (never ~/.ccp-mcp/src), and the
-"ccp" entry in the Claude and Cursor MCP configs when it points at that
-bridge. It never deletes enrollment profiles, client state, server data or
-Docker volumes. It prints where they are and how to remove them. It does not
-edit Codex config.toml; remove the [mcp_servers.ccp] table by hand.
+"ccp" and "ccp-workspace" entries in the Claude and Cursor MCP configs when
+they point at that bridge. It never deletes enrollment profiles, client
+state, server data or Docker volumes. It prints where they are and how to remove them. It does not
+edit Codex config.toml; remove the [mcp_servers.ccp] (and
+[mcp_servers.ccp-workspace]) tables by hand.
 EOF
             exit 0
             ;;
@@ -171,6 +179,10 @@ if [ -n "$RELEASE_VERSION" ]; then
         err "--version requires --channel nightly and a nightly-YYYY-MM-DD-<12-character SHA> tag."
         exit 1
     fi
+fi
+if [ "$WORKSPACE_MCP" = true ] && [ "$MODE" = docker ]; then
+    err "--workspace-mcp configures MCP hosts for a client install; it cannot be combined with --docker."
+    exit 1
 fi
 if [ "$CHANNEL" = "nightly" ] && [ "$FROM_SOURCE" = true ]; then
     err "Choose --channel nightly for published builds or --from-source for your checkout."
@@ -548,12 +560,13 @@ mcp_config_warning() {
     MCP_CONFIG_WARNINGS+="the $1 MCP config was not written"
 }
 
-# Inspect or update the Codex config with one python3 process. Mode "check"
-# prints the state of [mcp_servers.ccp]: present, absent, unsafe (a value we
-# must not touch or extend), unsupported (no tomllib) or invalid (unparseable).
-# Mode "append CONFIG COMMAND CLIENT SERVER" builds the entry with escaped TOML
-# strings, takes an flock on the sidecar file CONFIG.ccp-lock, retrying for
-# about two seconds (CCP_CODEX_LOCK_RETRIES tenths of a second, for tests),
+# Inspect or update the Codex config with one python3 process. Mode
+# "check CONFIG NAME" prints the state of [mcp_servers.NAME]: present, absent,
+# unsafe (a value we must not touch or extend), unsupported (no tomllib) or
+# invalid (unparseable). NAME is ccp or ccp-workspace. Mode
+# "append CONFIG NAME COMMAND KEY=VALUE..." builds the entry and its env table
+# with escaped TOML strings, takes an flock on the sidecar file
+# CONFIG.ccp-lock, retrying for about two seconds (CCP_CODEX_LOCK_RETRIES tenths of a second, for tests),
 # then reads, validates and appends the entry through one descriptor on the
 # config, in place, all in that one process, so the kernel drops the lock
 # however the process ends. If the write fails, or the path stops naming the
@@ -579,13 +592,16 @@ except ModuleNotFoundError:
     sys.exit(0)
 
 
+NAME = sys.argv[3]
+
+
 def classify(config):
     servers = config.get("mcp_servers", {})
     if not isinstance(servers, dict):
         return "unsafe"
-    if "ccp" not in servers:
+    if NAME not in servers:
         return "absent"
-    return "present" if isinstance(servers["ccp"], dict) else "unsafe"
+    return "present" if isinstance(servers[NAME], dict) else "unsafe"
 
 
 def inspect(raw):
@@ -619,11 +635,12 @@ def quote(value):
     return '"' + "".join(chars) + '"'
 
 
-def build_block(command, client, server):
-    lines = ["", "[mcp_servers.ccp]", "command = " + quote(command), ""]
-    lines += ["[mcp_servers.ccp.env]", "CCP_CLIENT_BIN = " + quote(client)]
-    if server:
-        lines.append("CCP_SERVER_BIN = " + quote(server))
+def build_block(command, *pairs):
+    lines = ["", "[mcp_servers." + NAME + "]", "command = " + quote(command), ""]
+    lines.append("[mcp_servers." + NAME + ".env]")
+    for pair in pairs:
+        key, _, value = pair.partition("=")
+        lines.append(key + " = " + quote(value))
     block = "\n".join(lines)
     block.encode("utf-8")
     tomllib.loads(block)
@@ -731,7 +748,7 @@ if mode == "check":
     print(check(path))
     sys.exit(0)
 try:
-    block = build_block(*sys.argv[3:6])
+    block = build_block(*sys.argv[4:])
 except ValueError:
     print("badentry")
     sys.exit(0)
@@ -751,30 +768,181 @@ PY
     esac
 }
 
+# configure_codex_mcp LABEL CONFIG NAME COMMAND KEY=VALUE...
 configure_codex_mcp() {
-    local codex_config="$1" mcp_cmd="$2" client_bin="$3" server_bin=""
+    local label="$1" codex_config="$2" name="$3" t entry=""
     local codex_state
-    codex_state="$(codex_config_tool check "$codex_config")"
+    shift 3
+    t="[mcp_servers.$name]"
+    if [ "$name" != ccp ]; then entry="$name "; fi
+    codex_state="$(codex_config_tool check "$codex_config" "$name")"
     if [ "$codex_state" = absent ]; then
-        # only include the server binary if it's installed (full install mode)
-        if [ -f "$INSTALL_DIR/ccp-server" ]; then server_bin="$INSTALL_DIR/ccp-server"; fi
-        codex_state="$(codex_config_tool append "$codex_config" "$mcp_cmd" "$client_bin" "$server_bin")"
+        codex_state="$(codex_config_tool append "$codex_config" "$name" "$@")"
         if [ "$codex_state" = added ]; then
-            ok "Added to $codex_config"
+            ok "Added ${entry}to $codex_config"
             return
         fi
     fi
     case "$codex_state" in
-        present) ok "$codex_config already configured" ;;
-        unsupported) mcp_config_warning "Codex" "Could not check $codex_config: Python 3.11+ is required; add [mcp_servers.ccp] manually" ;;
-        invalid) mcp_config_warning "Codex" "Could not parse $codex_config; repair the TOML, then add [mcp_servers.ccp]" ;;
-        locked) mcp_config_warning "Codex" "Another installer is updating $codex_config (lock file $codex_config.ccp-lock is held); retry later or add [mcp_servers.ccp] manually" ;;
-        failed) mcp_config_warning "Codex" "Could not update $codex_config" ;;
-        changed) mcp_config_warning "Codex" "Could not update $codex_config: it changed during the update and was left as it is; retry or add [mcp_servers.ccp] manually" ;;
-        damaged) mcp_config_warning "Codex" "Could not update $codex_config cleanly: it changed during the update and may need manual repair; check it, then add [mcp_servers.ccp] if it is missing" ;;
-        badentry) mcp_config_warning "Codex" "Could not build a valid [mcp_servers.ccp] entry for $codex_config; add it manually" ;;
-        *) mcp_config_warning "Codex" "Cannot add [mcp_servers.ccp] to $codex_config safely: mcp_servers or mcp_servers.ccp is not a table that can be extended (a scalar, array or inline table); replace it, then add the entry manually" ;;
+        present) ok "$codex_config already configured${entry:+ for $name}" ;;
+        unsupported) mcp_config_warning "$label" "Could not check $codex_config: Python 3.11+ is required; add $t manually" ;;
+        invalid) mcp_config_warning "$label" "Could not parse $codex_config; repair the TOML, then add $t" ;;
+        locked) mcp_config_warning "$label" "Another installer is updating $codex_config (lock file $codex_config.ccp-lock is held); retry later or add $t manually" ;;
+        failed) mcp_config_warning "$label" "Could not update $codex_config" ;;
+        changed) mcp_config_warning "$label" "Could not update $codex_config: it changed during the update and was left as it is; retry or add $t manually" ;;
+        damaged) mcp_config_warning "$label" "Could not update $codex_config cleanly: it changed during the update and may need manual repair; check it, then add $t if it is missing" ;;
+        badentry) mcp_config_warning "$label" "Could not build a valid $t entry for $codex_config; add it manually" ;;
+        *) mcp_config_warning "$label" "Cannot add $t to $codex_config safely: mcp_servers or mcp_servers.$name is not a table that can be extended (a scalar, array or inline table); replace it, then add the entry manually" ;;
     esac
+}
+
+# Add one mcpServers entry to a Claude or Cursor JSON config without touching
+# any other setting, for the workspace bridge. Arguments: CONFIG NAME COMMAND
+# KEY=VALUE...; values travel as arguments, never as Python source. A missing
+# config is created (owner-only) only when its directory exists. An existing
+# entry under NAME is kept as it is. The file is rewritten through a temporary
+# file in the same directory, fsync and an atomic rename, keeping its mode, its
+# non-ASCII text and its trailing newline, and only if it still holds the bytes
+# that were parsed. A symlinked config is never written through. It prints
+# added, created, present, symlink, invalid, unsafe, changed or failed.
+json_mcp_tool() {
+    local out
+    out="$(python3 -I - "$@" <<'PY'
+import json, os, sys, tempfile
+path, name, command = sys.argv[1:4]
+env = dict(pair.partition("=")[::2] for pair in sys.argv[4:])
+if os.path.islink(path):
+    print("symlink")
+    sys.exit(0)
+try:
+    with open(path, "rb") as handle:
+        raw = handle.read()
+except FileNotFoundError:
+    raw = None
+except OSError:
+    print("failed")
+    sys.exit(0)
+if raw is None:
+    cfg, mode, newline = {}, 0o600, True
+else:
+    try:
+        cfg = json.loads(raw.decode("utf-8"))
+    except (ValueError, RecursionError):
+        print("invalid")
+        sys.exit(0)
+    mode, newline = os.stat(path).st_mode & 0o7777, raw.endswith(b"\n")
+if not isinstance(cfg, dict) or not isinstance(cfg.setdefault("mcpServers", {}), dict):
+    print("unsafe")
+    sys.exit(0)
+if name in cfg["mcpServers"]:
+    print("present")
+    sys.exit(0)
+cfg["mcpServers"][name] = {"command": command, "env": env}
+text = json.dumps(cfg, indent=2, ensure_ascii=False) + ("\n" if newline else "")
+temp = ""
+try:
+    fd, temp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=os.path.basename(path) + ".ccp-")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp, mode)
+    try:
+        with open(path, "rb") as handle:
+            current = handle.read()
+    except FileNotFoundError:
+        current = None
+    if current != raw or os.path.islink(path):
+        os.unlink(temp)
+        print("changed")
+        sys.exit(0)
+    os.replace(temp, path)
+except OSError:
+    if temp:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+    print("failed")
+    sys.exit(0)
+print("created" if raw is None else "added")
+PY
+    )" || out=""
+    case "$out" in
+        added|created|present|symlink|invalid|unsafe|changed) echo "$out" ;;
+        *) echo failed ;;
+    esac
+}
+
+configure_workspace_json_host() {
+    local label="$1" config="$2" state
+    shift 2
+    state="$(json_mcp_tool "$config" ccp-workspace "$@")"
+    case "$state" in
+        added) ok "Added ccp-workspace to $config" ;;
+        created) ok "Created $config with ccp-workspace" ;;
+        present) ok "$config already has a ccp-workspace entry; it was kept" ;;
+        symlink) mcp_config_warning "$label workspace" "$config is a symlink and was not edited; add the ccp-workspace entry by hand" ;;
+        invalid) mcp_config_warning "$label workspace" "$config is not valid JSON and was left unchanged; repair it, then add the ccp-workspace entry" ;;
+        unsafe) mcp_config_warning "$label workspace" "Cannot add ccp-workspace to $config: it or its mcpServers value is not a JSON object" ;;
+        changed) mcp_config_warning "$label workspace" "$config changed during the update and was left as it is; close $label and re-run, or add the ccp-workspace entry by hand" ;;
+        *) mcp_config_warning "$label workspace" "Could not update $config with ccp-workspace" ;;
+    esac
+}
+
+# Register the workspace bridge as "ccp-workspace" next to the native "ccp"
+# entry. The bridge refuses an empty profile list, so the profile file is never
+# created here; it is checked, and its expected shape printed when missing.
+configure_workspace_mcp() {
+    local client_bin="$1" codex_config="$2" claude_config="$3" cursor_config="$4"
+    local ws_cmd="$HOME/.ccp-mcp/venv/bin/ccp-workspace-mcp"
+    local client_home="${CCP_CLIENT_HOME:-$HOME/.ccp-client}" ws_config mode
+    case "$client_home" in
+        /*) ;;
+        *) mcp_config_warning "workspace" "CCP_CLIENT_HOME must be an absolute path for the workspace bridge; ccp-workspace was not configured"; return ;;
+    esac
+    ws_config="${client_home%/}/workspace-mcp.json"
+    if [ ! -f "$ws_cmd" ]; then
+        mcp_config_warning "workspace" "Workspace bridge not found at $ws_cmd; this MCP release does not include it, so ccp-workspace was not configured"
+        return
+    fi
+    local ws_env=("CCP_WORKSPACE_CONFIG=$ws_config" "CCP_CLIENT_BIN=$client_bin")
+
+    if [ -f "$codex_config" ]; then
+        configure_codex_mcp "Codex workspace" "$codex_config" ccp-workspace "$ws_cmd" "${ws_env[@]}"
+    fi
+    if [ -f "$claude_config" ]; then
+        configure_workspace_json_host "Claude" "$claude_config" "$ws_cmd" "${ws_env[@]}"
+    fi
+    if [ -d "$HOME/.cursor" ]; then
+        configure_workspace_json_host "Cursor" "$cursor_config" "$ws_cmd" "${ws_env[@]}"
+    fi
+    if [ ! -f "$codex_config" ] && [ ! -f "$claude_config" ] && [ ! -d "$HOME/.cursor" ]; then
+        echo ""
+        echo "For the workspace bridge, also add:"
+        python3 -I - "$ws_cmd" "${ws_env[@]}" <<'PY'
+import json, sys
+env = dict(pair.partition("=")[::2] for pair in sys.argv[2:])
+print(json.dumps({"ccp-workspace": {"command": sys.argv[1], "env": env}}, indent=2, ensure_ascii=False))
+PY
+    fi
+
+    if [ -L "$ws_config" ] || { [ -e "$ws_config" ] && [ ! -f "$ws_config" ]; }; then
+        warn "$ws_config is not a regular file; the workspace bridge refuses it. Replace it with a regular file."
+    elif [ -f "$ws_config" ]; then
+        mode="$(python3 -I -c 'import os, stat, sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode) & 0o077))' "$ws_config" 2>/dev/null)"
+        if [ "$mode" != 0o0 ]; then
+            warn "$ws_config is readable by other users; the workspace bridge refuses it until you run: chmod 600 $(printf '%q' "$ws_config")"
+        else
+            ok "Workspace profiles are read from $ws_config (left unchanged)"
+        fi
+    else
+        info "ccp-workspace reads its profiles from $ws_config, which does not exist yet."
+        echo "    The bridge reports an error until it lists at least one profile. After"
+        echo "    ccp enroll prints \"Profile: <path>\", create it owner-only (mode 0600):"
+        echo "      {\"format\": 1, \"profiles\": {\"work\": \"<that profile path>\"}}"
+        echo "    Then restart your MCP host. See docs/workspace-mcp.md."
+    fi
 }
 
 configure_mcp() {
@@ -811,7 +979,10 @@ MCPEOF
     # Codex: ~/.codex/config.toml
     local codex_config="$HOME/.codex/config.toml"
     if [ -f "$codex_config" ]; then
-        configure_codex_mcp "$codex_config" "$mcp_cmd" "$client_bin"
+        local codex_env=("CCP_CLIENT_BIN=$client_bin")
+        # only include the server binary if it's installed (full install mode)
+        if [ -f "$INSTALL_DIR/ccp-server" ]; then codex_env+=("CCP_SERVER_BIN=$INSTALL_DIR/ccp-server"); fi
+        configure_codex_mcp "Codex" "$codex_config" ccp "$mcp_cmd" "${codex_env[@]}"
     fi
 
     # Claude: ~/.claude.json
@@ -877,6 +1048,10 @@ with open('$tmp', 'w') as f:
         warn "No MCP host configs found. Add this to your agent's MCP config:"
         echo ""
         echo "$mcp_block"
+    fi
+
+    if [ "$WORKSPACE_MCP" = true ]; then
+        configure_workspace_mcp "$client_bin" "$codex_config" "$claude_config" "$cursor_config"
     fi
 }
 
@@ -1040,9 +1215,11 @@ uninstall_mcp_bridge() {
     fi
 }
 
-# Drop mcpServers.ccp from a Claude or Cursor JSON config, but only when its
-# command is this installer's bridge. The file is rewritten through a temporary
-# file in the same directory and an atomic rename.
+# Drop mcpServers.NAME (ccp by default, or ccp-workspace) from a Claude or
+# Cursor JSON config, but only when its command is this installer's bridge
+# (ccp-mcp-server, or the given entry point in the same environment). The
+# file is rewritten through a temporary file in the same directory and an
+# atomic rename.
 # Succeeds when HOME, or any component from HOME down to $1, is a symlink.
 uninstall_path_has_symlink() {
     local path="$HOME" part
@@ -1058,24 +1235,27 @@ uninstall_path_has_symlink() {
 }
 
 uninstall_json_host() {
-    local label="$1" config="$2" bridge="$HOME/.ccp-mcp/venv/bin/ccp-mcp-server" status mode=edit
+    local label="$1" config="$2" name="${3:-ccp}" bridge="$HOME/.ccp-mcp/venv/bin/${4:-ccp-mcp-server}" status mode=edit
     if [ ! -e "$config" ] && [ ! -L "$config" ]; then return; fi
     # A symlink anywhere on the path is managed elsewhere; never rewrite through it.
     if uninstall_path_has_symlink "$config"; then
         mode=check
     elif [ ! -f "$config" ]; then
-        uninstall_failed "$config is not a regular file and was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present."
-        return
-    fi
-    if ! command -v python3 &>/dev/null; then
-        if grep -q '"ccp"' "$config" 2>/dev/null; then
-            warn "python3 was not found, so $config was not edited. Remove the \"ccp\" entry under mcpServers by hand."
+        # Reported once, by the call for the native entry.
+        if [ "$name" = ccp ]; then
+            uninstall_failed "$config is not a regular file and was left unchanged. Remove the \"ccp\" and \"ccp-workspace\" entries under mcpServers by hand if present."
         fi
         return
     fi
-    status="$(python3 - "$config" "$bridge" "$mode" <<'PY'
+    if ! command -v python3 &>/dev/null; then
+        if grep -q "\"$name\"" "$config" 2>/dev/null; then
+            warn "python3 was not found, so $config was not edited. Remove the \"$name\" entry under mcpServers by hand."
+        fi
+        return
+    fi
+    status="$(python3 - "$config" "$bridge" "$mode" "$name" <<'PY'
 import json, os, sys, tempfile
-path, bridge, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+path, bridge, mode, name = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
     with open(path, encoding="utf-8") as handle:
         raw = handle.read()
@@ -1088,17 +1268,17 @@ except ValueError:
     print("invalid")
     sys.exit(0)
 servers = cfg.get("mcpServers") if isinstance(cfg, dict) else None
-if not isinstance(servers, dict) or "ccp" not in servers:
+if not isinstance(servers, dict) or name not in servers:
     print("absent")
     sys.exit(0)
-entry = servers["ccp"]
+entry = servers[name]
 if not isinstance(entry, dict) or entry.get("command") != bridge:
     print("foreign")
     sys.exit(0)
 if mode != "edit":
     print("manual")
     sys.exit(0)
-del servers["ccp"]
+del servers[name]
 text = json.dumps(cfg, indent=2, ensure_ascii=False)
 if raw.endswith("\n"):
     text += "\n"
@@ -1123,17 +1303,17 @@ print("removed")
 PY
     )" || status="ioerror"
     case "$status" in
-        removed) uninstall_removed "the ccp entry from $label config $config" ;;
+        removed) uninstall_removed "the $name entry from $label config $config" ;;
         absent) ;;
-        foreign) warn "The ccp entry in $config does not point at $bridge and was kept." ;;
-        manual) warn "$config is, or sits under, a symlink, so it was not edited. Remove the \"ccp\" entry under mcpServers by hand." ;;
-        invalid) warn "$config is not valid JSON and was left unchanged. Remove the \"ccp\" entry under mcpServers by hand if present." ;;
+        foreign) warn "The $name entry in $config does not point at $bridge and was kept." ;;
+        manual) warn "$config is, or sits under, a symlink, so it was not edited. Remove the \"$name\" entry under mcpServers by hand." ;;
+        invalid) warn "$config is not valid JSON and was left unchanged. Remove the \"$name\" entry under mcpServers by hand if present." ;;
         ioerror) if [ "$mode" = check ]; then
-                warn "$config could not be read, and it is, or sits under, a symlink, so it was not edited. Remove the \"ccp\" entry under mcpServers by hand if present."
+                warn "$config could not be read, and it is, or sits under, a symlink, so it was not edited. Remove the \"$name\" entry under mcpServers by hand if present."
             else
-                uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"ccp\" entry under mcpServers by hand."
+                uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"$name\" entry under mcpServers by hand."
             fi ;;
-        *) uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"ccp\" entry under mcpServers by hand." ;;
+        *) uninstall_failed "Could not read or update $config; it was left unchanged. Fix the problem and re-run, or remove the \"$name\" entry under mcpServers by hand." ;;
     esac
 }
 
@@ -1142,6 +1322,9 @@ uninstall_codex_notice() {
     local codex_config="$HOME/.codex/config.toml"
     if [ -f "$codex_config" ] && grep -q "mcp_servers.ccp" "$codex_config" 2>/dev/null; then
         warn "Codex: $codex_config still has a CCP entry. Remove the [mcp_servers.ccp] table, and the [mcp_servers.ccp.env] table under it, by hand. This installer does not edit TOML."
+        if grep -q "mcp_servers.ccp-workspace" "$codex_config" 2>/dev/null; then
+            warn "Codex: also remove the [mcp_servers.ccp-workspace] and [mcp_servers.ccp-workspace.env] tables by hand."
+        fi
     fi
 }
 
@@ -1172,7 +1355,9 @@ uninstall_ccp() {
     uninstall_file "$INSTALL_DIR/ccp-nightly.json"
     uninstall_alias
     uninstall_json_host "Claude" "$HOME/.claude.json"
+    uninstall_json_host "Claude" "$HOME/.claude.json" ccp-workspace ccp-workspace-mcp
     uninstall_json_host "Cursor" "$HOME/.cursor/mcp.json"
+    uninstall_json_host "Cursor" "$HOME/.cursor/mcp.json" ccp-workspace ccp-workspace-mcp
     uninstall_codex_notice
     uninstall_mcp_bridge
     echo ""
@@ -1283,7 +1468,7 @@ fi
 # Decide on the MCP bridge first, so release downloads fetch and verify its
 # archive only when it will be installed.
 INSTALL_MCP=false
-if [ "$MODE" = "client" ]; then
+if [ "$MODE" = "client" ] || [ "$WORKSPACE_MCP" = true ]; then
     INSTALL_MCP=true
 elif [ "$MODE" = "both" ]; then
     printf '%b>>>%b Install the MCP bridge for Claude/Cursor/Codex? [y/N] ' "$CYAN" "$RESET"
@@ -1346,6 +1531,11 @@ fi
 ensure_path
 
 echo ""
+if [ "$WORKSPACE_MCP" = true ]; then
+    info "Enroll in a workspace with an enrollment link:"
+    echo -e "  ${DIM}ccp enroll${RESET}"
+    echo ""
+fi
 if [ "$MODE" = "client" ]; then
     info "Enroll with a server:"
     echo -e "  ${DIM}ccp-client enroll --redeem-url <url> --token <token>${RESET}"

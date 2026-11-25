@@ -61,6 +61,37 @@ variables. Replace every example path with its actual absolute path:
 }
 ```
 
+### Let the Linux and macOS installer register it
+
+`install.sh --workspace-mcp` (usually with `--client`) installs the MCP package and
+registers this bridge as `ccp-workspace` in the detected Claude (`~/.claude.json`),
+Cursor (`~/.cursor/mcp.json`) and Codex (`~/.codex/config.toml`) configurations,
+next to the native `ccp` entry, which is still configured. The entry runs
+`~/.ccp-mcp/venv/bin/ccp-workspace-mcp` with `CCP_CLIENT_BIN` set to the installed
+client and `CCP_WORKSPACE_CONFIG` set to `~/.ccp-client/workspace-mcp.json`, or
+`$CCP_CLIENT_HOME/workspace-mcp.json` when `CCP_CLIENT_HOME` is set. Without the
+flag, the installer configures only the native `ccp` entry, as before.
+
+The installer never creates, edits or replaces `workspace-mcp.json`. The bridge
+refuses a configuration with no aliases, so there is nothing valid to write before
+you enroll. After `ccp enroll` prints `Profile: <path>`, create the file with that
+path, for example `(umask 077 && cat > ~/.ccp-client/workspace-mcp.json)`, and
+restart the MCP host. Until then the host reports that `ccp-workspace` failed to
+start. On every run the installer checks an existing file and warns when it is not
+a regular file or is readable by other users.
+
+An existing `ccp-workspace` entry is kept as it is. A JSON config that is a symlink
+is not edited; the installer prints a warning and you add the entry by hand.
+`install.sh --uninstall` removes the `ccp-workspace` entry from the Claude and
+Cursor configs only when it runs the installer's `ccp-workspace-mcp`; it never
+removes `workspace-mcp.json` or your profiles. Remove a Codex
+`[mcp_servers.ccp-workspace]` table by hand.
+
+The Windows installer does not register this bridge yet. On Windows, add the
+`ccp-workspace` entry by hand with the current generation's
+`%USERPROFILE%\.ccp-mcp\generations\<generation>\venv\Scripts\ccp-workspace-mcp.exe`
+and update it after each upgrade.
+
 The bridge runs over local stdio. It has no HTTP MCP listener, automatic binary
 discovery, source build, enrollment or administrative tools. Tool arguments cannot
 choose local paths or executables. The Rust client uses the profile's pinned
