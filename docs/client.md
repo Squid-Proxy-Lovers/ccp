@@ -80,6 +80,9 @@ Close CCP processes before upgrading and restart MCP hosts afterward.
 
 The installer adds CCP to detected Claude, Codex and Cursor configurations, and
 refreshes entries it previously configured to use the new matched generation.
+It configures only the native `ccp` entry; the
+[workspace bridge](workspace-mcp.md#let-the-linux-and-macos-installer-register-it)
+is not registered on Windows yet.
 Customized entries are retained with a reminder to check their paths. Missing
 hosts are reported. Codex configuration requires `codex mcp add` and
 `codex mcp get --json` on PATH. Unrelated JSON settings remain intact. Before

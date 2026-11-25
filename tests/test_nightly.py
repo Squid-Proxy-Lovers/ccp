@@ -2164,6 +2164,156 @@ else:
         self.assertNotIn(f"Created {cursor_config}", result.stdout)
         self.assertIn(f"Could not create {cursor_config}", result.stdout)
 
+    def workspace_fixture(self):
+        """A bridge with both entry points and the three supported host configs."""
+        self.mcp_bridge_fixture()
+        workspace = self.home_dir / ".ccp-mcp/venv/bin/ccp-workspace-mcp"
+        workspace.write_text("stub")
+        workspace.chmod(0o755)
+        claude = self.home_dir / ".claude.json"
+        claude.write_text(
+            json.dumps({"note": "café", "mcpServers": {"other": {"command": "keep"}}}, indent=2)
+            + "\n"
+        )
+        cursor = self.home_dir / ".cursor/mcp.json"
+        cursor.parent.mkdir(parents=True)
+        cursor.write_text("{}\n")
+        codex = self.home_dir / ".codex/config.toml"
+        codex.parent.mkdir(parents=True)
+        codex.write_text('model = "x"\n')
+        return {"claude": claude, "cursor": cursor}, codex, str(workspace)
+
+    def test_client_install_without_workspace_flag_registers_only_the_native_bridge(self):
+        hosts, codex, _ = self.workspace_fixture()
+        result, _ = self.install("--client")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for path in hosts.values():
+            self.assertNotIn("ccp-workspace", path.read_text())
+        servers = tomllib.loads(codex.read_text())["mcp_servers"]
+        self.assertIn("ccp", servers)
+        self.assertNotIn("ccp-workspace", servers)
+        self.assertFalse((self.home_dir / ".ccp-client").exists())
+
+    def test_workspace_flag_registers_workspace_bridge_beside_native_entry(self):
+        hosts, codex, workspace = self.workspace_fixture()
+        result, _ = self.install("--client", "--workspace-mcp")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        profiles = self.home_dir / ".ccp-client/workspace-mcp.json"
+        expected = {
+            "command": workspace,
+            "env": {
+                "CCP_WORKSPACE_CONFIG": str(profiles),
+                "CCP_CLIENT_BIN": str(self.install_dir / "ccp-client"),
+            },
+        }
+        for path in hosts.values():
+            config = json.loads(path.read_text())
+            self.assertEqual(config["mcpServers"]["ccp-workspace"], expected)
+            self.assertTrue(path.read_text().endswith("\n"))
+            self.assertEqual([p.name for p in path.parent.glob(path.name + ".ccp-*")], [])
+        self.assertIn('"note": "café"', hosts["claude"].read_text())
+        claude = json.loads(hosts["claude"].read_text())
+        self.assertEqual(claude["mcpServers"]["other"], {"command": "keep"})
+        servers = tomllib.loads(codex.read_text())["mcp_servers"]
+        self.assertEqual(servers["ccp-workspace"], expected)
+        self.assertIn("ccp", servers)
+        self.assertIn(f"Added ccp-workspace to {codex}", result.stdout)
+        # The bridge refuses an empty profile list, so the installer never
+        # writes one; it says where the profiles go instead.
+        self.assertFalse(profiles.exists())
+        self.assertIn(
+            f"reads its profiles from {profiles}, which does not exist yet", result.stdout
+        )
+        self.assertIn("Enroll in a workspace with an enrollment link:", result.stdout)
+        self.assertNotIn("workspace MCP config was not written", result.stdout)
+
+    def test_workspace_flag_keeps_existing_entries_and_profile_config(self):
+        hosts, codex, _ = self.workspace_fixture()
+        custom = {"command": "/opt/custom/ccp-workspace-mcp", "env": {"A": "1"}}
+        for path in hosts.values():
+            path.write_text(json.dumps({"mcpServers": {"ccp-workspace": custom}}))
+        codex.write_text('[mcp_servers.ccp-workspace]\ncommand = "custom"\n')
+        client_home = self.root / "client home"
+        client_home.mkdir()
+        profiles = client_home / "workspace-mcp.json"
+        profiles.write_text('{"format": 1, "profiles": {"work": "/p"}}\n')
+        profiles.chmod(0o600)
+        result, _ = self.install(
+            "--client", "--workspace-mcp", env_changes={"CCP_CLIENT_HOME": str(client_home)}
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name, path in hosts.items():
+            servers = json.loads(path.read_text())["mcpServers"]
+            self.assertEqual(servers["ccp-workspace"], custom, name)
+            self.assertIn(f"{path} already has a ccp-workspace entry; it was kept", result.stdout)
+        self.assertEqual(
+            tomllib.loads(codex.read_text())["mcp_servers"]["ccp-workspace"], {"command": "custom"}
+        )
+        self.assertEqual(profiles.read_text(), '{"format": 1, "profiles": {"work": "/p"}}\n')
+        self.assertEqual(profiles.stat().st_mode & 0o777, 0o600)
+        self.assertIn(f"Workspace profiles are read from {profiles}", result.stdout)
+
+        profiles.chmod(0o644)
+        result, _ = self.install(
+            "--client", "--workspace-mcp", env_changes={"CCP_CLIENT_HOME": str(client_home)}
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"{profiles} is readable by other users", result.stdout)
+        self.assertEqual(profiles.stat().st_mode & 0o777, 0o644)
+
+    def test_workspace_entry_keeps_special_characters_in_paths(self):
+        hosts, codex, _ = self.workspace_fixture()
+        quoted = self.root / "in\"st'all\\dir"
+        quoted.mkdir()
+        client_home = self.root / 'o\'brien "home"'
+        with patch.object(self, "install_dir", quoted):
+            result, _ = self.install(
+                "--client", "--workspace-mcp", env_changes={"CCP_CLIENT_HOME": str(client_home)}
+            )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        expected = {
+            "CCP_WORKSPACE_CONFIG": str(client_home / "workspace-mcp.json"),
+            "CCP_CLIENT_BIN": str(quoted / "ccp-client"),
+        }
+        for path in hosts.values():
+            self.assertEqual(
+                json.loads(path.read_text())["mcpServers"]["ccp-workspace"]["env"], expected
+            )
+        env = tomllib.loads(codex.read_text())["mcp_servers"]["ccp-workspace"]["env"]
+        self.assertEqual(env, expected)
+
+    def test_workspace_flag_never_writes_through_a_symlinked_config(self):
+        hosts, _, _ = self.workspace_fixture()
+        real = self.root / "dotfiles-cursor.json"
+        real.write_text('{"mcpServers": {}}\n')
+        hosts["cursor"].unlink()
+        hosts["cursor"].symlink_to(real)
+        result, _ = self.install("--client", "--workspace-mcp")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("ccp-workspace", real.read_text())
+        self.assertIn(f"{hosts['cursor']} is a symlink and was not edited", result.stdout)
+        self.assertIn("the Cursor workspace MCP config was not written", result.stdout)
+
+    def test_workspace_flag_without_workspace_entry_point_warns(self):
+        hosts, _, workspace = self.workspace_fixture()
+        os.unlink(workspace)
+        result, _ = self.install("--client", "--workspace-mcp")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(f"Workspace bridge not found at {workspace}", result.stdout)
+        self.assertNotIn("ccp-workspace", hosts["claude"].read_text())
+        self.assertIn("the workspace MCP config was not written", result.stdout)
+
+    def test_workspace_flag_is_rejected_with_docker_or_uninstall(self):
+        for args, message in (
+            (("--docker", "--workspace-mcp"), "cannot be combined with --docker"),
+            (("--uninstall", "--workspace-mcp"), "cannot be combined with: --workspace-mcp"),
+        ):
+            with self.subTest(args=args):
+                result, calls = self.install(*args)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stdout + result.stderr)
+                self.assertFalse(any(call[0] in ("docker", "curl", "pip") for call in calls))
+
     def test_source_success_publishes_executable_bytes(self):
         self.source_fixture()
         result, _ = self.install("--client", "--from-source")
@@ -2312,6 +2462,35 @@ else:
             self.assertEqual(path.read_bytes(), before[name])
             self.assertIn(f"{path} does not point at {self.bridge} and was kept", result.stdout)
         self.assertFalse((self.home_dir / ".ccp-mcp").exists())
+
+    def test_uninstall_removes_only_the_workspace_entry_it_installed(self):
+        hosts, _, _ = self.uninstall_fixture()
+        workspace = self.home_dir / ".ccp-mcp/venv/bin/ccp-workspace-mcp"
+        workspace.write_text("bridge")
+        ours = {
+            "command": str(workspace),
+            "env": {"CCP_WORKSPACE_CONFIG": "/c", "CCP_CLIENT_BIN": "/b"},
+        }
+        foreign = {"command": "/opt/other/ccp-workspace-mcp"}
+        for name, path in hosts.items():
+            config = json.loads(path.read_text())
+            config["mcpServers"]["ccp-workspace"] = ours if name == "claude" else foreign
+            path.write_text(json.dumps(config, indent=2) + "\n")
+        result, _ = self.install("--uninstall")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            json.loads(hosts["claude"].read_text())["mcpServers"], {"other": {"command": "keep-me"}}
+        )
+        self.assertEqual(
+            json.loads(hosts["cursor"].read_text())["mcpServers"],
+            {"other": {"command": "keep-me"}, "ccp-workspace": foreign},
+        )
+        self.assertIn(
+            f"the ccp-workspace entry from Claude config {hosts['claude']}", result.stdout
+        )
+        self.assertIn(
+            f"The ccp-workspace entry in {hosts['cursor']} does not point at", result.stdout
+        )
 
     def test_uninstall_leaves_unreadable_json_config_unchanged(self):
         hosts, _, _ = self.uninstall_fixture()

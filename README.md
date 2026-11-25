@@ -40,12 +40,18 @@ curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install
 # Client and MCP bridge for an existing server
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --client
 
+# Also register the workspace MCP bridge (ccp-workspace) for `ccp enroll` profiles
+curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --client --workspace-mcp
+
 # Docker server from the published GHCR image
 curl -fsSL https://raw.githubusercontent.com/squid-proxy-lovers/ccp/main/install.sh | bash -s -- --docker --session my-session
 ```
 
 Binaries install to `~/.local/bin` by default; use `--install-dir` to change it.
 The client installer configures MCP for supported Claude, Cursor, and Codex hosts.
+It registers the native `ccp` bridge. Add `--workspace-mcp` to also register the
+[workspace bridge](docs/workspace-mcp.md#let-the-linux-and-macos-installer-register-it)
+as `ccp-workspace`; it reads the profiles you list in `~/.ccp-client/workspace-mcp.json`.
 See the [MCP guide](mcp/README.md) for agent setup and the
 [server deployment guide](docs/server.md#deployment) for Docker, source builds,
 and remote enrollment.
@@ -104,8 +110,8 @@ Add `--install-dir` if you installed somewhere other than `~/.local/bin`. It
 accepts no other option. This removes `ccp-client`, `ccp-server` and
 `ccp-nightly.json` from that directory, the `ccp` link if it points at
 `ccp-client`, the MCP bridge virtual environment `~/.ccp-mcp/venv` (and `~/.ccp-mcp`
-itself if that leaves it empty), and the `ccp` entry
-in `~/.claude.json` and `~/.cursor/mcp.json` when that entry runs the bridge.
+itself if that leaves it empty), and the `ccp` and `ccp-workspace` entries
+in `~/.claude.json` and `~/.cursor/mcp.json` when they run the bridge.
 Other settings and servers in those files stay. Close Claude Code and Cursor
 first so they do not rewrite the file. A config is not edited if `$HOME` or any
 component down to the file is a symlink, or if it is not a regular file; remove its

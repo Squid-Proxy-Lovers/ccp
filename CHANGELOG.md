@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `install.sh --workspace-mcp` registers the workspace MCP bridge
+  (`ccp-workspace-mcp`) as `ccp-workspace` in Claude, Cursor and Codex, with
+  `CCP_WORKSPACE_CONFIG` pointing at `~/.ccp-client/workspace-mcp.json` (or
+  `$CCP_CLIENT_HOME/workspace-mcp.json`). Before, the client installer configured
+  only the native bridge, so hosts could not see profiles created with
+  `ccp enroll`. The native `ccp` entry is unchanged and still configured without
+  the flag. The installer never writes the profile file, checks its type and
+  permissions, and `--uninstall` removes only a `ccp-workspace` entry that runs its
+  bridge. The Windows installer does not register the workspace bridge yet.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added
