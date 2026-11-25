@@ -50,7 +50,8 @@ directory, the expected revision fails. Inspect the current choices and decide
 the next update instead of overwriting them with a stale command.
 
 Simultaneous updates can also fail busy while acquiring the exclusive SQLite
-lease, which waits up to two seconds. Inspect the saved choices before retrying:
+lease, which waits up to 30 seconds (`CCP_WORKSPACE_LEASE_WAIT_MS` overrides
+it). Inspect the saved choices before retrying:
 another invocation may already have committed. Lock contention does not guarantee
 a revision-conflict error; both failures preserve the newer saved choices.
 

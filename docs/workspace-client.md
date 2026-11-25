@@ -310,8 +310,12 @@ local descriptions and HTTP status, without echoing an untrusted server body.
 Workspace profile format 5 uses `workspace-profile.sqlite3` with a separate
 application ID, DELETE journaling and FULL synchronization. Open profiles hold
 an exclusive SQLite lease across commits and network calls. Another invocation
-can fail busy after 2s; close the first profile before retrying. This serializes
-profile changes without stale PID lock files. Missing, corrupt, foreign or future
+on the same profile, including a read, waits for the lease and fails busy only
+after 30s. Set `CCP_WORKSPACE_LEASE_WAIT_MS` (whole milliseconds, 0 to 600000)
+to change that wait; a malformed value fails closed. Waiters are not served in
+strict arrival order. Concurrent calls on one profile still run one at a time;
+use separate profiles for parallel throughput. This serializes profile changes
+without stale PID lock files. Missing, corrupt, foreign or future
 formats fail closed; they do not regenerate keys or trust.
 
 The private key is stored locally in the owner-protected SQLite file. It is not

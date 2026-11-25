@@ -130,12 +130,17 @@ mod tests {
             path
         }
         async fn cli(&self, args: &[&str]) -> Output {
-            tokio::process::Command::new(env!("CARGO_BIN_EXE_client"))
+            self.cli_with_lease_wait(args, None).await
+        }
+        async fn cli_with_lease_wait(&self, args: &[&str], wait_ms: Option<&str>) -> Output {
+            let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_client"));
+            command
                 .args(args)
-                .env("CCP_CLIENT_HOME", self.root.join("native-home"))
-                .output()
-                .await
-                .unwrap()
+                .env("CCP_CLIENT_HOME", self.root.join("native-home"));
+            if let Some(wait_ms) = wait_ms {
+                command.env("CCP_WORKSPACE_LEASE_WAIT_MS", wait_ms);
+            }
+            command.output().await.unwrap()
         }
         async fn trust_cli(&self) -> Output {
             self.cli(&[
@@ -500,12 +505,15 @@ mod tests {
             .unwrap();
         let guard = WorkspaceProfile::open(&f.profile).unwrap();
         let refused = f
-            .cli(&[
-                "workspace",
-                "info",
-                "--profile",
-                f.profile.to_str().unwrap(),
-            ])
+            .cli_with_lease_wait(
+                &[
+                    "workspace",
+                    "info",
+                    "--profile",
+                    f.profile.to_str().unwrap(),
+                ],
+                Some("200"),
+            )
             .await;
         assert!(!refused.status.success());
         assert_eq!(f.count("ccp_clients"), 0);
@@ -520,6 +528,53 @@ mod tests {
             .await,
         );
         f.finish().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_reads_on_one_profile_queue_for_the_lease_instead_of_failing_busy() {
+        // Regression for issue #50: several callers share one profile while
+        // another holder keeps the lease longer than the former 2s budget.
+        let f = Fixture::new().await;
+        f.token_file(&f.invitation());
+        value(f.trust_cli().await);
+        value(f.enroll_cli().await);
+        let profile = f.profile.to_str().unwrap();
+        let guard = WorkspaceProfile::open(&f.profile).unwrap();
+        let reads = spawn_reads(&f, profile, 6);
+        let release = async {
+            tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+            drop(guard);
+        };
+        let (outputs, ()) = tokio::join!(reads, release);
+        for output in outputs {
+            let listed = value(output);
+            assert_eq!(
+                listed["workspaces"][0]["id"],
+                f.setup.workspace_id.to_string()
+            );
+        }
+        assert_eq!(f.count("ccp_clients"), 1);
+        f.finish().await;
+    }
+
+    async fn spawn_reads(f: &Fixture, profile: &str, count: usize) -> Vec<Output> {
+        let mut children = Vec::new();
+        for _ in 0..count {
+            let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_client"))
+                .args(["workspace", "workspaces", "--profile", profile])
+                .env("CCP_CLIENT_HOME", f.root.join("native-home"))
+                .env_remove("CCP_WORKSPACE_LEASE_WAIT_MS")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            children.push(child.wait_with_output());
+        }
+        let mut outputs = Vec::new();
+        for child in children {
+            outputs.push(child.await.unwrap());
+        }
+        outputs
     }
 
     #[cfg(unix)]

@@ -200,7 +200,9 @@ fn profile_publishes_once_and_retains_exclusive_lease_and_pending_nonce_across_r
     let wrong = material(&other_trust, &other_ca, &other_key, |_| {});
     assert!(profile.activate(wrong).is_err());
     assert_eq!(profile.pending.as_ref().unwrap().request_id, first);
+    store::TEST_LEASE_WAIT.set(Some(std::time::Duration::from_millis(200)));
     assert!(WorkspaceProfile::open(&dir).is_err());
+    store::TEST_LEASE_WAIT.set(None);
     assert!(store::create(&dir, &trust).is_err());
     profile.prepare(&invite()).unwrap();
     assert_eq!(profile.pending.as_ref().unwrap().request_id, first);

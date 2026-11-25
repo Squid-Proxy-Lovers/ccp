@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Concurrent workspace client calls that share one profile, such as several
+  agents behind one MCP bridge, now wait for the profile lease for up to 30
+  seconds instead of failing with `database is locked` after 2 seconds. Set
+  `CCP_WORKSPACE_LEASE_WAIT_MS` to change the wait. Calls on one profile still
+  run one at a time.
+
 ## [0.2.0] - 2026-11-12
 
 ### Added

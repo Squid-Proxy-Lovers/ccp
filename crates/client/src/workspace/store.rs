@@ -7,6 +7,8 @@ use super::{Credential, Operation, Pending, WorkspaceProfile, WorkspaceTrust, cr
 mod lease;
 mod migration;
 use anyhow::{Context, bail};
+#[cfg(test)]
+pub(super) use lease::TEST_LEASE_WAIT;
 pub(super) use lease::exclusive_connection;
 use rusqlite::{Connection, OpenFlags, params};
 use serde::de::DeserializeOwned;
